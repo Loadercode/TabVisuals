@@ -1,0 +1,26 @@
+# Gradle
+.gradle/
+build/
+out/
+classes/
+
+# Loom / dev runs
+run/
+runs/
+remappedSrc/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+eclipse/
+.classpath
+.project
+.settings/
+
+# OS / logs
+*.log
+.DS_Store
+Thumbs.db

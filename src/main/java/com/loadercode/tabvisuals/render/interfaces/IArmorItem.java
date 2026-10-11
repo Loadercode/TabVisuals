@@ -1,0 +1,10 @@
+/*© 2026 LoxeDLC. All rights reserved.*/
+package com.loadercode.tabvisuals.render.interfaces;
+
+import net.minecraft.item.equipment.ArmorMaterial;
+import net.minecraft.item.equipment.EquipmentType;
+
+public interface IArmorItem {
+    ArmorMaterial zov_pidarok$getMaterial();
+    EquipmentType zov_pidarok$getType();
+}

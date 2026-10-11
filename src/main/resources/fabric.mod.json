@@ -1,0 +1,31 @@
+{
+	"schemaVersion": 1,
+	"accessWidener": "tabvisuals.accesswidener",
+	"id": "tabvisuals",
+	"version": "${version}",
+	"name": "TabVisuals",
+	"description": "Client-side tab list visuals for Minecraft 1.21.4 (Fabric).",
+	"authors": [
+		"LoaderCode"
+	],
+	"contact": {
+		"homepage": "https://github.com/Loadercode/TabVisuals",
+		"sources": "https://github.com/Loadercode/TabVisuals"
+	},
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.loadercode.tabvisuals.TabVisualsClient"
+		]
+	},
+	"mixins": [
+		"tabvisuals.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.16.10",
+		"minecraft": "~1.21.4",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
