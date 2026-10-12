@@ -489,7 +489,11 @@ public final class TabVisualsTitleScreen extends Screen {
             return true;
         }
 
-        // MENU
+        // MENU — clicks ignored while the zoom-in is still settling: chrome is
+        // drawn scaled up to 4% while hits are recorded in unscaled coordinates
+        if (System.currentTimeMillis() - menuStart < MENU_IN_MS) {
+            return true;
+        }
         if (tgHit != null && UiRender.inside(mouseX, mouseY, tgHit.x(), tgHit.y(), tgHit.w(), tgHit.h())) {
             openUrl(URL_TELEGRAM);
             return true;
