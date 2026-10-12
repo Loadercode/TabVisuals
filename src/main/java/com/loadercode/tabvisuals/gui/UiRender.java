@@ -29,6 +29,17 @@ public final class UiRender implements QuickImports {
                 .build());
     }
 
+    /**
+     * Four-corner gradient quad (round shader mixes per-corner colors).
+     * Corner order of the shader: color1 = bottom-left, color2 = top-left,
+     * color3 = bottom-right, color4 = top-right.
+     */
+    public static void gradient(MatrixStack m, float x, float y, float w, float h, int tl, int bl, int br, int tr) {
+        rectangle.render(ShapeProperties.create(m, x, y, w, h)
+                .color(bl, tl, br, tr)
+                .build());
+    }
+
     public static void text(FontRenderer font, MatrixStack m, String s, double x, double y, int argb) {
         font.drawString(m, s, x, y, argb);
     }

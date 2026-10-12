@@ -5,7 +5,8 @@
 	"refmap": "tabvisuals-refmap.json",
 	"mixins": [],
 	"client": [
-		"PlayerListHudMixin"
+		"PlayerListHudMixin",
+		"TitleScreenMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
