@@ -600,8 +600,7 @@ public final class ClickGuiScreen extends Screen {
         }
         configNameFocused = false;
         if (UiRender.inside(mouseX, mouseY, cfgSaveX, cfgSaveY, cfgSaveW, cfgSaveH)) {
-            ConfigManager.saveConfig(configName);
-            if (!configName.isBlank()) {
+            if (ConfigManager.saveConfig(configName)) {
                 NotificationManager.configEvent(configName, "saved");
             }
             configName = "";
@@ -609,13 +608,15 @@ public final class ClickGuiScreen extends Screen {
         }
         for (CfgRow r : cfgRows) {
             if (UiRender.inside(mouseX, mouseY, r.loadX, r.btnY, r.btnW, r.btnH)) {
-                ConfigManager.loadConfig(r.name);
-                NotificationManager.configEvent(r.name, "loaded");
+                if (ConfigManager.loadConfig(r.name)) {
+                    NotificationManager.configEvent(r.name, "loaded");
+                }
                 return true;
             }
             if (UiRender.inside(mouseX, mouseY, r.delX, r.btnY, r.btnW, r.btnH)) {
-                ConfigManager.deleteConfig(r.name);
-                NotificationManager.configEvent(r.name, "deleted");
+                if (ConfigManager.deleteConfig(r.name)) {
+                    NotificationManager.configEvent(r.name, "deleted");
+                }
                 return true;
             }
         }
@@ -700,8 +701,7 @@ public final class ClickGuiScreen extends Screen {
             }
             if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
                 if (configNameFocused) {
-                    ConfigManager.saveConfig(configName);
-                    if (!configName.isBlank()) {
+                    if (ConfigManager.saveConfig(configName)) {
                         NotificationManager.configEvent(configName, "saved");
                     }
                     configName = "";

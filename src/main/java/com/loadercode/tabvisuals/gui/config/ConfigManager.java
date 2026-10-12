@@ -139,47 +139,68 @@ public final class ConfigManager {
         return names;
     }
 
-    public static void saveConfig(String name) {
+    public static boolean saveConfig(String name) {
         String clean = sanitize(name);
         if (clean.isEmpty()) {
-            return;
+            return false;
         }
-        write(CONFIGS_DIR.resolve(clean + ".json"), snapshot());
+        return write(CONFIGS_DIR.resolve(clean + ".json"), snapshot());
     }
 
-    public static void loadConfig(String name) {
+    /** true when the file existed and parsed — callers use it to report honestly. */
+    public static boolean loadConfig(String name) {
         String clean = sanitize(name);
         if (clean.isEmpty()) {
-            return;
+            return false;
         }
         Path file = CONFIGS_DIR.resolve(clean + ".json");
-        if (Files.exists(file)) {
-            apply(read(file));
+        if (!Files.exists(file)) {
+            return false;
         }
+        GuiState state = read(file);
+        if (state == null) {
+            return false;
+        }
+        apply(state);
+        return true;
     }
 
-    public static void deleteConfig(String name) {
+    public static boolean deleteConfig(String name) {
         String clean = sanitize(name);
         if (clean.isEmpty()) {
-            return;
+            return false;
         }
         try {
-            Files.deleteIfExists(CONFIGS_DIR.resolve(clean + ".json"));
+            return Files.deleteIfExists(CONFIGS_DIR.resolve(clean + ".json"));
         } catch (IOException e) {
             TabVisualsClient.LOGGER.error("Config delete failed", e);
+            return false;
         }
     }
 
+    /**
+     * Keeps unicode (cyrillic config names), strips only path-hostile
+     * characters, trims leading/trailing dots and spaces (Windows treats
+     * "foo." as "foo"), caps length so the filename stays sane.
+     */
     private static String sanitize(String name) {
-        return name == null ? "" : name.trim().replaceAll("[^a-zA-Z0-9_\\- ]", "");
+        if (name == null) {
+            return "";
+        }
+        String s = name.trim()
+                .replaceAll("[\\\\/:*?\"<>|]", "")
+                .replaceAll("^[.\\s]+|[.\\s]+$", "");
+        return s.length() > 32 ? s.substring(0, 32) : s;
     }
 
-    private static void write(Path file, GuiState state) {
+    private static boolean write(Path file, GuiState state) {
         try {
             Files.createDirectories(file.getParent());
             Files.writeString(file, GSON.toJson(state), StandardCharsets.UTF_8);
+            return true;
         } catch (IOException e) {
             TabVisualsClient.LOGGER.error("Config save failed: {}", file, e);
+            return false;
         }
     }
 
