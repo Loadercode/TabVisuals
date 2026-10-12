@@ -22,9 +22,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * TabVisuals title flow: splash (gradient, logo, lyrics, pulse hint,
- * profile plate, socials) → zoom-in transition → main menu with nav,
- * plus the alt-manager modal opened from "Аккаунт".
+ * TabVisuals title flow per ТЗ + reference photos:
+ * splash (gradient, centered logo + TABVISUALS slogan, low lyrics, pulsing
+ * hint, compact profile row, inline socials) → zoom-in transition → main menu
+ * (album-cover glow backdrop, top-left mark, left icon nav, right lyric block),
+ * plus the alt-manager modal opened from "Аккаунты".
  */
 public final class TabVisualsTitleScreen extends Screen {
 
@@ -37,6 +39,7 @@ public final class TabVisualsTitleScreen extends Screen {
     private static final int ACCENT_HOVER = 0xFFB697FF;
     private static final int INK = 0xFF251840;
     private static final int WHITE = 0xFFFFFFFF;
+    private static final int NAV_IDLE = 0xFFB9BAC6;
 
     private static final String URL_TELEGRAM = "https://t.me/tabvisuals";
     private static final String URL_GITHUB = "https://github.com/Loadercode/TabVisuals";
@@ -50,10 +53,7 @@ public final class TabVisualsTitleScreen extends Screen {
     private static final FontRenderer F_HINT = Fonts.getSize(12, Fonts.Type.SEMI);
     private static final FontRenderer F_COPY = Fonts.getSize(10, Fonts.Type.REGULAR);
     private static final FontRenderer F_TINY = Fonts.getSize(10, Fonts.Type.REGULAR);
-    private static final FontRenderer F_PLATE = Fonts.getSize(12, Fonts.Type.SEMI);
     private static final FontRenderer F_NAV = Fonts.getSize(15, Fonts.Type.SEMI);
-    private static final FontRenderer F_TRACK = Fonts.getSize(21, Fonts.Type.SEMI);
-    private static final FontRenderer F_ARTIST = Fonts.getSize(12, Fonts.Type.REGULAR);
     private static final FontRenderer F_MENU_LINE = Fonts.getSize(16, Fonts.Type.SEMI);
     private static final FontRenderer F_MENU_NEXT = Fonts.getSize(13, Fonts.Type.REGULAR);
     private static final FontRenderer F_MODAL_T = Fonts.getSize(17, Fonts.Type.SEMI);
@@ -63,7 +63,7 @@ public final class TabVisualsTitleScreen extends Screen {
 
     // --- timings ---
     private static final long TRANS_MS = 450;
-    private static final long MENU_IN_MS = 280;
+    private static final long MENU_IN_MS = 350;
 
     private enum State {SPLASH, TRANSITION, MENU}
 
@@ -141,24 +141,27 @@ public final class TabVisualsTitleScreen extends Screen {
             m.translate(-cx, -cy, 0f);
         }
 
-        renderChrome(m, mx, my, alpha);
-
-        // center logo + slogan
-        F_LOGO.drawCenteredString(m, "TabVisuals", width / 2.0, height * 0.30, mulAlpha(WHITE, alpha));
-        F_SLOGAN.drawCenteredString(m, spaced("PRIVATE CLIENT"), width / 2.0, height * 0.30 + 58,
+        // photo 1: center logo + letterspaced slogan, no top-left mark
+        F_LOGO.drawCenteredString(m, "TabVisuals", width / 2.0, height * 0.415, mulAlpha(WHITE, alpha));
+        F_SLOGAN.drawCenteredString(m, spaced("TABVISUALS"), width / 2.0, height * 0.545,
                 mulAlpha(0xB3FFFFFF, alpha));
 
-        // lyrics
-        float lineY = height * 0.55f;
+        // lyrics low on the screen: big current line + small next one
+        float lineY = height * 0.785f;
         F_LYRIC_BIG.drawCenteredString(m, MusicManager.currentLine(), width / 2.0, lineY,
                 mulAlpha(WHITE, alpha));
-        F_LYRIC_SMALL.drawCenteredString(m, MusicManager.nextLine(), width / 2.0, lineY + 30,
+        F_LYRIC_SMALL.drawCenteredString(m, MusicManager.nextLine(), width / 2.0, height * 0.845f,
                 mulAlpha(0x99FFFFFF, alpha));
 
-        // pulsing hint
+        // pulsing hint near the bottom edge
         float pulse = 0.45f + 0.55f * (0.5f + 0.5f * (float) Math.sin(now / 360.0));
-        F_HINT.drawCenteredString(m, spaced("НАЖМИТЕ ЛЮБУЮ КЛАВИШУ"), width / 2.0, height * 0.82,
+        F_HINT.drawCenteredString(m, spaced("НАЖМИТЕ ЛЮБУЮ КЛАВИШУ"), width / 2.0, height * 0.915,
                 mulAlpha(WHITE, alpha * pulse));
+
+        renderProfileRow(m, alpha);
+        renderSocials(m, mx, my, alpha);
+        F_COPY.drawCenteredString(m, "© 2026 TabVisuals", width / 2.0, height * 0.968,
+                mulAlpha(0x70FFFFFF, alpha));
 
         m.pop();
     }
@@ -167,8 +170,8 @@ public final class TabVisualsTitleScreen extends Screen {
         float p = clamp01((now - menuStart) / (float) MENU_IN_MS);
         float e = easeOut(p);
 
-        // dark translucent overlay (album-art backdrop stand-in)
-        UiRender.rect(m, 0, 0, width, height, 0, mulAlpha(0x4D000000, e));
+        // photo 2: blurred album-cover glow + dark readability overlay, fades in
+        renderCoverGlow(m, e);
 
         float cx = width / 2f, cy = height / 2f;
         float s = 1.04f - 0.04f * e;
@@ -177,169 +180,231 @@ public final class TabVisualsTitleScreen extends Screen {
         m.scale(s, s, 1f);
         m.translate(-cx, -cy, 0f);
 
-        renderChrome(m, mx, my, e);
+        renderMark(m, e);
+        renderProfileRow(m, e);
         renderNav(m, mx, my, e);
         renderMenuLyrics(m, e);
+        renderSocials(m, mx, my, e);
+        F_COPY.drawCenteredString(m, "© 2026 TabVisuals", width / 2.0, height * 0.968,
+                mulAlpha(0x70FFFFFF, e));
 
         m.pop();
     }
 
-    /** Logo mark, profile plate, socials, copyright — shared by splash and menu. */
-    private void renderChrome(MatrixStack m, float mx, float my, float alpha) {
-        // top-left mark
-        float lx = 24, ly = 18, tile = 26;
-        UiRender.rect(m, lx, ly, tile, tile, 7, mulAlpha(0x1AFFFFFF, alpha));
-        UiRender.outline(m, lx, ly, tile, tile, 7, mulAlpha(0x30FFFFFF, alpha), 1f);
-        F_MARK.drawCenteredString(m, "T", lx + tile / 2.0, ly + (tile - F_MARK.getStringHeight("T")) / 2f + 1,
-                mulAlpha(WHITE, alpha));
-        String mark = spaced("TABVISUALS");
-        F_HINT.drawString(m, mark, lx + tile + 10,
-                ly + (tile - F_HINT.getStringHeight(mark)) / 2f + 1, mulAlpha(WHITE, alpha));
+    /**
+     * Stand-in for the "now playing" cover art stretched full-screen: stacked
+     * translucent circles make a soft violet/blue radial glow over near-black,
+     * then a dark scrim + edge gradients keep text readable (ТЗ: полупрозрачный
+     * оверлей поверх обложки). Real cover textures swap in behind this later.
+     */
+    private void renderCoverGlow(MatrixStack m, float alpha) {
+        float w = width, h = height;
+        float maxD = Math.max(w, h) * 1.15f;
 
-        renderPlate(m, alpha);
-        renderSocials(m, mx, my, alpha);
+        UiRender.rect(m, 0, 0, w, h, 0, mulAlpha(0xFF0A0912, alpha));
 
-        // copyright
-        F_COPY.drawCenteredString(m, "© 2026 TabVisuals", width / 2.0, height - 26,
-                mulAlpha(0x70FFFFFF, alpha));
+        // violet core, left of center like a lit album cover.
+        // many faint layers with jittered centers → smooth glow, no ring banding.
+        float cvx = w * 0.40f, cvy = h * 0.44f;
+        for (int i = 36; i >= 0; i--) {
+            float f = i / 36f;
+            float d = maxD * (0.14f + 0.86f * f);
+            int a = (int) (0x03 + 0x05 * (1f - f));
+            float jx = (float) Math.sin(i * 1.7) * 0.07f * maxD * f;
+            float jy = (float) Math.cos(i * 2.3) * 0.05f * maxD * f;
+            UiRender.rect(m, cvx - d / 2f + jx, cvy - d / 2f + jy, d, d, d / 2f,
+                    mulAlpha((a << 24) | 0x6B3FE8, alpha));
+        }
+        // cooler blue falloff to the right
+        float bnx = w * 0.70f, bny = h * 0.62f;
+        for (int i = 22; i >= 0; i--) {
+            float f = i / 22f;
+            float d = maxD * (0.08f + 0.55f * f);
+            int a = (int) (0x03 + 0x04 * (1f - f));
+            float jx = (float) Math.cos(i * 2.1) * 0.06f * maxD * f;
+            float jy = (float) Math.sin(i * 1.9) * 0.05f * maxD * f;
+            UiRender.rect(m, bnx - d / 2f + jx, bny - d / 2f + jy, d, d, d / 2f,
+                    mulAlpha((a << 24) | 0x3D55C8, alpha));
+        }
+
+        // dark overlay for readability
+        UiRender.rect(m, 0, 0, w, h, 0, mulAlpha(0x66000000, alpha));
+
+        // vignette: four edge gradients pulling the corners down
+        UiRender.gradient(m, 0, 0, w, h * 0.16f, 0x50000000, 0x00000000, 0x00000000, 0x50000000);
+        UiRender.gradient(m, 0, h * 0.84f, w, h * 0.16f, 0x00000000, 0x50000000, 0x50000000, 0x00000000);
+        UiRender.gradient(m, 0, 0, w * 0.14f, h, 0x45000000, 0x45000000, 0x00000000, 0x00000000);
+        UiRender.gradient(m, w * 0.86f, 0, w * 0.14f, h, 0x00000000, 0x00000000, 0x45000000, 0x45000000);
     }
 
-    /** Top-right profile plate: avatar, nickname, version, status. */
-    private void renderPlate(MatrixStack m, float alpha) {
-        float pw = 216, ph = 56;
-        float px = width - 24 - pw, py = 18;
-        UiRender.rect(m, px, py, pw, ph, 10, mulAlpha(0xE012121A, alpha));
-        UiRender.outline(m, px, py, pw, ph, 10, mulAlpha(0x1AFFFFFF, alpha), 1f);
+    /** Top-left logo tile + letterspaced wordmark — main menu only (photo 2). */
+    private void renderMark(MatrixStack m, float alpha) {
+        float tile = Math.max(18f, width * 0.024f);
+        float lx = width * 0.0325f, ly = height * 0.038f;
+        UiRender.rect(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x1AFFFFFF, alpha));
+        UiRender.outline(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x30FFFFFF, alpha), 1f);
+        F_MARK.drawCenteredString(m, "T", lx + tile / 2.0,
+                ly + (tile - F_MARK.getStringHeight("T")) / 2f + 1, mulAlpha(WHITE, alpha));
+        String mark = spaced("TABVISUALS");
+        F_SLOGAN.drawString(m, mark, lx + tile + width * 0.010f,
+                ly + (tile - F_SLOGAN.getStringHeight(mark)) / 2f + 1, mulAlpha(WHITE, alpha));
+    }
+
+    /** Top-right compact profile row: version, status, nickname, round avatar (photo 1/2). */
+    private void renderProfileRow(MatrixStack m, float alpha) {
+        float av = 15;
+        float right = width - width * 0.026f;
+        float top = height * 0.038f;
+        float cy = top + av / 2f;
 
         // avatar
-        float av = 34, ax = px + 10, ay = py + (ph - av) / 2f;
-        UiRender.rect(m, ax, ay, av, av, av / 2f, mulAlpha(0xFF7C5CE0, alpha));
+        float ax = right - av;
+        UiRender.rect(m, ax, top, av, av, av / 2f, mulAlpha(0xFF7C5CE0, alpha));
         String nick = AccountManager.current();
         String initial = nick.isEmpty() ? "?" : String.valueOf(Character.toUpperCase(nick.charAt(0)));
-        F_NAV.drawCenteredString(m, initial, ax + av / 2.0,
-                ay + (av - F_NAV.getStringHeight(initial)) / 2f + 1, mulAlpha(WHITE, alpha));
+        F_BTN.drawCenteredString(m, initial, ax + av / 2.0,
+                top + (av - F_BTN.getStringHeight(initial)) / 2f + 1, mulAlpha(WHITE, alpha));
 
-        // nickname, right-aligned
-        float right = px + pw - 12;
-        rightText(F_PLATE, m, nick, right, py + 13, mulAlpha(WHITE, alpha));
+        // nickname (dim), right of status
+        float x = ax - 6;
+        x = rightText(F_TINY, m, nick, x, cy - F_TINY.getStringHeight(nick) / 2f + 1,
+                mulAlpha(0xB8FFFFFF, alpha)) - 8;
 
-        // status row: version · dot · Protected, right-aligned as one line
-        String ver = "v1.0.0";
-        String prot = "Protected";
-        float wVer = F_TINY.getStringWidth(ver);
-        float wProt = F_TINY.getStringWidth(prot);
-        float total = wVer + 6 + 6 + 5 + wProt;
-        float sx = right - total;
-        F_TINY.drawString(m, ver, sx, py + 33, mulAlpha(0x8CFFFFFF, alpha));
-        UiRender.rect(m, sx + wVer + 6, py + 35, 6, 6, 3, mulAlpha(0xFF58D6A0, alpha));
-        F_TINY.drawString(m, prot, sx + wVer + 6 + 6 + 5, py + 33, mulAlpha(0xB8FFFFFF, alpha));
+        // "Protected" — the bright one
+        x = rightText(F_TINY, m, "Protected", x, cy - F_TINY.getStringHeight("Protected") / 2f + 1,
+                mulAlpha(WHITE, alpha)) - 8;
+
+        // version
+        rightText(F_TINY, m, "v1.0.0", x, cy - F_TINY.getStringHeight("v1.0.0") / 2f + 1,
+                mulAlpha(0x8CFFFFFF, alpha));
     }
 
-    /** Bottom-right Telegram / GitHub pills (clickable). */
+    /** Bottom-right inline socials row (photo 1/2): badge, platform, handle — clickable. */
     private void renderSocials(MatrixStack m, float mx, float my, float alpha) {
         String[] labels = {"Telegram", "GitHub"};
-        String[] urls = {URL_TELEGRAM, URL_GITHUB};
-        float h = 26, gy = height - 42;
+        String[] handles = {"@tabvisuals", "Loadercode"};
+        String[] letters = {"T", "G"};
+
+        float y = height * 0.93f;
+        float rowH = 13;
+        float gap = width * 0.016f;   // between the two entries
+        float badge = 12;
+
+        // measure the row, right-align it
+        float total = 0;
+        for (int i = 0; i < 2; i++) {
+            total += badge + 5 + F_TINY.getStringWidth(labels[i]) + 5 + F_TINY.getStringWidth(handles[i]);
+            if (i == 0) total += gap;
+        }
+        float x = width - width * 0.026f - total;
+
         R[] hits = new R[2];
-        float cursorX = width - 24;
-        for (int i = 1; i >= 0; i--) {
-            String label = labels[i];
-            float textW = F_BTN.getStringWidth(label);
-            float w = 8 + 14 + 7 + textW + 11;
-            cursorX -= w;
-            if (i == 1) {
-                cursorX -= 8; // gap between pills
-            }
-            float x = cursorX;
-            boolean hover = UiRender.inside(mx, my, x, gy, w, h);
-            UiRender.rect(m, x, gy, w, h, h / 2f,
-                    mulAlpha(hover ? 0x2AFFFFFF : 0x18FFFFFF, alpha));
-            UiRender.outline(m, x, gy, w, h, h / 2f, mulAlpha(0x24FFFFFF, alpha), 1f);
-            // letter badge
-            UiRender.rect(m, x + 8, gy + 6, 14, 14, 4, mulAlpha(ACCENT, alpha));
-            F_BTN.drawCenteredString(m, label.substring(0, 1), x + 8 + 7,
-                    gy + 6 + (14 - F_BTN.getStringHeight("T")) / 2f + 1, mulAlpha(INK, alpha));
-            F_BTN.drawString(m, label, x + 8 + 14 + 7,
-                    gy + (h - F_BTN.getStringHeight(label)) / 2f + 1, mulAlpha(WHITE, alpha));
-            hits[i] = new R(x, gy, w, h);
+        for (int i = 0; i < 2; i++) {
+            float itemW = badge + 5 + F_TINY.getStringWidth(labels[i]) + 5 + F_TINY.getStringWidth(handles[i]);
+            boolean hover = UiRender.inside(mx, my, x, y - 1, itemW, rowH);
+
+            UiRender.rect(m, x, y, badge, badge, 3.5f, mulAlpha(hover ? 0x30FFFFFF : 0x1CFFFFFF, alpha));
+            F_TINY.drawCenteredString(m, letters[i], x + badge / 2.0,
+                    y + (badge - F_TINY.getStringHeight(letters[i])) / 2f + 1,
+                    mulAlpha(hover ? WHITE : 0xC8FFFFFF, alpha));
+
+            float tx = x + badge + 5;
+            F_TINY.drawString(m, labels[i], tx, y + (rowH - F_TINY.getStringHeight(labels[i])) / 2f + 1,
+                    mulAlpha(hover ? 0xE6FFFFFF : 0x8CFFFFFF, alpha));
+            tx += F_TINY.getStringWidth(labels[i]) + 5;
+            F_TINY.drawString(m, handles[i], tx, y + (rowH - F_TINY.getStringHeight(handles[i])) / 2f + 1,
+                    mulAlpha(hover ? WHITE : 0xB8FFFFFF, alpha));
+
+            hits[i] = new R(x, y - 1, itemW, rowH);
+            x += itemW + gap;
         }
         tgHit = hits[0];
         ghHit = hits[1];
     }
 
-    /** Left navigation column: singleplayer, multiplayer, settings, account, quit. */
+    /** Left navigation column: bare icon+label rows, photo 2 proportions. */
     private void renderNav(MatrixStack m, float mx, float my, float alpha) {
-        String[] labels = {"Одиночная игра", "Сетевая игра", "Настройки", "Аккаунт", "Выход"};
-        float navX = Math.max(36f, width * 0.07f);
-        float itemW = 235, itemH = 38, gap = 6;
-        float top = height * 0.30f;
+        String[] labels = {"Одиночная игра", "Мультиплейер", "Настройки", "Аккаунты", "Выход"};
+        float iconX = width * 0.0325f;
+        float iconSz = Math.max(11f, width * 0.014f);
+        float textX = iconX + iconSz + width * 0.007f;
+        float step = height * 0.051f;
+        float firstCy = height * 0.392f;
+        float extraGap = height * 0.014f;   // wider break before "Выход", like the photo
+
         navHits.clear();
+        float cy = firstCy;
         for (int i = 0; i < labels.length; i++) {
-            float y = top + i * (itemH + gap);
-            R box = new R(navX, y, itemW, itemH);
-            boolean hover = UiRender.inside(mx, my, box.x(), box.y(), box.w(), box.h());
-            UiRender.rect(m, box.x(), box.y(), box.w(), box.h(), 9,
-                    mulAlpha(hover ? 0x20FFFFFF : 0x10FFFFFF, alpha));
-            UiRender.outline(m, box.x(), box.y(), box.w(), box.h(), 9,
-                    mulAlpha(hover ? 0x30FFFFFF : 0x16FFFFFF, alpha), 1f);
-
-            // icon chip + glyph
-            float chip = 26, chx = box.x() + 8, chy = box.y() + (itemH - chip) / 2f;
-            UiRender.rect(m, chx, chy, chip, chip, 8, mulAlpha(0x14FFFFFF, alpha));
-            int glyphCol = mulAlpha(WHITE, alpha);
-            drawNavIcon(m, i, chx + chip / 2f, chy + chip / 2f, glyphCol);
-
+            if (i == 4) {
+                cy += extraGap;
+            }
             String label = labels[i];
-            F_NAV.drawString(m, label, box.x() + 48,
-                    box.y() + (itemH - F_NAV.getStringHeight(label)) / 2f + 1,
-                    mulAlpha(hover ? WHITE : 0xE6FFFFFF, alpha));
+            float textW = F_NAV.getStringWidth(label);
+            float boxW = textX + textW - iconX;
+            R box = new R(iconX, cy - step / 2f, boxW, step);
+            boolean hover = UiRender.inside(mx, my, box.x(), box.y(), box.w(), box.h());
+
+            int col = mulAlpha(hover ? WHITE : NAV_IDLE, alpha);
+            drawNavIcon(m, i, iconX + iconSz / 2f, cy, iconSz, col);
+            F_NAV.drawString(m, label, textX,
+                    cy - F_NAV.getStringHeight(label) / 2f + 1, col);
             navHits.add(new NavHit(i, box));
+            cy += step;
         }
     }
 
-    private void drawNavIcon(MatrixStack m, int idx, float cx, float cy, int col) {
+    private void drawNavIcon(MatrixStack m, int idx, float cx, float cy, float sz, int col) {
+        float r = sz / 2f;
+        float t = Math.max(1.1f, sz * 0.10f);   // line thickness
         switch (idx) {
-            case 0 -> { // globe
-                UiRender.outline(m, cx - 7, cy - 7, 14, 14, 7, col, 1.3f);
-                UiRender.rect(m, cx - 0.7f, cy - 7, 1.4f, 14, 0.7f, col);
-                UiRender.rect(m, cx - 7, cy - 0.7f, 14, 1.4f, 0.7f, col);
+            case 0 -> { // globe: ring reads first, meridians stay inside it
+                UiRender.outline(m, cx - r, cy - r, sz, sz, r, col, Math.max(1.5f, t * 1.35f));
+                float inset = Math.max(1.2f, t);
+                UiRender.rect(m, cx - t / 2f, cy - r + inset, t, sz - inset * 2f, t / 2f, col);
+                UiRender.rect(m, cx - r + inset, cy - t / 2f, sz - inset * 2f, t, t / 2f, col);
             }
-            case 1 -> { // bars
-                UiRender.rect(m, cx - 7, cy - 4, 2.5f, 8, 1f, col);
-                UiRender.rect(m, cx - 1.5f, cy - 7, 2.5f, 14, 1f, col);
-                UiRender.rect(m, cx + 4, cy - 5.5f, 2.5f, 11, 1f, col);
+            case 1 -> { // connection bars
+                float bw = Math.max(1.6f, sz * 0.18f);
+                UiRender.rect(m, cx - r, cy + r * 0.1f, bw, r * 0.8f, bw / 2f, col);
+                UiRender.rect(m, cx - bw / 2f, cy - r * 0.35f, bw, r * 1.25f, bw / 2f, col);
+                UiRender.rect(m, cx + r - bw, cy - r * 0.75f, bw, r * 1.65f, bw / 2f, col);
             }
             case 2 -> { // sliders
-                UiRender.rect(m, cx - 7, cy - 5.7f, 14, 1.4f, 0.7f, col);
-                UiRender.rect(m, cx - 7, cy - 0.7f, 14, 1.4f, 0.7f, col);
-                UiRender.rect(m, cx - 7, cy + 4.3f, 14, 1.4f, 0.7f, col);
-                UiRender.rect(m, cx - 4, cy - 6.8f, 3.6f, 3.6f, 1.8f, col);
-                UiRender.rect(m, cx + 1.5f, cy - 1.8f, 3.6f, 3.6f, 1.8f, col);
-                UiRender.rect(m, cx - 1, cy + 3.2f, 3.6f, 3.6f, 1.8f, col);
+                UiRender.rect(m, cx - r, cy - r * 0.7f, sz, t, t / 2f, col);
+                UiRender.rect(m, cx - r, cy - t / 2f, sz, t, t / 2f, col);
+                UiRender.rect(m, cx - r, cy + r * 0.7f - t, sz, t, t / 2f, col);
+                float kd = Math.max(2.6f, sz * 0.26f);
+                UiRender.rect(m, cx - r * 0.55f, cy - r * 0.7f - (kd - t) / 2f, kd, kd, kd / 2f, col);
+                UiRender.rect(m, cx + r * 0.15f, cy - t / 2f - (kd - t) / 2f, kd, kd, kd / 2f, col);
+                UiRender.rect(m, cx - r * 0.2f, cy + r * 0.7f - t - (kd - t) / 2f, kd, kd, kd / 2f, col);
             }
             case 3 -> { // person
-                UiRender.rect(m, cx - 3, cy - 7, 6, 6, 3, col);
-                UiRender.rect(m, cx - 6, cy + 1, 12, 6, 3, col);
+                float hd = sz * 0.42f;
+                UiRender.rect(m, cx - hd / 2f, cy - r, hd, hd, hd / 2f, col);
+                UiRender.rect(m, cx - r * 0.85f, cy + hd * 0.15f, r * 1.7f, r * 0.95f, r * 0.48f, col);
             }
             default -> { // exit arrow
-                F_NAV.drawCenteredString(m, "→", cx, cy - F_NAV.getStringHeight("→") / 2f, col);
+                F_NAV.drawCenteredString(m, "→", cx, cy - F_NAV.getStringHeight("→") / 2f + 1, col);
             }
         }
     }
 
-    /** Right block: track + synchronized lyrics, right-aligned. */
+    /** Right block: prev / current / next lyric lines, right-aligned, vertically centered (photo 2). */
     private void renderMenuLyrics(MatrixStack m, float alpha) {
-        float rightX = width - 60;
-        float limit = Math.max(340f, Math.max(36f, width * 0.07f) + 235 + 24);
-        float y = height * 0.36f;
+        float rightX = width - width * 0.0325f;
+        // keep clear of the nav column
+        float navTextX = width * 0.0325f + Math.max(11f, width * 0.014f) + width * 0.007f;
+        float limit = navTextX + F_NAV.getStringWidth("Одиночная игра") + 20;
 
-        rightTextClamped(F_TRACK, m, MusicManager.trackTitle(), rightX, limit, y, mulAlpha(WHITE, alpha));
-        y += 28;
-        rightTextClamped(F_ARTIST, m, MusicManager.artist(), rightX, limit, y, mulAlpha(0x99FFFFFF, alpha));
-        y += 32;
-        rightTextClamped(F_MENU_LINE, m, MusicManager.currentLine(), rightX, limit, y, mulAlpha(WHITE, alpha));
-        y += 26;
-        rightTextClamped(F_MENU_NEXT, m, MusicManager.nextLine(), rightX, limit, y, mulAlpha(0x8CFFFFFF, alpha));
+        rightTextClamped(F_MENU_NEXT, m, MusicManager.prevLine(), rightX, limit,
+                height * 0.45f - F_MENU_NEXT.getStringHeight(MusicManager.prevLine()) / 2f + 1,
+                mulAlpha(0x8CFFFFFF, alpha));
+        rightTextClamped(F_MENU_LINE, m, MusicManager.currentLine(), rightX, limit,
+                height * 0.503f - F_MENU_LINE.getStringHeight(MusicManager.currentLine()) / 2f + 1,
+                mulAlpha(WHITE, alpha));
+        rightTextClamped(F_MENU_NEXT, m, MusicManager.nextLine(), rightX, limit,
+                height * 0.551f - F_MENU_NEXT.getStringHeight(MusicManager.nextLine()) / 2f + 1,
+                mulAlpha(0x8CFFFFFF, alpha));
     }
 
     // -------------------------------------------------------------- modal
@@ -347,28 +412,35 @@ public final class TabVisualsTitleScreen extends Screen {
     private void renderModal(MatrixStack m, float mx, float my, long now) {
         UiRender.rect(m, 0, 0, width, height, 0, 0xB3000000);
 
-        panelW = 500;
-        panelH = 380;
+        // fit any GUI scale: 500x380 is a max, never larger than the screen
+        panelW = Math.min(500, width - 24);
+        panelH = Math.min(380, height - 24);
         panelX = (width - panelW) / 2f;
         panelY = (height - panelH) / 2f;
         boolean blink = (now / 500) % 2 == 0;
+        boolean tall = panelH >= 300;
 
         UiRender.rect(m, panelX, panelY, panelW, panelH, 14, 0xF515151D);
         UiRender.outline(m, panelX, panelY, panelW, panelH, 14, 0x1FFFFFFF, 1f);
 
-        F_MODAL_T.drawString(m, "Аккаунты", panelX + 20, panelY + 18, WHITE);
-        F_TINY.drawString(m, "Оффлайн-профили", panelX + 20, panelY + 43, 0x8CFFFFFF);
+        F_MODAL_T.drawString(m, "Аккаунты", panelX + 18, panelY + 13, WHITE);
+        if (tall) {
+            F_TINY.drawString(m, "Оффлайн-профили", panelX + 18, panelY + 37, 0x8CFFFFFF);
+        }
 
         // close button
-        closeHit = new R(panelX + panelW - 38, panelY + 14, 24, 24);
+        closeHit = new R(panelX + panelW - 34, panelY + 10, 24, 24);
         if (UiRender.inside(mx, my, closeHit.x(), closeHit.y(), closeHit.w(), closeHit.h())) {
             UiRender.rect(m, closeHit.x(), closeHit.y(), closeHit.w(), closeHit.h(), 6, 0x1AFFFFFF);
         }
         F_MODAL_T.drawCenteredString(m, "×", closeHit.x() + 12,
                 closeHit.y() + (24 - F_MODAL_T.getStringHeight("×")) / 2f + 1, 0xCCFFFFFF);
 
-        // new-nick input
-        inputHit = new R(panelX + 20, panelY + 64, 330, 34);
+        // new-nick input + create button on one row
+        float inputY = panelY + (tall ? 64 : 46);
+        float rowH30 = 30;
+        float createW = 92;
+        inputHit = new R(panelX + 18, inputY, panelW - 36 - 6 - createW, rowH30);
         UiRender.rect(m, inputHit.x(), inputHit.y(), inputHit.w(), inputHit.h(), 8, 0x14FFFFFF);
         UiRender.outline(m, inputHit.x(), inputHit.y(), inputHit.w(), inputHit.h(), 8,
                 focus == 1 ? ACCENT : 0x1AFFFFFF, 1f);
@@ -385,7 +457,7 @@ public final class TabVisualsTitleScreen extends Screen {
                 inputHit.y() + (inputHit.h() - F_INPUT.getStringHeight(shown)) / 2f + 1, shownCol);
 
         // create button
-        createHit = new R(panelX + 358, panelY + 64, 100, 34);
+        createHit = new R(inputHit.x() + inputHit.w() + 6, inputY, createW, rowH30);
         boolean createHover = UiRender.inside(mx, my, createHit.x(), createHit.y(), createHit.w(), createHit.h());
         UiRender.rect(m, createHit.x(), createHit.y(), createHit.w(), createHit.h(), 8,
                 createHover ? ACCENT_HOVER : ACCENT);
@@ -394,9 +466,9 @@ public final class TabVisualsTitleScreen extends Screen {
 
         // account list
         List<String> names = AccountManager.names();
-        float listY = panelY + 112;
-        float visible = panelH - 112 - 18;
-        float rowH = 38, step = 44;
+        float listY = modalListTop();
+        float visible = modalListVisible();
+        float rowH = 30, step = 36;
         float total = names.size() * step - 6;
         float maxScroll = Math.max(0f, total - visible);
         listScroll = clamp(listScroll, 0f, maxScroll);
@@ -404,7 +476,7 @@ public final class TabVisualsTitleScreen extends Screen {
 
         if (names.isEmpty()) {
             F_INPUT.drawCenteredString(m, "Пока пусто — создайте первый профиль",
-                    panelX + panelW / 2.0, listY + 24, 0x8CFFFFFF);
+                    panelX + panelW / 2.0, listY + 16, 0x8CFFFFFF);
             return;
         }
 
@@ -414,26 +486,27 @@ public final class TabVisualsTitleScreen extends Screen {
                 continue;
             }
             String name = names.get(i);
-            R row = new R(panelX + 20, ry, panelW - 40, rowH);
+            R row = new R(panelX + 18, ry, panelW - 36, rowH);
             boolean rowHover = UiRender.inside(mx, my, row.x(), row.y(), row.w(), row.h());
             UiRender.rect(m, row.x(), row.y(), row.w(), row.h(), 8,
                     rowHover ? 0x14FFFFFF : 0x0AFFFFFF);
 
             boolean editing = focus == 2 && editIndex == i;
             if (editing) {
-                UiRender.rect(m, row.x() + 12, ry + 4, 240, 30, 6, 0x16FFFFFF);
-                UiRender.outline(m, row.x() + 12, ry + 4, 240, 30, 6, ACCENT, 1f);
+                float fw = Math.max(70f, row.w() - 10 - 172 - 6);
+                UiRender.rect(m, row.x() + 10, ry + 3, fw, 24, 6, 0x16FFFFFF);
+                UiRender.outline(m, row.x() + 10, ry + 3, fw, 24, 6, ACCENT, 1f);
                 String shownEdit = editText + (blink ? "_" : "");
-                F_ROW.drawString(m, shownEdit, row.x() + 22,
-                        ry + 4 + (30 - F_ROW.getStringHeight(shownEdit)) / 2f + 1, WHITE);
+                F_ROW.drawString(m, shownEdit, row.x() + 20,
+                        ry + 3 + (24 - F_ROW.getStringHeight(shownEdit)) / 2f + 1, WHITE);
             } else {
                 F_ROW.drawString(m, name, row.x() + 14,
                         ry + (rowH - F_ROW.getStringHeight(name)) / 2f + 1, 0xE6FFFFFF);
             }
 
-            R del = new R(row.x() + row.w() - 12 - 58, ry + 6, 58, 26);
-            R edit = new R(del.x() - 6 - 52, ry + 6, 52, 26);
-            R login = new R(edit.x() - 6 - 56, ry + 6, 56, 26);
+            R del = new R(row.x() + row.w() - 10 - 56, ry + 3, 56, 24);
+            R edit = new R(del.x() - 6 - 50, ry + 3, 50, 24);
+            R login = new R(edit.x() - 6 - 54, ry + 3, 54, 24);
 
             // login (accent)
             boolean hov = UiRender.inside(mx, my, login.x(), login.y(), login.w(), login.h());
@@ -637,10 +710,10 @@ public final class TabVisualsTitleScreen extends Screen {
                 return true;
             }
             List<String> names = AccountManager.names();
-            float visible = panelH - 112 - 18;
-            float total = names.size() * 44f - 6;
+            float visible = modalListVisible();
+            float total = names.size() * 36f - 6;
             float maxScroll = Math.max(0f, total - visible);
-            listScroll = clamp(listScroll - (float) (verticalAmount * 40), 0f, maxScroll);
+            listScroll = clamp(listScroll - (float) (verticalAmount * 36), 0f, maxScroll);
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
@@ -670,6 +743,16 @@ public final class TabVisualsTitleScreen extends Screen {
         modal = false;
         focus = 0;
         editIndex = -1;
+    }
+
+    /** First row of the account list — header shrinks on short panels. */
+    private float modalListTop() {
+        return panelY + (panelH >= 300f ? 112f : 88f);
+    }
+
+    /** Visible list height, matching renderModal's bottom padding of 14. */
+    private float modalListVisible() {
+        return Math.max(0f, panelY + panelH - 14f - modalListTop());
     }
 
     private void submitNew() {

@@ -19,6 +19,11 @@ public final class MusicManager {
         return "NOIR";
     }
 
+    /** Previous synchronized lyric line — small dim text above the current one in the menu. */
+    public static String prevLine() {
+        return "где-то между нами снова выключили свет";
+    }
+
     /** Current synchronized lyric line — large text on the splash, right block in the menu. */
     public static String currentLine() {
         return "Она ждала так долго, что отдала себя в Убере (давай)";
