@@ -288,10 +288,12 @@ public final class ClickGuiScreen extends Screen {
         float scroll = Math.min(scrollByCat.getOrDefault(activeCategory, 0f), maxScroll);
         scrollByCat.put(activeCategory, scroll);
 
+        // clip rect must stay in screen space: taking the matrix AFTER the
+        // -scroll translate shifted it up by `scroll`, leaking cards over the header
+        Matrix4f clipMatrix = m.peek().getPositionMatrix();
         m.push();
         m.translate(0, -scroll, 0);
-        Matrix4f matrix4f = m.peek().getPositionMatrix();
-        scissor.push(matrix4f, cx, gridTop, cw, viewportH);
+        scissor.push(clipMatrix, cx, gridTop, cw, viewportH);
         for (CardBounds cb : layout) {
             drawCard(m, mouseX, mouseY, cb, scroll);
         }
@@ -550,6 +552,10 @@ public final class ClickGuiScreen extends Screen {
         float scroll = scrollByCat.getOrDefault(activeCategory, 0f);
         for (CardBounds cb : layout) {
             float y = gridTop + cb.yRel - scroll;
+            // fully clipped cards are invisible — they must stay unclickable
+            if (y + cb.h <= gridTop || y >= gridTop + viewportH) {
+                continue;
+            }
             if (!UiRender.inside(mouseX, mouseY, cb.x, y, cb.w, cb.h)) {
                 continue;
             }
