@@ -5,6 +5,7 @@ import com.loadercode.tabvisuals.gui.Category;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
 import com.loadercode.tabvisuals.gui.setting.DoubleSetting;
 import com.loadercode.tabvisuals.gui.setting.ModeSetting;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,6 +18,7 @@ public final class ModuleRegistry {
     static {
         // --- Combat ---
         ALL.add(new ModuleStub("killaura", "KillAura", "Attacks nearby targets automatically", Category.COMBAT, false)
+                .bind(GLFW.GLFW_KEY_R)
                 .with(new DoubleSetting("Range", 4.2, 1.0, 6.0, 0.1, "m"),
                         new DoubleSetting("CPS", 10, 1, 20, 1, ""),
                         new ModeSetting("Target priority", 0, "Distance", "Health", "Angle")));
@@ -55,9 +57,11 @@ public final class ModuleRegistry {
 
         // --- Movement ---
         ALL.add(new ModuleStub("speed", "Speed", "Movement acceleration boost", Category.MOVEMENT, false)
+                .bind(GLFW.GLFW_KEY_V)
                 .with(new ModeSetting("Mode", 0, "Strafe", "BHop", "OnGround"),
                         new DoubleSetting("Multiplier", 1.6, 1.0, 3.0, 0.1, "x")));
         ALL.add(new ModuleStub("flight", "Flight", "Air movement control", Category.MOVEMENT, false)
+                .bind(GLFW.GLFW_KEY_F)
                 .with(new ModeSetting("Mode", 0, "Creative", "Vanilla", "Glide"),
                         new DoubleSetting("Speed", 1.0, 0.2, 5.0, 0.1, "x")));
         ALL.add(new ModuleStub("longjump", "LongJump", "Extended jump distance", Category.MOVEMENT, false)
@@ -73,12 +77,14 @@ public final class ModuleRegistry {
 
         // --- Render ---
         ALL.add(new ModuleStub("esp", "ESP", "Highlights entities through walls", Category.RENDER, true)
+                .bind(GLFW.GLFW_KEY_H)
                 .with(new ModeSetting("Style", 0, "Box", "Glow", "Corners"),
                         new BooleanSetting("Health bar", true),
                         new DoubleSetting("Distance", 64, 8, 256, 8, "m")));
         ALL.add(new ModuleStub("tracers", "Tracers", "Lines to nearby entities", Category.RENDER, false)
                 .with(new DoubleSetting("Width", 1.5, 0.5, 4.0, 0.5, "")));
         ALL.add(new ModuleStub("fullbright", "FullBright", "Maximum world brightness", Category.RENDER, true)
+                .bind(GLFW.GLFW_KEY_B)
                 .with(new ModeSetting("Mode", 0, "Gamma", "Night vision")));
         ALL.add(new ModuleStub("nametags", "NameTags", "Custom name plates", Category.RENDER, false)
                 .with(new DoubleSetting("Scale", 1.0, 0.5, 2.0, 0.1, "x"),
@@ -99,6 +105,8 @@ public final class ModuleRegistry {
         ALL.add(new ModuleStub("timer", "Timer", "Changes client tick speed", Category.MISC, false)
                 .with(new DoubleSetting("Speed", 1.0, 0.5, 3.0, 0.1, "x")));
         ALL.add(new ModuleStub("notes", "Notes", "In-game scratch pad", Category.MISC, false));
+        ALL.add(new ModuleStub("streamermode", "StreamerMode", "Hides nick and server info while streaming", Category.MISC, true)
+                .bind(GLFW.GLFW_KEY_END));
     }
 
     public static List<ModuleStub> byCategory(Category category) {

@@ -2,6 +2,8 @@
 package com.loadercode.tabvisuals.gui;
 
 import com.loadercode.tabvisuals.gui.config.ConfigManager;
+import com.loadercode.tabvisuals.gui.hud.HudRenderer;
+import com.loadercode.tabvisuals.gui.hud.NotificationManager;
 import com.loadercode.tabvisuals.gui.module.ModuleRegistry;
 import com.loadercode.tabvisuals.gui.module.ModuleStub;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
@@ -11,6 +13,7 @@ import com.loadercode.tabvisuals.gui.setting.Setting;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
 import com.loadercode.tabvisuals.render.scissor.ScissorAssist;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.util.math.MatrixStack;
@@ -141,6 +144,10 @@ public final class ClickGuiScreen extends Screen {
         if (settingsView) {
             renderSettings(m, mouseX, mouseY);
         }
+
+        // toasts drawn above the overlay; animation is driven here only when
+        // the in-game HUD pass is not running (no world → no HUD frame)
+        HudRenderer.renderToasts(MinecraftClient.getInstance(), m, width, height, MinecraftClient.getInstance().player == null);
 
         FontRenderer.flushDeferred();
     }
@@ -554,6 +561,7 @@ public final class ClickGuiScreen extends Screen {
             }
             if (UiRender.inside(mouseX, mouseY, cb.x + cb.w - 34, y + 8, 26, 14)) {
                 mod.toggle();
+                NotificationManager.moduleToggle(mod.name(), mod.enabled());
                 return true;
             }
             for (SettingBounds sb : cb.settings) {
@@ -593,16 +601,21 @@ public final class ClickGuiScreen extends Screen {
         configNameFocused = false;
         if (UiRender.inside(mouseX, mouseY, cfgSaveX, cfgSaveY, cfgSaveW, cfgSaveH)) {
             ConfigManager.saveConfig(configName);
+            if (!configName.isBlank()) {
+                NotificationManager.configEvent(configName, "saved");
+            }
             configName = "";
             return true;
         }
         for (CfgRow r : cfgRows) {
             if (UiRender.inside(mouseX, mouseY, r.loadX, r.btnY, r.btnW, r.btnH)) {
                 ConfigManager.loadConfig(r.name);
+                NotificationManager.configEvent(r.name, "loaded");
                 return true;
             }
             if (UiRender.inside(mouseX, mouseY, r.delX, r.btnY, r.btnW, r.btnH)) {
                 ConfigManager.deleteConfig(r.name);
+                NotificationManager.configEvent(r.name, "deleted");
                 return true;
             }
         }
@@ -688,6 +701,9 @@ public final class ClickGuiScreen extends Screen {
             if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
                 if (configNameFocused) {
                     ConfigManager.saveConfig(configName);
+                    if (!configName.isBlank()) {
+                        NotificationManager.configEvent(configName, "saved");
+                    }
                     configName = "";
                     configNameFocused = false;
                 }

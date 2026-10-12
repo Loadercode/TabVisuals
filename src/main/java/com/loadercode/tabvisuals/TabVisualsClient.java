@@ -3,6 +3,8 @@ package com.loadercode.tabvisuals;
 
 import com.loadercode.tabvisuals.gui.ClickGuiScreen;
 import com.loadercode.tabvisuals.gui.config.ConfigManager;
+import com.loadercode.tabvisuals.gui.hud.HotkeyManager;
+import com.loadercode.tabvisuals.gui.hud.HudRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -40,7 +42,10 @@ public final class TabVisualsClient implements ClientModInitializer {
 			while (clickGuiKey.wasPressed()) {
 				client.setScreen(new ClickGuiScreen());
 			}
+			HotkeyManager.tick(client);
 		});
+
+		HudRenderer.register();
 	}
 
 	/** Called from the PlayerListHud render hook, once per frame while the tab list is visible. */
