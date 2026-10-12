@@ -71,6 +71,8 @@ public final class ClickGuiScreen extends Screen {
     private String configName = "";
     private boolean configNameFocused = false;
     private float cfgFieldX, cfgFieldY, cfgFieldW = 220, cfgFieldH = 20;
+    private float cfgScroll, cfgListH;
+    private int cfgTotal;
     private float cfgSaveX, cfgSaveY, cfgSaveW = 70, cfgSaveH = 20;
 
     // --- interaction state ---
@@ -133,7 +135,7 @@ public final class ClickGuiScreen extends Screen {
         float contentBottom = py + ph - pad;
 
         if (activeCategory == Category.CONFIGS) {
-            renderConfigs(m, mouseX, mouseY, cx, contentTop, cw);
+            renderConfigs(m, mouseX, mouseY, cx, contentTop, cw, contentBottom);
         } else {
             renderModules(m, mouseX, mouseY, cx, contentTop, cw, contentBottom);
         }
@@ -403,7 +405,7 @@ public final class ClickGuiScreen extends Screen {
         scissor.pop();
     }
 
-    private void renderConfigs(MatrixStack m, int mouseX, int mouseY, float cx, float top, float cw) {
+    private void renderConfigs(MatrixStack m, int mouseX, int mouseY, float cx, float top, float cw, float bottom) {
         Theme t = Theme.get();
         F_TITLE.drawString(m, "Configs", cx, top, t.text());
         F_SMALL.drawString(m, "Saved state of modules, settings and theme", cx, top + 22, t.textSecondary());
@@ -427,31 +429,50 @@ public final class ClickGuiScreen extends Screen {
         float saveTw = F_SMALL_SEMI.getStringWidth("Save");
         F_SMALL_SEMI.drawString(m, "Save", cfgSaveX + (cfgSaveW - saveTw) / 2f, cfgSaveY + 6, 0xFFFFFFFF);
 
-        // saved configs list
+        // saved configs list — clipped to the content area, wheel-scrollable
         List<String> names = ConfigManager.listConfigs();
+        cfgTotal = names.size();
         float ly = top + 74;
+        float listH = Math.max(0, bottom - ly);
+        cfgListH = listH;
+        float maxScroll = Math.max(0, cfgTotal * 32f - listH + 6f);
+        cfgScroll = Math.min(Math.max(0, cfgScroll), maxScroll);
+
         if (names.isEmpty()) {
             F_SMALL.drawString(m, "No configs yet — type a name and press Save", cx, ly, t.textSecondary());
+            return;
         }
+
         float rowW = Math.min(cw, 520);
         float lw = 52, dw = 56;
+        Matrix4f clipMatrix = m.peek().getPositionMatrix();
+        m.push();
+        m.translate(0, -cfgScroll, 0);
+        scissor.push(clipMatrix, cx, ly, cw, listH);
+        float rowY = ly;
         for (String name : names) {
-            UiRender.rect(m, cx, ly, rowW, 26, 6, t.card());
-            F_BODY.drawString(m, name, cx + 10, ly + 8, t.text());
+            float screenY = rowY - cfgScroll; // hit-testing happens in screen space
+            UiRender.rect(m, cx, rowY, rowW, 26, 6, t.card());
+            F_BODY.drawString(m, name, cx + 10, rowY + 8, t.text());
             float loadX = cx + rowW - 12 - dw - 6 - lw;
             float delX = cx + rowW - 12 - dw;
-            float btnY = ly + 4;
-            boolean lh = UiRender.inside(mouseX, mouseY, loadX, btnY, lw, 18);
-            boolean dh = UiRender.inside(mouseX, mouseY, delX, btnY, dw, 18);
+            float btnY = rowY + 4;
+            boolean lh = UiRender.inside(mouseX, mouseY, loadX, screenY + 4, lw, 18);
+            boolean dh = UiRender.inside(mouseX, mouseY, delX, screenY + 4, dw, 18);
             UiRender.rect(m, loadX, btnY, lw, 18, 5, lh ? UiRender.mulAlpha(t.accent(), 0.85f) : t.accent());
             UiRender.rect(m, delX, btnY, dw, 18, 5, dh ? t.cardHover() : t.switchOff());
             float loadTw = F_SMALL_SEMI.getStringWidth("Load");
             F_SMALL_SEMI.drawString(m, "Load", loadX + (lw - loadTw) / 2f, btnY + 5, 0xFFFFFFFF);
             float delTw = F_SMALL_SEMI.getStringWidth("Delete");
             F_SMALL_SEMI.drawString(m, "Delete", delX + (dw - delTw) / 2f, btnY + 5, t.text());
-            cfgRows.add(new CfgRow(name, cx, ly, rowW, 26, loadX, delX, btnY, lw, dw));
-            ly += 32;
+            // only rows whose band intersects the clip stay clickable
+            if (screenY + 26 > ly && screenY < ly + listH) {
+                cfgRows.add(new CfgRow(name, cx, screenY, rowW, 26, loadX, delX, screenY + 4, lw, dw));
+            }
+            rowY += 32;
         }
+        scissor.pop();
+        m.pop();
     }
 
     private void renderSettings(MatrixStack m, int mouseX, int mouseY) {
@@ -663,8 +684,15 @@ public final class ClickGuiScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
-        if (settingsView || activeCategory == Category.CONFIGS) {
+        if (settingsView) {
             return false;
+        }
+        // an open dropdown is anchored to a card that is about to move — dismiss it
+        dropdown = null;
+        if (activeCategory == Category.CONFIGS) {
+            float maxScroll = Math.max(0, cfgTotal * 32f - cfgListH + 6f);
+            cfgScroll = Math.max(0, Math.min(maxScroll, cfgScroll - (float) verticalAmount * 24));
+            return true;
         }
         float maxScroll = Math.max(0, contentHeight - viewportH);
         float cur = scrollByCat.getOrDefault(activeCategory, 0f);
