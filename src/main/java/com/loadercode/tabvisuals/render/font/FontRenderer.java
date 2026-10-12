@@ -532,7 +532,8 @@ public class FontRenderer implements QuickImports {
         boolean accept(int index, char codePoint);
     }
 
-    private static final String RANDOM_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    /** Identifier path segment must match [a-z0-9/._-] — lowercase digits only. */
+    private static final String RANDOM_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
     @Contract(value = "-> new", pure = true)
     public static @NotNull Identifier randomIdentifier() {
