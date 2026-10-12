@@ -186,7 +186,9 @@ public final class ConfigManager {
     private static GuiState read(Path file) {
         try {
             return GSON.fromJson(Files.readString(file, StandardCharsets.UTF_8), GuiState.class);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            // RuntimeException: Gson throws JsonSyntaxException on malformed JSON —
+            // uncaught it would crash startup (autosave) or the Configs tab
             TabVisualsClient.LOGGER.error("Config load failed: {}", file, e);
             return null;
         }
