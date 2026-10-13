@@ -97,6 +97,9 @@ public final class ClickGuiScreen extends Screen {
     private boolean exited;
     /** Eased open progress of the current frame — gates input while settling. */
     private float animP;
+    /** Frame delta (seconds) for FPS-independent easing of toggles/settings. */
+    private long lastFrameMs;
+    private float frameDt = 1f / 60f;
     /** Theme overlay (gear) state. */
     private boolean settingsView;
     private float settingsAnim;
@@ -179,6 +182,10 @@ public final class ClickGuiScreen extends Screen {
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         long now = System.currentTimeMillis();
+        if (lastFrameMs != 0) {
+            frameDt = Math.min(0.1f, (now - lastFrameMs) / 1000f);
+        }
+        lastFrameMs = now;
         if (closing) {
             if (now - closeStart >= 220L) {
                 if (!exited) {
@@ -323,7 +330,7 @@ public final class ClickGuiScreen extends Screen {
             RenderSystem.disableBlend();
         } else {
             F_TITLE.drawCenteredString(m, "T", logoBoxX + TAB / 2.0,
-                    logoBoxY + (TAB - F_TITLE.getStringHeight("T")) / 2f + 1, t.accent());
+                    centerBoxY(F_TITLE, "T", logoBoxY, TAB), t.accent());
         }
 
         // category tabs
@@ -343,7 +350,7 @@ public final class ClickGuiScreen extends Screen {
             int col = isActive ? t.accent() : (hover ? t.text() : t.textSecondary());
             String glyph = String.valueOf(c.icon());
             F_CAT.drawCenteredString(m, glyph, tx + TAB / 2.0,
-                    ty + (TAB - F_CAT.getStringHeight(glyph)) / 2f + 1, col);
+                    centerBoxY(F_CAT, glyph, ty, TAB), col);
             tabs.add(new TabRect(c, tx, ty, TAB, TAB));
             ty += TAB + TAB_SP;
         }
@@ -372,11 +379,11 @@ public final class ClickGuiScreen extends Screen {
                     searchFocused ? t.accent() : UiRender.withAlpha(t.outline(), 155), 1);
             boolean empty = search.isEmpty() && !searchFocused;
             F_SEARCH.drawString(m, "U", searchX + searchW - 13,
-                    searchY + (searchH - F_SEARCH.getStringHeight("U")) / 2f + 1,
+                    centerBoxY(F_SEARCH, "U", searchY, searchH),
                     empty ? t.textSecondary() : t.text());
             UiRender.rect(m, searchX + searchW - 19, searchY + 3.5f, 0.5f, 8, 0, UiRender.withAlpha(t.outline(), 160));
             F_TINY.drawString(m, empty ? "Поиск" : search + (searchFocused ? "|" : ""),
-                    searchX + 6, searchY + (searchH - F_TINY.getStringHeight("Aa")) / 2f + 1,
+                    searchX + 6, centerBoxY(F_TINY, "Aa", searchY, searchH),
                     empty ? t.textSecondary() : t.text());
         } else {
             search = "";
@@ -622,7 +629,7 @@ public final class ClickGuiScreen extends Screen {
                         UiRender.withAlpha(t.accent(), sel ? 55 : 26));
             }
             F_TINY.drawString(m, opts[i], dropX + 8,
-                    oy + (DROP_ROW_H - F_TINY.getStringHeight(opts[i])) / 2f + 1,
+                    centerBoxY(F_TINY, opts[i], oy, DROP_ROW_H),
                     sel ? t.accent() : t.text());
             oy += DROP_ROW_H;
         }
@@ -639,7 +646,7 @@ public final class ClickGuiScreen extends Screen {
                 configNameFocused ? t.accent() : UiRender.withAlpha(t.outline(), 155), 1);
         boolean empty = configName.isEmpty() && !configNameFocused;
         F_TINY.drawString(m, empty ? "имя конфига..." : configName + (configNameFocused ? "|" : ""),
-                cfgFieldX + 6, cfgFieldY + (cfgFieldH - F_TINY.getStringHeight("Aa")) / 2f + 1,
+                cfgFieldX + 6, centerBoxY(F_TINY, "Aa", cfgFieldY, cfgFieldH),
                 empty ? t.textSecondary() : t.text());
 
         // save button (LoxeDLC: floppy glyph + label)
@@ -648,7 +655,7 @@ public final class ClickGuiScreen extends Screen {
         boolean saveHover = UiRender.inside(tmx, tmy, saveX, cfgFieldY, saveW, cfgFieldH);
         UiRender.rect(m, saveX, cfgFieldY, saveW, cfgFieldH, 3, saveHover ? UiRender.mulAlpha(t.accent(), 0.85f) : t.accent());
         F_ICON_B.drawString(m, "M", saveX + 5, cfgFieldY + 1, 0xFFFFFFFF);
-        F_TINY.drawString(m, "Save", saveX + 18, cfgFieldY + (cfgFieldH - F_TINY.getStringHeight("Save")) / 2f + 1, 0xFFFFFFFF);
+        F_TINY.drawString(m, "Save", saveX + 18, centerBoxY(F_TINY, "Save", cfgFieldY, cfgFieldH), 0xFFFFFFFF);
 
         // config cards, two per row
         List<String> names = ConfigManager.listConfigs();
@@ -708,7 +715,7 @@ public final class ClickGuiScreen extends Screen {
     /** Theme overlay behind the gear — kept from the previous GUI. */
     private void renderSettings(MatrixStack m, int mouseX, int mouseY) {
         Theme t = Theme.get();
-        settingsAnim += ((settingsView ? 1f : 0f) - settingsAnim) * 0.25f;
+        settingsAnim += ((settingsView ? 1f : 0f) - settingsAnim) * (float) (1.0 - Math.exp(-frameDt * 18.0));
         if (settingsAnim < 0.01f) {
             settingsAnim = 0f;
             return;
@@ -748,7 +755,7 @@ public final class ClickGuiScreen extends Screen {
             if (isActive) {
                 UiRender.outline(m, px + 12, ry, pw - 24, 32, 6, t.accent(), 1);
             }
-            F_BODY.drawString(m, th.name(), px + 22, ry + (32 - F_BODY.getStringHeight(th.name())) / 2f + 1, t.text());
+            F_BODY.drawString(m, th.name(), px + 22, centerBoxY(F_BODY, th.name(), ry, 32), t.text());
 
             if (th.id().equals("custom")) {
                 int i = 0;
@@ -850,7 +857,7 @@ public final class ClickGuiScreen extends Screen {
         UiRender.rect(m, btnX, fy, btnW, 20, 5, doneHov ? UiRender.mulAlpha(t.accent(), 0.85f) : t.accent());
         String done = "Готово";
         F_SEMI.drawString(m, done, btnX + (btnW - F_SEMI.getStringWidth(done)) / 2f,
-                fy + (20 - F_SEMI.getStringHeight(done)) / 2f + 1, 0xFFFFFFFF);
+                centerBoxY(F_SEMI, done, fy, 20), 0xFFFFFFFF);
     }
 
     /** Applies the SV / hue cursor to the currently selected Custom slot. */
@@ -887,7 +894,7 @@ public final class ClickGuiScreen extends Screen {
         float target = on ? 1f : 0f;
         float k = toggleAnim.getOrDefault(key, target);
         if (k != target) {
-            k += (target - k) * 0.35f;
+            k += (target - k) * (float) (1.0 - Math.exp(-frameDt * 22.0));
             if (Math.abs(target - k) < 0.02f) {
                 k = target;
             }
@@ -944,6 +951,16 @@ public final class ClickGuiScreen extends Screen {
 
     private static float clamp01(float v) {
         return v < 0f ? 0f : v > 1f ? 1f : v;
+    }
+
+    /**
+     * Draw-y that visually centres a string inside a box of height {@code boxH} whose
+     * top is {@code boxTop}. The font renders at 0.5 scale with a -3 translate, so the
+     * naive {@code boxTop + (boxH - h)/2} leaves text sitting high in its box.
+     */
+    private static float centerBoxY(FontRenderer f, String s, float boxTop, float boxH) {
+        float cy = boxTop + boxH / 2f;
+        return cy + 3f - f.getStringHeight(s) * 0.25f;
     }
 
     /** HSV → ARGB (h 0..360, s/v 0..1), fully opaque. */
