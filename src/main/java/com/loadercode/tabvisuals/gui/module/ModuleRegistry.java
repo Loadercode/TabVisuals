@@ -25,7 +25,7 @@ public final class ModuleRegistry {
         // --- Render: HUD panels, toasts and the in-chat position editor ---
         // Full LoxeDLC Hud feature: theme system (Темная/Светлая/Кастомная
         // with 14 editable colour slots), blur/glass pipeline and the whole
-        // element set (everything except the Staff list).
+        // element set (Staff List included, as a draggable).
         ALL.add(new ModuleStub("hud", "HUD",
                 "LoxeDLC-style elements, theme and the in-chat position editor", Category.RENDER, true)
                 .with(new BooleanSetting("Watermark", true),
@@ -47,6 +47,9 @@ public final class ModuleRegistry {
                         new BooleanSetting("EPRender", false),
                         new BooleanSetting("Dynamic Island", true),
                         new BooleanSetting("Staff list", true),
+                        new BooleanSetting("Staff: показывать всех", false),
+                        new BooleanSetting("Staff: привилегии", true),
+                        new DoubleSetting("Staff: максимум строк", 12, 4, 40, 1, ""),
                         new BooleanSetting("Interactive editor", true),
                         new BooleanSetting("Magnetic snapping", true),
                         // --- theme system (LoxeDLC Hud) ---

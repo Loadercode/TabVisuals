@@ -30,6 +30,8 @@ public final class MenuBackground {
             new ShaderProgramKey(Identifier.of("minecraft", "core/menubg"), VertexFormats.POSITION, Defines.EMPTY);
 
     private static volatile boolean failed;
+    /** First render timestamp — Time is monotonic since then (no jump every ~16.7 min). */
+    private static long startMillis = -1L;
 
     private MenuBackground() {
     }
@@ -47,7 +49,10 @@ public final class MenuBackground {
                 RenderSystem.defaultBlendFunc();
                 ShaderProgram shader = RenderSystem.setShader(KEY);
                 shader.getUniformOrDefault("ScreenSize").set(w, h);
-                shader.getUniformOrDefault("Time").set((now % 1_000_000L) / 1000f);
+                if (startMillis < 0) {
+                    startMillis = now;
+                }
+                shader.getUniformOrDefault("Time").set((now - startMillis) / 1000f);
                 shader.getUniformOrDefault("Alpha").set(alpha);
 
                 buffer = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION);
@@ -74,9 +79,9 @@ public final class MenuBackground {
                 TabVisualsClient.LOGGER.warn("menu background shader failed, using plain gradient", t);
             }
         }
-        UiRender.gradient(m, 0, 0, w, h, 0xFF0C3242, 0xFF071E2C, 0xFF04101A, 0xFF061420);
+        UiRender.gradient(m, 0, 0, w, h, 0xFFF8FAFD, 0xFFE9EEF7, 0xFFDDE4F2, 0xFFF1F4FA);
         if (alpha < 1f) {
-            UiRender.rect(m, 0, 0, w, h, 0, UiRender.mulAlpha(0xFF07101A, 1f - alpha));
+            UiRender.rect(m, 0, 0, w, h, 0, UiRender.mulAlpha(0xFFF8FAFD, 1f - alpha));
         }
     }
 }

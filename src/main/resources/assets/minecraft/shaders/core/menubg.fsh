@@ -16,32 +16,32 @@ void main() {
     float aspect = ScreenSize.x / max(ScreenSize.y, 1.0);
     vec2 p = vec2(uv.x * aspect, uv.y);
 
-    // base diagonal: dim teal (top-left) -> deep blue-black (bottom-right)
-    vec3 tl = vec3(0.047, 0.196, 0.259);
-    vec3 br = vec3(0.014, 0.055, 0.090);
+    // base diagonal: milky white (top-left) -> soft blue-grey (bottom-right)
+    vec3 tl = vec3(0.972, 0.980, 0.992);
+    vec3 br = vec3(0.878, 0.906, 0.957);
     vec3 col = mix(tl, br, clamp(uv.x * 0.52 + uv.y * 0.48, 0.0, 1.0));
 
-    // large teal core with a slow drift — gaussian falloff, no rings
+    // large cool core with a slow drift — tinted deepen, gaussian falloff
     vec2 c1 = vec2(0.38 * aspect + 0.022 * sin(Time * 0.10), 0.42 + 0.018 * cos(Time * 0.083));
     float d1 = distance(p, c1);
-    col += vec3(0.030, 0.115, 0.135) * exp(-d1 * d1 * 3.4);
+    col = mix(col, vec3(0.816, 0.855, 0.941), exp(-d1 * d1 * 3.4) * 0.55);
 
-    // cooler blue falloff lower-right, counter-phase drift
+    // lavender falloff lower-right, counter-phase drift
     vec2 c2 = vec2(0.76 * aspect + 0.020 * cos(Time * 0.071), 0.62 + 0.017 * sin(Time * 0.127));
     float d2 = distance(p, c2);
-    col += vec3(0.045, 0.080, 0.170) * exp(-d2 * d2 * 5.2);
+    col = mix(col, vec3(0.855, 0.827, 0.937), exp(-d2 * d2 * 5.2) * 0.45);
 
-    // faint breathing cyan sparkle inside the core (subtle detail)
+    // faint breathing lighten inside the core (subtle detail)
     float shimmer = exp(-d1 * d1 * 14.0) * (0.5 + 0.5 * sin(Time * 0.55));
-    col += vec3(0.006, 0.020, 0.024) * shimmer;
+    col = mix(col, vec3(1.0), shimmer * 0.07);
 
     // soft top-left sheen
     vec2 sPos = uv - vec2(0.14, 0.06);
-    col += vec3(0.010, 0.026, 0.032) * exp(-dot(sPos, sPos) * 5.5);
+    col = mix(col, vec3(1.0), exp(-dot(sPos, sPos) * 5.5) * 0.12);
 
-    // vignette
-    float vig = smoothstep(1.15, 0.30, distance(uv, vec2(0.5, 0.48)));
-    col *= mix(0.78, 1.0, vig);
+    // vignette — gently deeper edges so the white never reads flat
+    float vig = 1.0 - smoothstep(0.30, 1.15, distance(uv, vec2(0.5, 0.48)));
+    col *= mix(0.905, 1.0, vig);
 
     // blue-noise-ish dither kills 8-bit banding on the smooth field
     col += (hash(gl_FragCoord.xy + fract(Time)) - 0.5) / 255.0;

@@ -31,6 +31,7 @@ public final class HudEditor {
 
     public static final String HOTKEYS = "hotkeys";
     public static final String POTIONS = "potions";
+    /** Legacy static staff panel id → the Staff List draggable name. */
     public static final String STAFF = "staff";
     /** Toast stack: Y offset only, X stays locked to the crosshair column. */
     public static final String TOASTS = "toasts";
@@ -96,12 +97,14 @@ public final class HudEditor {
         }
         for (Map.Entry<String, float[]> e : in.entrySet()) {
             String k = e.getKey();
-            // ids from the pre-port editor → current element ids ("staff" stays:
-            // the staff panel is placed directly by HudRenderer, not a draggable)
+            // ids from the pre-port editor → current element ids
             if (HOTKEYS.equals(k)) {
                 k = "Hot Keys";
             } else if (POTIONS.equals(k)) {
                 k = "Potions";
+            } else if (STAFF.equals(k)) {
+                // the staff panel became the Staff List draggable — keep the position
+                k = "Staff List";
             }
             float[] v = e.getValue();
             if (v == null || v.length == 0 || !isElement(k)) {

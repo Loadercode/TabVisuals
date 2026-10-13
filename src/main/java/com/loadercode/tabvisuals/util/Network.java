@@ -59,8 +59,9 @@ public class Network implements QuickImports {
     @Getter
     public boolean hasPvpActive;
 
-    /** BossBarHud.bossBars is private in Yarn — read it via the accessor mixin. */
-    public Map<java.util.UUID, net.minecraft.entity.boss.ServerBossBar> bossBars() {
+    /** BossBarHud.bossBars is private in Yarn — read it via the accessor mixin.
+     *  1.21.4: the map holds ClientBossBar (client wrapper of ServerBossBar). */
+    public Map<java.util.UUID, net.minecraft.client.gui.hud.ClientBossBar> bossBars() {
         return ((com.loadercode.tabvisuals.mixin.BossBarHudAccessor) mc.inGameHud.getBossBarHud()).getBossBars();
     }
 

@@ -95,6 +95,9 @@ public class Watermark extends AbstractDraggable {
         if (logo != null) {
             int logoTexW = Math.max(1, com.loadercode.tabvisuals.gui.title.LogoManager.width());
             int logoTexH = Math.max(1, com.loadercode.tabvisuals.gui.title.LogoManager.height());
+            // blend back on — rectangle.render left the pipeline with blend disabled
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
             RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
             Render2D.drawTexture(matrix, logo, (int) logoX, (int) logoY,
                     iconWidth, 11f,
@@ -102,6 +105,7 @@ public class Watermark extends AbstractDraggable {
                     logoTexW, logoTexH,
                     0xFFFFFFFF);
             RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+            RenderSystem.disableBlend();
         }
 
         float currentX = getX() + iconWidth + 7;
@@ -128,7 +132,9 @@ public class Watermark extends AbstractDraggable {
 
         currentX += fpsWidth + 2;
 
-        iconNew17.drawString(matrix, "w", currentX, getY() + 9f, 0xFFFFFFFF);
+        // icon2 'n' = clock badge; 'w' was the chart glyph and rendered as an
+        // odd blob at 17px (dj's photo)
+        iconNew17.drawString(matrix, "n", currentX, getY() + 9f, 0xFFFFFFFF);
 
         currentX += 10;
 

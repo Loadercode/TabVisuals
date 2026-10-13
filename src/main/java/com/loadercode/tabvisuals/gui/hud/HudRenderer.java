@@ -40,9 +40,9 @@ import java.util.ConcurrentModificationException;
 
 /**
  * HUD frame driver — a faithful port of the LoxeDLC HUD feature: the whole
- * element set (everything except the Staff list) drawn on the shared render
- * stack with the LoxeDLC theme engine ({@link HudTheme}), the blur/glass
- * pipeline and the in-chat position editor ({@link HudEditor}). Panel metrics
+ * element set drawn on the shared render stack with the LoxeDLC theme engine
+ * ({@link HudTheme}), the blur/glass pipeline and the in-chat position editor
+ * ({@link HudEditor}). Panel metrics
  * follow the reference exactly: 15.5px header plate + body plate, round 4,
  * 0.1 thickness, theme gradient + hairline outline.
  */
@@ -62,7 +62,6 @@ public final class HudRenderer {
     public static final String TOTEM = "totem";
     public static final String KEYSTROKES = "keystrokes";
     public static final String EPR = "epr";
-    public static final String STAFF = "staff";
     public static final String TOASTS = "toasts";
     /** Anchored elements — follow the screen, not draggable. */
     public static final String HOTBAR = "hotbar";
@@ -88,7 +87,6 @@ public final class HudRenderer {
         ELEMENTS.put(TOTEM, "Totem Counter");
         ELEMENTS.put(KEYSTROKES, "Keystrokes");
         ELEMENTS.put(EPR, "EPRender");
-        ELEMENTS.put(STAFF, "Staff list");
     }
 
     // layout ------------------------------------------------------------------
@@ -300,9 +298,6 @@ public final class HudRenderer {
         } finally {
             m.pop();
         }
-        if (elementOn("Staff list")) {
-            renderStaff(mc, m, w, h, editor);
-        }
         if (setting("Notifications", true)) {
             renderToasts(mc, m, w, h, true);
             if (editor && NotificationManager.queue().isEmpty()) {
@@ -356,7 +351,6 @@ public final class HudRenderer {
             case EPR -> new float[]{20, Math.min(200, sh - 120)};
             case INVENTORY -> new float[]{sw - 140, 40};
             case TOTEM -> new float[]{sw - 60, sh - 60};
-            case STAFF -> new float[]{8, sh - 130};
             default -> new float[]{10, 30};
         };
     }
@@ -447,64 +441,6 @@ public final class HudRenderer {
 
     public static void setHeaderWidth(float w) {
         headerWidth = w;
-    }
-
-    // ----------------------------------------------------------- Staff panel
-
-    private static void renderStaff(MinecraftClient mc, MatrixStack m, float sw, float sh, boolean editor) {
-        List<StaffManager.Entry> staff = StaffManager.collect(mc);
-        if (staff.isEmpty()) {
-            if (!editor) {
-                return;
-            }
-            staff = List.of(new StaffManager.Entry("MrDomer", false));
-        }
-        float w = staffWidth(staff);
-        float totalH = PILL_H + 2f + staff.size() * ROW_H + BODY_PAD;
-        float[] pos = place(STAFF, w, totalH, sw, sh);
-        float x = pos[0];
-        float y = pos[1];
-
-        panel(m, x, y, w, totalH, RADIUS);
-        bodyPlate(m, x, y + BODY_TOP, w, totalH - BODY_TOP, 1f);
-
-        setHeaderWidth(w);
-        drawHeader(m, x, y, "Staff Online", "Online: " + staff.size(), F_GI_20, "A");
-
-        float rowY = y + BODY_TOP + 2f;
-        for (StaffManager.Entry e : staff) {
-            float cy = rowY + ROW_H / 2f;
-            // avatar chip: reference hair palette (orange for "domer", brown otherwise)
-            int hair = e.name().toLowerCase(Locale.ROOT).contains("domer") ? 0xFFE67E22 : 0xFF734426;
-            UiRender.rect(m, x + 3.5f, cy - 4f, 8f, 8f, 2.5f, hair);
-            String initial = e.name().substring(0, 1);
-            F_11_SEMI.drawString(m, initial, x + 3.5f + (8 - F_11_SEMI.getStringWidth(initial)) / 2f,
-                    cy - 4f + (8 - F_11_SEMI.getStringHeight(initial)) / 2f + 1f, 0xFFFFFFFF);
-
-            QuickImports.rectangle.render(ShapeProperties.create(m, x + 14, cy - 3.5f, 0.5f, 7)
-                    .color(HudTheme.outline(0.5f)).build());
-
-            float ty = cy - F_ROW_13.getStringHeight(e.name()) / 2f + 1f;
-            F_ROW_13.drawString(m, e.name(), x + 18, ty, HudTheme.text());
-
-            String tag = e.vanished() ? "[VANISH]" : "Online";
-            int tagC = e.vanished() ? 0xFFFF6B81 : HudTheme.text2();
-            int dotC = e.vanished() ? 0xFFFF4757 : 0xFF2ED573;
-            float right = x + w - 4f;
-            UiRender.rect(m, right - 3.5f, cy - 1.75f, 3.5f, 3.5f, 1.75f, dotC);
-            float tw = F_11_SEMI.getStringWidth(tag);
-            F_11_SEMI.drawString(m, tag, right - 3.5f - 3.5f - tw, cy - F_11_SEMI.getStringHeight(tag) / 2f + 1f, tagC);
-            rowY += ROW_H;
-        }
-    }
-
-    private static float staffWidth(List<StaffManager.Entry> staff) {
-        float max = 0f;
-        for (StaffManager.Entry e : staff) {
-            String tag = e.vanished() ? "[VANISH]" : "Online";
-            max = Math.max(max, F_ROW_13.getStringWidth(e.name()) + 14f + F_11_SEMI.getStringWidth(tag) + 12f);
-        }
-        return Math.max(104f, PAD + max + 8f);
     }
 
     // --------------------------------------------------------------- toasts

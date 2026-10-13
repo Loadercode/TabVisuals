@@ -35,6 +35,7 @@ public class DraggableRepository {
                 new TotemCounterHud(),
                 new KeystrokesOverlayHud(),
                 new EPRender(),
+                new StaffList(),
                 new com.loadercode.tabvisuals.gui.hud.elements.island.DynamicIsland()
         );
     }
