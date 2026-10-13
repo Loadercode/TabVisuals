@@ -1,0 +1,78 @@
+// language: Java, file: HudHelper.java, target: Minecraft 1.21.4 Fabric, JDK 21
+package com.loadercode.tabvisuals.gui.hud.elements;
+
+import com.loadercode.tabvisuals.render.color.ColorAssist;
+import com.loadercode.tabvisuals.render.interfaces.QuickImports;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.util.math.MathHelper;
+import org.lwjgl.glfw.GLFW;
+
+/**
+ * Slim PlayerInteractionHelper: only what the ported HUD elements call —
+ * chat detection, null checks, health reads and key naming.
+ */
+public final class HudHelper implements QuickImports {
+
+    /** Vanilla display cap for sanity (LoxeDLC reference). */
+    private static final float MAX_DISPLAYED_HEALTH = 1000f;
+
+    private HudHelper() {
+    }
+
+    public static boolean isChat(Screen screen) {
+        return screen instanceof net.minecraft.client.gui.screen.ChatScreen;
+    }
+
+    public static boolean nullCheck() {
+        return mc.player == null || mc.world == null;
+    }
+
+    /** §-codes stripped (ColorAssist returns null for empty input). */
+    public static String getCleanName(String name) {
+        String cleaned = ColorAssist.removeFormatting(name);
+        return cleaned == null ? "" : cleaned;
+    }
+
+    /** Text overload — display names arrive as Text from ItemStack / overlay. */
+    public static String getCleanName(net.minecraft.text.Text text) {
+        return getCleanName(text == null ? "" : text.getString());
+    }
+
+    public static float getHealth(LivingEntity entity) {
+        float hp = entity.getHealth() + entity.getAbsorptionAmount();
+        return MathHelper.clamp(hp, 0f, MAX_DISPLAYED_HEALTH);
+    }
+
+    public static float getAbsorption(LivingEntity entity) {
+        return Math.max(0f, entity.getAbsorptionAmount());
+    }
+
+    public static String getHealthString(LivingEntity entity) {
+        return getHealthString(getHealth(entity));
+    }
+
+    public static String getHealthString(float hp) {
+        return String.format("%.1f", hp).replace(",", ".").replace(".0", "");
+    }
+
+    public static net.minecraft.client.util.InputUtil.Type getKeyType(int key) {
+        return key < 8 ? net.minecraft.client.util.InputUtil.Type.MOUSE
+                : net.minecraft.client.util.InputUtil.Type.KEYSYM;
+    }
+
+    public static boolean isKey(int keyCode) {
+        if (keyCode == -1) {
+            return false;
+        }
+        if (keyCode < 8) {
+            return GLFW.glfwGetMouseButton(mc.getWindow().getHandle(), keyCode) == GLFW.GLFW_PRESS;
+        }
+        return GLFW.glfwGetKey(mc.getWindow().getHandle(), keyCode) == GLFW.GLFW_PRESS;
+    }
+
+    public static PlayerEntity self() {
+        return mc.player;
+    }
+}

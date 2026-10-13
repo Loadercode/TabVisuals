@@ -5,6 +5,11 @@
 	"refmap": "tabvisuals-refmap.json",
 	"mixins": [],
 	"client": [
+		"BossBarHudAccessor",
+		"BossBarHudMixin",
+		"ClientPlayNetworkMixin",
+		"InGameHudAccessor",
+		"InGameHudMixin",
 		"PlayerListHudMixin",
 		"TitleScreenMixin"
 	],

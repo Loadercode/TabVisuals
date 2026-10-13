@@ -87,6 +87,41 @@ public class ColorAssist {
     public static volatile boolean glassMode = false;
     public static volatile float glassOpacity = 1f;
     public static volatile boolean hudBlurMode = false;
+    /** Акцент клиента («Цвет клиента») — кормится драйвером из HudTheme. */
+    public static volatile int accentColor = COLOR_FOR_RECTS_CUSTOM;
+
+    // Полная тема (тёмная/светлая/кастомная) живёт в HudTheme — драйвер
+    // передаёт её сюда, чтобы портированные LoxeDLC-элементы совпадали с
+    // остальным HUD. Пока override не установлен, работает легаси-путь ниже.
+    private static volatile boolean overrideActive = false;
+    private static volatile boolean overrideCustom = false;
+    private static volatile int ovText = GUI_DARK_TEXT;
+    private static volatile int ovText2 = GUI_DARK_TEXT_SECONDARY;
+    private static volatile int ovBlur = 0;
+    private static volatile int ovRect = 0;
+    private static volatile int ovRectOutline = 0;
+    private static volatile int ovOutline = GUI_DARK_OUTLINE_ELEMENT;
+    private static volatile int ovRect1 = 0;
+    private static volatile int ovRectDarker = 0;
+    private static volatile int[] ovGradient;
+
+    /** Один вызов в кадр от HUD-драйвера: значения темы из HudTheme. */
+    public static void setThemeOverride(boolean custom, int text, int text2, int blur,
+                                        int rect, int rectOutline, int[] gradient,
+                                        int outline, int rect1, int rectDarker, int accent) {
+        overrideActive = true;
+        overrideCustom = custom;
+        ovText = text;
+        ovText2 = text2;
+        ovBlur = blur;
+        ovRect = rect;
+        ovRectOutline = rectOutline;
+        ovGradient = gradient;
+        ovOutline = outline;
+        ovRect1 = rect1;
+        ovRectDarker = rectDarker;
+        accentColor = accent;
+    }
 
     private static boolean isLightTheme() {
         return lightTheme;
@@ -106,6 +141,20 @@ public class ColorAssist {
 
     private static void ensureCache() {
         if (_cacheValid) return;
+
+        if (overrideActive && ovGradient != null) {
+            _cachedText        = ovText;
+            _cachedText2       = ovText2;
+            _cachedBlurColor   = ovBlur;
+            _cachedRectColor   = ovRect;
+            _cachedRectOutline = ovRectOutline;
+            _cachedOutlineEl   = ovOutline;
+            _cachedGradient    = ovGradient;
+            _cachedRect1       = ovRect1;
+            _cachedRectDarker1 = ovRectDarker;
+            _cacheValid = true;
+            return;
+        }
 
         boolean isGlass = glassMode;
         boolean isHudBlur = hudBlurMode;
@@ -510,7 +559,7 @@ public class ColorAssist {
     public int getOutline(float alpha, float bright) { return multBright(multAlpha(getOutline(), alpha), bright); }
 
     public int getClientColor() {
-        return COLOR_FOR_RECTS_CUSTOM;
+        return accentColor;
     }
     public int getClientColor(float alpha)  { return multAlpha(getClientColor(), alpha); }
     public int getFriendColor()             { return pack(0x55, 0xFF, 0x55, 255); }

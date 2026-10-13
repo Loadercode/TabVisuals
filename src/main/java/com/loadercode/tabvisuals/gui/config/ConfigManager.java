@@ -5,9 +5,11 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.gui.Theme;
+import com.loadercode.tabvisuals.gui.hud.HudEditor;
 import com.loadercode.tabvisuals.gui.module.ModuleRegistry;
 import com.loadercode.tabvisuals.gui.module.ModuleStub;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
+import com.loadercode.tabvisuals.gui.setting.ColorSetting;
 import com.loadercode.tabvisuals.gui.setting.DoubleSetting;
 import com.loadercode.tabvisuals.gui.setting.ModeSetting;
 import com.loadercode.tabvisuals.gui.setting.Setting;
@@ -39,6 +41,10 @@ public final class ConfigManager {
     public static final class GuiState {
         public String themeId = Theme.ALL[0].id();
         public Map<String, ModuleState> modules = new HashMap<>();
+        /** HUD element positions from the in-chat editor: id → {x, y} (toasts: {yOffset}). */
+        public Map<String, float[]> hud = new HashMap<>();
+        /** Custom theme colours: slot name → ARGB int. */
+        public Map<String, Integer> customTheme = new HashMap<>();
     }
 
     public static final class ModuleState {
@@ -65,6 +71,8 @@ public final class ConfigManager {
                     v = d.get();
                 } else if (s instanceof ModeSetting md) {
                     v = md.index();
+                } else if (s instanceof ColorSetting cs) {
+                    v = cs.get();
                 } else {
                     continue;
                 }
@@ -72,6 +80,8 @@ public final class ConfigManager {
             }
             state.modules.put(m.id(), ms);
         }
+        state.hud.putAll(HudEditor.positions());
+        state.customTheme.putAll(Theme.customColors());
         return state;
     }
 
@@ -79,8 +89,15 @@ public final class ConfigManager {
         if (state == null) {
             return;
         }
+        // custom colours first: the theme id below may point at the Custom slot
+        if (state.customTheme != null) {
+            Theme.loadCustom(state.customTheme);
+        }
         if (state.themeId != null) {
             Theme.set(Theme.byId(state.themeId));
+        }
+        if (state.hud != null) {
+            HudEditor.loadPositions(state.hud);
         }
         if (state.modules == null) {
             return;
@@ -107,6 +124,8 @@ public final class ConfigManager {
                     d.set(n.doubleValue());
                 } else if (s instanceof ModeSetting md && v instanceof Number n) {
                     md.setIndex(n.intValue());
+                } else if (s instanceof ColorSetting cs && v instanceof Number n) {
+                    cs.set(n.intValue());
                 }
             }
         }

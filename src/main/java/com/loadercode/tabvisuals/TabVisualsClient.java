@@ -5,6 +5,7 @@ import com.loadercode.tabvisuals.gui.ClickGuiScreen;
 import com.loadercode.tabvisuals.gui.config.ConfigManager;
 import com.loadercode.tabvisuals.gui.hud.HotkeyManager;
 import com.loadercode.tabvisuals.gui.hud.HudRenderer;
+import com.loadercode.tabvisuals.gui.music.MusicManager;
 import com.loadercode.tabvisuals.render.font.Fonts;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -15,6 +16,8 @@ import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Locale;
+
 public final class TabVisualsClient implements ClientModInitializer {
 
 	public static final String MOD_ID = "tabvisuals";
@@ -24,6 +27,7 @@ public final class TabVisualsClient implements ClientModInitializer {
 	private static final long TAB_OPEN_GRACE_MS = 250L;
 
 	private static volatile long lastTabRenderAt;
+	private static KeyBinding clickGuiKey;
 
 	@Override
 	public void onInitializeClient() {
@@ -36,7 +40,7 @@ public final class TabVisualsClient implements ClientModInitializer {
 
 		ConfigManager.loadAutosave();
 
-		KeyBinding clickGuiKey = KeyBindingHelper.registerKeyBinding(
+		clickGuiKey = KeyBindingHelper.registerKeyBinding(
 				new KeyBinding("key.tabvisuals.clickgui", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_SHIFT, "category.tabvisuals"));
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			while (clickGuiKey.wasPressed()) {
@@ -46,6 +50,7 @@ public final class TabVisualsClient implements ClientModInitializer {
 		});
 
 		HudRenderer.register();
+		MusicManager.init(); // SMTC + Discord bridges start with the client
 	}
 
 	/** Called from the PlayerListHud render hook, once per frame while the tab list is visible. */
@@ -55,5 +60,39 @@ public final class TabVisualsClient implements ClientModInitializer {
 
 	public static boolean isTabOpen() {
 		return System.currentTimeMillis() - lastTabRenderAt < TAB_OPEN_GRACE_MS;
+	}
+
+	/** Short label of the ClickGUI bind ("RSHIFT", "F", …) for HUD rows and the GUI hint. */
+	public static String guiKeyLabel() {
+		try {
+			String key = clickGuiKey.getBoundKeyTranslationKey();
+			if (key.startsWith("key.keyboard.")) {
+				key = key.substring("key.keyboard.".length());
+			} else if (key.startsWith("key.mouse.")) {
+				return key.substring("key.mouse.".length()).toUpperCase(Locale.ROOT);
+			} else {
+				return key.toUpperCase(Locale.ROOT);
+			}
+			return switch (key) {
+				case "right.shift" -> "RSHIFT";
+				case "left.shift" -> "LSHIFT";
+				case "right.control" -> "RCTRL";
+				case "left.control" -> "LCTRL";
+				case "right.alt" -> "RALT";
+				case "left.alt" -> "LALT";
+				case "space" -> "SPACE";
+				case "caps.lock" -> "CAPS";
+				case "tab" -> "TAB";
+				case "enter" -> "ENTER";
+				case "backspace" -> "BKSP";
+				case "delete" -> "DEL";
+				case "grave" -> "`";
+				default -> key.contains(".")
+						? key.substring(key.lastIndexOf('.') + 1).toUpperCase(Locale.ROOT)
+						: key.toUpperCase(Locale.ROOT);
+			};
+		} catch (Throwable t) {
+			return "RSHIFT";
+		}
 	}
 }

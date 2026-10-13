@@ -12,6 +12,9 @@ import java.util.Stack;
 
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ScissorAssist implements QuickImports {
+    /** Shared instance for HUD elements (LoxeDLC getScissorManager()). */
+    public static final ScissorAssist INSTANCE = new ScissorAssist();
+
     Pool<Scissor> scissorPool = new Pool<>(Scissor::new);
     Stack<Scissor> scissorStack = new Stack<>();
 

@@ -3,12 +3,12 @@ package com.loadercode.tabvisuals.gui;
 
 /** Tabs of the click GUI. CONFIGS is a separate tab by design. */
 public enum Category {
-    COMBAT("Combat"),
-    PLAYER("Player"),
-    MOVEMENT("Movement"),
-    RENDER("Render"),
-    MISC("Misc"),
-    CONFIGS("Configs");
+    COMBAT("Бой"),
+    PLAYER("Игрок"),
+    MOVEMENT("Движение"),
+    RENDER("Рендер"),
+    MISC("Прочее"),
+    CONFIGS("Конфиги");
 
     private final String displayName;
 

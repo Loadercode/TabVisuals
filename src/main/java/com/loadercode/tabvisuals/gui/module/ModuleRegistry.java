@@ -3,110 +3,82 @@ package com.loadercode.tabvisuals.gui.module;
 
 import com.loadercode.tabvisuals.gui.Category;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
+import com.loadercode.tabvisuals.gui.setting.ColorSetting;
 import com.loadercode.tabvisuals.gui.setting.DoubleSetting;
 import com.loadercode.tabvisuals.gui.setting.ModeSetting;
-import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/** Dummy module list per category. Pure UI placeholders — no game logic attached. */
+/**
+ * Real module list — every entry drives actual rendering or the title-screen
+ * media flow; nothing here is a placeholder. Categories without modules are
+ * hidden from the GUI tabs automatically.
+ */
 public final class ModuleRegistry {
 
     public static final List<ModuleStub> ALL = new ArrayList<>();
 
     static {
-        // --- Combat ---
-        ALL.add(new ModuleStub("killaura", "KillAura", "Attacks nearby targets automatically", Category.COMBAT, false)
-                .bind(GLFW.GLFW_KEY_R)
-                .with(new DoubleSetting("Range", 4.2, 1.0, 6.0, 0.1, "m"),
-                        new DoubleSetting("CPS", 10, 1, 20, 1, ""),
-                        new ModeSetting("Target priority", 0, "Distance", "Health", "Angle")));
-        ALL.add(new ModuleStub("velocity", "Velocity", "Modifies incoming knockback", Category.COMBAT, true)
-                .with(new DoubleSetting("Horizontal", 85, 0, 100, 1, "%"),
-                        new DoubleSetting("Vertical", 100, 0, 100, 1, "%")));
-        ALL.add(new ModuleStub("autoclicker", "AutoClicker", "Held-click automation", Category.COMBAT, false)
-                .with(new DoubleSetting("Min CPS", 8, 1, 20, 1, ""),
-                        new DoubleSetting("Max CPS", 12, 1, 20, 1, ""),
-                        new BooleanSetting("Only weapons", true)));
-        ALL.add(new ModuleStub("hitbox", "HitBox", "Expands target hitboxes", Category.COMBAT, false)
-                .with(new DoubleSetting("Expand", 0.2, 0.0, 1.0, 0.05, "")));
-        ALL.add(new ModuleStub("criticals", "Criticals", "Forces critical hit packets", Category.COMBAT, false)
-                .with(new ModeSetting("Mode", 0, "Packet", "Jump", "MiniJump")));
-        ALL.add(new ModuleStub("reach", "Reach", "Increases attack distance", Category.COMBAT, false)
-                .with(new DoubleSetting("Distance", 3.5, 3.0, 6.0, 0.1, "m")));
-        ALL.add(new ModuleStub("trigger", "TriggerBot", "Attacks whatever you look at", Category.COMBAT, false)
-                .with(new DoubleSetting("Delay", 50, 0, 500, 10, "ms"),
-                        new BooleanSetting("Players only", true)));
+        // --- Render: HUD panels, toasts and the in-chat position editor ---
+        // Full LoxeDLC Hud feature: theme system (Темная/Светлая/Кастомная
+        // with 14 editable colour slots), blur/glass pipeline and the whole
+        // element set (everything except the Staff list).
+        ALL.add(new ModuleStub("hud", "HUD",
+                "LoxeDLC-style elements, theme and the in-chat position editor", Category.RENDER, true)
+                .with(new BooleanSetting("Watermark", true),
+                        new BooleanSetting("Inventory", true),
+                        new BooleanSetting("HotKeys", true),
+                        new BooleanSetting("Potions", true),
+                        new BooleanSetting("Target Hud", true),
+                        new BooleanSetting("Binds", true),
+                        new BooleanSetting("Cool Downs", true),
+                        new BooleanSetting("Notifications", true),
+                        new BooleanSetting("Player Info", true),
+                        new BooleanSetting("Scoreboard", false),
+                        new BooleanSetting("Media Player", true),
+                        new BooleanSetting("Armor", true),
+                        new BooleanSetting("HotBar", false),
+                        new BooleanSetting("Saturation", true),
+                        new BooleanSetting("Totem Counter", true),
+                        new BooleanSetting("Keystrokes", true),
+                        new BooleanSetting("EPRender", false),
+                        new BooleanSetting("Dynamic Island", true),
+                        new BooleanSetting("Staff list", true),
+                        new BooleanSetting("Interactive editor", true),
+                        new BooleanSetting("Magnetic snapping", true),
+                        // --- theme system (LoxeDLC Hud) ---
+                        new ModeSetting("Тема", 0, "Темная", "Светлая", "Кастомная"),
+                        new ColorSetting("Цвет клиента", 0xFF22D3EE)
+                                .presets(0xFF22D3EE, 0xFF6C9AFD, 0xFF8C7FFF, 0xFFFFA576, 0xFFFF7B7B),
+                        new ColorSetting("Текст темы", 0xFFFFFFFF),
+                        new ColorSetting("Вторичный текст", 0xFFAFAFAF),
+                        new ColorSetting("Фон HUD 1", 0x4B121314),
+                        new ColorSetting("Фон HUD 2", 0x4B000205),
+                        new ColorSetting("Панель 1", 0xE41A1A1F),
+                        new ColorSetting("Панель 2", 0xFF18181E),
+                        new ColorSetting("Цвет блюра", 0xC8000000),
+                        new ColorSetting("Обводка", 0xFF373746),
+                        new ColorSetting("Вкладка (выбрана)", 0x873D3D3D),
+                        new ColorSetting("Вкладка (наведение)", 0x64555564),
+                        new ColorSetting("Скроллбар (фон)", 0x4B232323),
+                        new ColorSetting("Скроллбар (ползунок)", 0x5F656565),
+                        // --- blur / glass pipeline ---
+                        new BooleanSetting("Blur", true),
+                        new ModeSetting("Blur quality", 2, "Low", "Medium", "High"),
+                        new BooleanSetting("Glass effect", false),
+                        new DoubleSetting("Прозрачность стекла", 0.5, 0.2, 0.9, 0.05, ""),
+                        new BooleanSetting("Shadow", true),
+                        new DoubleSetting("Panel opacity", 1.0, 0.30, 1.60, 0.05, "x")));
 
-        // --- Player ---
-        ALL.add(new ModuleStub("nofall", "NoFall", "Negates fall damage", Category.PLAYER, true)
-                .with(new ModeSetting("Mode", 0, "Packet", "Spoof", "Clutch")));
-        ALL.add(new ModuleStub("autotool", "AutoTool", "Picks the best tool for the block", Category.PLAYER, false)
-                .with(new BooleanSetting("Swap back", true)));
-        ALL.add(new ModuleStub("fastplace", "FastPlace", "Removes placement delay", Category.PLAYER, false)
-                .with(new DoubleSetting("Delay", 0, 0, 4, 1, "t")));
-        ALL.add(new ModuleStub("cheststealer", "ChestStealer", "Loots containers automatically", Category.PLAYER, false)
-                .with(new DoubleSetting("Delay", 120, 0, 500, 10, "ms"),
-                        new BooleanSetting("Auto close", true)));
-        ALL.add(new ModuleStub("invmove", "InventoryMove", "Move while screens are open", Category.PLAYER, false));
-        ALL.add(new ModuleStub("antiafk", "AntiAFK", "Prevents idle kicks", Category.PLAYER, false)
-                .with(new ModeSetting("Style", 1, "Jump", "Rotate", "Walk")));
-        ALL.add(new ModuleStub("blink", "Blink", "Queues movement packets", Category.PLAYER, false)
-                .with(new DoubleSetting("Limit", 20, 1, 100, 1, "s")));
-
-        // --- Movement ---
-        ALL.add(new ModuleStub("speed", "Speed", "Movement acceleration boost", Category.MOVEMENT, false)
-                .bind(GLFW.GLFW_KEY_V)
-                .with(new ModeSetting("Mode", 0, "Strafe", "BHop", "OnGround"),
-                        new DoubleSetting("Multiplier", 1.6, 1.0, 3.0, 0.1, "x")));
-        ALL.add(new ModuleStub("flight", "Flight", "Air movement control", Category.MOVEMENT, false)
-                .bind(GLFW.GLFW_KEY_F)
-                .with(new ModeSetting("Mode", 0, "Creative", "Vanilla", "Glide"),
-                        new DoubleSetting("Speed", 1.0, 0.2, 5.0, 0.1, "x")));
-        ALL.add(new ModuleStub("longjump", "LongJump", "Extended jump distance", Category.MOVEMENT, false)
-                .with(new DoubleSetting("Boost", 2.0, 1.0, 5.0, 0.1, "x")));
-        ALL.add(new ModuleStub("step", "Step", "Walk up full blocks", Category.MOVEMENT, true)
-                .with(new DoubleSetting("Height", 1.0, 0.5, 2.5, 0.5, "b")));
-        ALL.add(new ModuleStub("sprint", "Sprint", "Keeps sprint active", Category.MOVEMENT, true)
-                .with(new BooleanSetting("Omnidirectional", false)));
-        ALL.add(new ModuleStub("noslow", "NoSlow", "No slowdown while using items", Category.MOVEMENT, false)
-                .with(new BooleanSetting("Blocking", true),
-                        new BooleanSetting("Eating", true)));
-        ALL.add(new ModuleStub("parkour", "Parkour", "Auto jumps at edges", Category.MOVEMENT, false));
-
-        // --- Render ---
-        ALL.add(new ModuleStub("esp", "ESP", "Highlights entities through walls", Category.RENDER, true)
-                .bind(GLFW.GLFW_KEY_H)
-                .with(new ModeSetting("Style", 0, "Box", "Glow", "Corners"),
-                        new BooleanSetting("Health bar", true),
-                        new DoubleSetting("Distance", 64, 8, 256, 8, "m")));
-        ALL.add(new ModuleStub("tracers", "Tracers", "Lines to nearby entities", Category.RENDER, false)
-                .with(new DoubleSetting("Width", 1.5, 0.5, 4.0, 0.5, "")));
-        ALL.add(new ModuleStub("fullbright", "FullBright", "Maximum world brightness", Category.RENDER, true)
-                .bind(GLFW.GLFW_KEY_B)
-                .with(new ModeSetting("Mode", 0, "Gamma", "Night vision")));
-        ALL.add(new ModuleStub("nametags", "NameTags", "Custom name plates", Category.RENDER, false)
-                .with(new DoubleSetting("Scale", 1.0, 0.5, 2.0, 0.1, "x"),
-                        new BooleanSetting("Armor", true)));
-        ALL.add(new ModuleStub("chams", "Chams", "Colored models through walls", Category.RENDER, false));
-        ALL.add(new ModuleStub("itemesp", "ItemESP", "Drops glow through walls", Category.RENDER, false));
-        ALL.add(new ModuleStub("animations", "Animations", "Custom swing animations", Category.RENDER, false)
-                .with(new ModeSetting("Preset", 1, "Vanilla", "Compact", "Slide")));
-
-        // --- Misc ---
-        ALL.add(new ModuleStub("autogg", "AutoGG", "Sends gg after a win", Category.MISC, false)
-                .with(new DoubleSetting("Delay", 800, 0, 3000, 100, "ms")));
-        ALL.add(new ModuleStub("spammer", "Spammer", "Repeats chat lines", Category.MISC, false)
-                .with(new DoubleSetting("Interval", 5, 1, 60, 1, "s")));
-        ALL.add(new ModuleStub("antibot", "AntiBot", "Filters fake players", Category.MISC, true)
-                .with(new BooleanSetting("Tab check", true)));
-        ALL.add(new ModuleStub("middleclick", "MiddleClickFriend", "Friend toggle on middle click", Category.MISC, false));
-        ALL.add(new ModuleStub("timer", "Timer", "Changes client tick speed", Category.MISC, false)
-                .with(new DoubleSetting("Speed", 1.0, 0.5, 3.0, 0.1, "x")));
-        ALL.add(new ModuleStub("notes", "Notes", "In-game scratch pad", Category.MISC, false));
-        ALL.add(new ModuleStub("streamermode", "StreamerMode", "Hides nick and server info while streaming", Category.MISC, true)
-                .bind(GLFW.GLFW_KEY_END));
+        // --- Misc: title-screen now playing (SMTC + lrclib lyrics + Discord) ---
+        ALL.add(new ModuleStub("media", "Media",
+                "Now playing on the title screen: lyrics, cover, profile", Category.MISC, true)
+                .with(new BooleanSetting("Splash lyrics", true),
+                        new BooleanSetting("Menu lyrics", true),
+                        new BooleanSetting("Cover glow", true),
+                        new BooleanSetting("Animated lyrics", true),
+                        new BooleanSetting("Music cover", true)));
     }
 
     public static List<ModuleStub> byCategory(Category category) {

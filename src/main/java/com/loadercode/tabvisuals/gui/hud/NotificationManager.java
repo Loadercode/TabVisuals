@@ -24,6 +24,8 @@ public final class NotificationManager {
     public static final float TOAST_GAP = 3.5f;
     /** Offset below the crosshair for the first (topmost) toast. */
     public static final float START_OFFSET = 18f;
+    /** Extra drag offset from the in-chat HUD editor; 0 = default slot. */
+    public static float yOffset = 0f;
 
     private static final int MAX_QUEUE = 6;
 
@@ -93,7 +95,7 @@ public final class NotificationManager {
             dt = 0.25f;
         }
 
-        float startY = screenH / 2f + START_OFFSET;
+        float startY = screenH / 2f + START_OFFSET + yOffset;
         float slotLerp = 1f - (float) Math.pow(1f - 0.22, dt * 60f);
 
         int index = 0;

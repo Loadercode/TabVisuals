@@ -1,94 +1,521 @@
 // language: Java, file: HudRenderer.java, target: Minecraft 1.21.4 Fabric, JDK 21
 package com.loadercode.tabvisuals.gui.hud;
 
+import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.module.ModuleRegistry;
 import com.loadercode.tabvisuals.gui.module.ModuleStub;
+import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
+import com.loadercode.tabvisuals.gui.setting.DoubleSetting;
+import com.loadercode.tabvisuals.gui.setting.ModeSetting;
+import com.loadercode.tabvisuals.gui.setting.Setting;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
+import com.loadercode.tabvisuals.render.shape.ShapeProperties;
+import com.loadercode.tabvisuals.render.shape.implement.Blur;
+import com.loadercode.tabvisuals.render.interfaces.QuickImports;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.texture.Sprite;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.effect.StatusEffects;
+import com.loadercode.tabvisuals.gui.hud.draggable.AbstractDraggable;
+import com.loadercode.tabvisuals.gui.hud.draggable.Draggable;
+import com.loadercode.tabvisuals.render.color.ColorAssist;
+import com.loadercode.tabvisuals.render.math.calc.Calculate;
+import com.loadercode.tabvisuals.util.Network;
+import org.joml.Vector4f;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.ConcurrentModificationException;
 
 /**
- * In-game HUD subset: HotKeys / Active Potions / Staff Online panels on the
- * left, toast notifications under the crosshair. All drawn on the ported
- * render stack (UiRender + Fonts), panel metrics follow the reference style:
- * separate header pill + body card, 5px radius, dark glass fill.
+ * HUD frame driver — a faithful port of the LoxeDLC HUD feature: the whole
+ * element set (everything except the Staff list) drawn on the shared render
+ * stack with the LoxeDLC theme engine ({@link HudTheme}), the blur/glass
+ * pipeline and the in-chat position editor ({@link HudEditor}). Panel metrics
+ * follow the reference exactly: 15.5px header plate + body plate, round 4,
+ * 0.1 thickness, theme gradient + hairline outline.
  */
 public final class HudRenderer {
 
+    // ------------------------------------------------------------- element ids
+    public static final String WATERMARK = "watermark";
+    public static final String INVENTORY = "inventory";
+    public static final String HOTKEYS = "hotkeys";
+    public static final String POTIONS = "potions";
+    public static final String TARGETHUD = "targethud";
+    public static final String BINDS = "binds";
+    public static final String COOLDOWNS = "cooldowns";
+    public static final String SCOREBOARD = "scoreboard";
+    public static final String MEDIAPLAYER = "mediaplayer";
+    public static final String ARMOR = "armor";
+    public static final String TOTEM = "totem";
+    public static final String KEYSTROKES = "keystrokes";
+    public static final String EPR = "epr";
+    public static final String STAFF = "staff";
+    public static final String TOASTS = "toasts";
+    /** Anchored elements — follow the screen, not draggable. */
+    public static final String HOTBAR = "hotbar";
+    public static final String ISLAND = "island";
+    public static final String PLAYERINFO = "playerinfo";
+    public static final String SATURATION = "saturation";
+
+    /** Draggable element ids → editor labels (setting name of the element). */
+    public static final Map<String, String> ELEMENTS = new LinkedHashMap<>();
+
+    static {
+        ELEMENTS.put(WATERMARK, "Watermark");
+        ELEMENTS.put(INVENTORY, "Inventory");
+        ELEMENTS.put(HOTKEYS, "HotKeys");
+        ELEMENTS.put(POTIONS, "Potions");
+        ELEMENTS.put(TARGETHUD, "Target Hud");
+        ELEMENTS.put(BINDS, "Binds");
+        ELEMENTS.put(COOLDOWNS, "Cool Downs");
+        ELEMENTS.put(TOASTS, "Notifications");
+        ELEMENTS.put(SCOREBOARD, "Scoreboard");
+        ELEMENTS.put(MEDIAPLAYER, "Media Player");
+        ELEMENTS.put(ARMOR, "Armor");
+        ELEMENTS.put(TOTEM, "Totem Counter");
+        ELEMENTS.put(KEYSTROKES, "Keystrokes");
+        ELEMENTS.put(EPR, "EPRender");
+        ELEMENTS.put(STAFF, "Staff list");
+    }
+
     // layout ------------------------------------------------------------------
-    private static final float X0 = 8f;
-    private static final float COL_GAP = 6f;
-    /** Bottom of the panel row: clears hotbar + xp/health bars in survival. */
-    private static final float BOTTOM_MARGIN = 56f;
-    private static final float PAD = 6f;
-    private static final float PILL_H = 16f;
-    private static final float PILL_GAP = 4f;
-    private static final float ROW_H = 13.5f;
+    private static final float PILL_H = 15.5f;
+    private static final float BODY_TOP = 16.4f;
+    private static final float ROW_H = 11f;
     private static final float BODY_PAD = 6f;
-    private static final float RADIUS = 5f;
-    private static final float ICON = 8.5f;
-    private static final float POTION_ICON = 9f;
-    private static final float DOT = 3.5f;
+    private static final float RADIUS = 4f;
+    private static final float PAD = 6f;
 
-    // palette -----------------------------------------------------------------
-    private static final int BG = 0xE6101114;        // (16,17,20) @ ~90%
-    private static final int LINE = 0x16FFFFFF;      // white @ 8%
-    private static final int TITLE_C = 0xFFF5F5FA;
-    private static final int KEY_C = 0xFFE6E8F0;     // hotkey module name
-    private static final int VALUE_C = 0xFFC8CDD7;   // hotkey key / staff tag
-    private static final int ROW_C = 0xFFF5F5FA;     // potion name / timer
-    private static final int STAFF_C = 0xFFF0F2F8;   // staff name
-    private static final int TOAST_TEXT_C = 0xFFC8CDDA;
-    private static final int GREEN = 0xFF2ED573;
-    private static final int RED_DOT = 0xFFFF4757;
-    private static final int VANISH_C = 0xFFFF6B81;
-
-    // fonts -------------------------------------------------------------------
-    private static final FontRenderer F_TITLE = Fonts.getSize(11, Fonts.Type.SEMI);
-    private static final FontRenderer F_ROW = Fonts.getSize(10, Fonts.Type.REGULAR);
-    private static final FontRenderer F_TAG = Fonts.getSize(9, Fonts.Type.SEMI);
-    private static final FontRenderer F_TOAST = Fonts.getSize(11, Fonts.Type.REGULAR);
-    private static final FontRenderer F_TOAST_SEMI = Fonts.getSize(11, Fonts.Type.SEMI);
+    // fonts (LoxeDLC sizes; the stack renders size/2pt) ------------------------
+    public static final FontRenderer F_TITLE_13 = Fonts.getSize(13, Fonts.Type.DEFAULT);
+    public static final FontRenderer F_TITLE_14 = Fonts.getSize(14, Fonts.Type.DEFAULT);
+    public static final FontRenderer F_ROW_13 = Fonts.getSize(13, Fonts.Type.DEFAULT);
+    public static final FontRenderer F_12 = Fonts.getSize(12, Fonts.Type.DEFAULT);
+    public static final FontRenderer F_12_BOLD = Fonts.getSize(12, Fonts.Type.BOLD);
+    public static final FontRenderer F_12_SEMI = Fonts.getSize(12, Fonts.Type.SEMI);
+    public static final FontRenderer F_11 = Fonts.getSize(11, Fonts.Type.DEFAULT);
+    public static final FontRenderer F_11_SEMI = Fonts.getSize(11, Fonts.Type.SEMI);
+    public static final FontRenderer F_11_BOLD = Fonts.getSize(11, Fonts.Type.BOLD);
+    public static final FontRenderer F_10 = Fonts.getSize(10, Fonts.Type.DEFAULT);
+    public static final FontRenderer F_10_BOLD = Fonts.getSize(10, Fonts.Type.BOLD);
+    public static final FontRenderer F_15 = Fonts.getSize(15, Fonts.Type.DEFAULT);
+    public static final FontRenderer F_16 = Fonts.getSize(16, Fonts.Type.DEFAULT);
+    public static final FontRenderer F_18_REG = Fonts.getSize(18, Fonts.Type.REGULAR);
+    public static final FontRenderer F_ICON_17 = Fonts.getSize(17, Fonts.Type.ICONS);
+    public static final FontRenderer F_ICON_21 = Fonts.getSize(21, Fonts.Type.ICONS);
+    public static final FontRenderer F_GI_14 = Fonts.getSize(14, Fonts.Type.GUIICONS);
+    public static final FontRenderer F_GI_18 = Fonts.getSize(18, Fonts.Type.GUIICONS);
+    public static final FontRenderer F_GI_20 = Fonts.getSize(20, Fonts.Type.GUIICONS);
+    public static final FontRenderer F_GI_23 = Fonts.getSize(23, Fonts.Type.GUIICONS);
+    public static final FontRenderer F_CAT_16 = Fonts.getSize(16, Fonts.Type.ICONSCATEGORY);
+    public static final FontRenderer F_ISLAND = Fonts.getSize(16, Fonts.Type.NOTVISUALS_MEDIUM);
+    public static final FontRenderer F_ISLAND_BIG = Fonts.getSize(18, Fonts.Type.NOTVISUALS_MEDIUM);
 
     private HudRenderer() {
     }
 
-    /** Wire into the Fabric HUD event. Call once from the client initializer. */
+    /** Wire into the Fabric HUD event + per-tick element/service ticks. */
     public static void register() {
         HudRenderCallback.EVENT.register((context, tickCounter) -> render(context));
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.player == null) {
+                return;
+            }
+            Network.tick();
+            for (Draggable d : Hud.getRepository().draggable()) {
+                try {
+                    d.tick();
+                } catch (Throwable ignored) {
+                    // element tick failures must not kill the client tick
+                }
+            }
+        });
     }
+
+    // ------------------------------------------------------------- settings
+
+    /** HUD module master switch; missing module → on (safe default). */
+    static boolean hudEnabled() {
+        ModuleStub m = ModuleRegistry.byId("hud");
+        return m == null || m.enabled();
+    }
+
+    /** Boolean setting of the HUD module by name. */
+    static boolean setting(String name, boolean def) {
+        ModuleStub m = ModuleRegistry.byId("hud");
+        if (m == null) {
+            return def;
+        }
+        for (Setting s : m.settings()) {
+            if (s.name().equals(name)) {
+                return !(s instanceof BooleanSetting b) || b.get();
+            }
+        }
+        return def;
+    }
+
+    /** Double (slider) setting of the HUD module by name. */
+    static float settingNum(String name, float def) {
+        ModuleStub m = ModuleRegistry.byId("hud");
+        if (m == null) {
+            return def;
+        }
+        for (Setting s : m.settings()) {
+            if (s.name().equals(name) && s instanceof DoubleSetting d) {
+                return (float) d.get();
+            }
+        }
+        return def;
+    }
+
+    /** Mode (dropdown) setting of the HUD module by name. */
+    static String settingMode(String name, String def) {
+        ModuleStub m = ModuleRegistry.byId("hud");
+        if (m == null) {
+            return def;
+        }
+        for (Setting s : m.settings()) {
+            if (s.name().equals(name) && s instanceof ModeSetting md) {
+                return md.get();
+            }
+        }
+        return def;
+    }
+
+    /** Element toggle by its label (the same string as in the GUI). */
+    public static boolean elementOn(String label) {
+        return hudEnabled() && setting(label, true);
+    }
+
+    /** In-chat editor allowed: module on + its "Interactive editor" setting. */
+    static boolean editorEnabled() {
+        return hudEnabled() && setting("Interactive editor", true);
+    }
+
+    /** True while the blur/glass pipeline is active for this frame. */
+    private static volatile boolean blurActive;
+
+    /** Blur pipeline switch, also read by the ClickGUI for its glass window. */
+    public static boolean blurEnabled() {
+        return setting("Blur", true);
+    }
+
+    /** Blur sample count from the "Blur quality" dropdown. */
+    public static int blurSamples() {
+        return switch (settingMode("Blur quality", "High")) {
+            case "Low" -> 16;
+            case "Medium" -> 32;
+            default -> 64;
+        };
+    }
+
+    // --------------------------------------------------------------- frame
 
     private static void render(DrawContext ctx) {
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null || mc.options.hudHidden) {
+        if (mc.player == null || mc.options.hudHidden || !hudEnabled()) {
             return;
         }
         MatrixStack m = ctx.getMatrices();
         float w = mc.getWindow().getScaledWidth();
         float h = mc.getWindow().getScaledHeight();
 
-        renderToasts(mc, m, w, h, true);
-        renderPanels(mc, ctx, m, w, h);
+        Hud hud = Hud.getInstance();
+        hud.syncFromSettings();
+
+        ColorAssist.flushFrameCache();
+        HudTheme.flushFrameCache();
+
+        // LoxeDLC-style blur pipeline: copy the frame once, panels sample it
+        Blur.hudBlurEnabled = setting("Blur", true);
+        Blur.glassMode = setting("Glass effect", false);
+        blurActive = Blur.hudBlurEnabled || Blur.glassMode;
+        Blur.hudContext = blurActive;
+        if (blurActive) {
+            QuickImports.blur.setup();
+        }
+
+        boolean editor = HudEditor.shouldRun(mc);
+        HudEditor.beginFrame();
+        if (editor) {
+            HudEditor.tick(mc, w, h);
+        }
+        HudEditor.pushPositions(w, h);
+
+        // LoxeDLC frame loop: every registered element, scaled by its
+        // start/stop animation, drawn on top of vanilla at z=400.
+        m.push();
+        try {
+            m.translate(0.0F, 0.0F, 400.0F);
+            for (Draggable draggable : Hud.getRepository().draggable()) {
+                if (!(draggable instanceof AbstractDraggable ad)) {
+                    continue;
+                }
+                try {
+                    if (ad.canDraw(hud, ad)) {
+                        ad.startAnimation();
+                    } else {
+                        ad.stopAnimation();
+                    }
+                    if (ad.isCloseAnimationFinished()) {
+                        continue;
+                    }
+                    if (ad.isDragging()) {
+                        ad.validPosition();
+                    }
+                    float scale = (float) ad.getScaleAnimation().output();
+                    m.push();
+                    try {
+                        if (scale >= 0.999f) {
+                            ad.drawDraggable(ctx);
+                        } else {
+                            Calculate.setAlpha(scale, () -> ad.drawDraggable(ctx));
+                        }
+                    } finally {
+                        m.pop();
+                    }
+                    HudEditor.syncDraggable(ad);
+                } catch (ConcurrentModificationException ignored) {
+                } catch (Throwable t) {
+                    ad.stopAnimation();
+                    TabVisualsClient.LOGGER.debug("HUD element {} failed", ad.getName(), t);
+                }
+            }
+        } finally {
+            m.pop();
+        }
+        if (elementOn("Staff list")) {
+            renderStaff(mc, m, w, h, editor);
+        }
+        if (setting("Notifications", true)) {
+            renderToasts(mc, m, w, h, true);
+            if (editor && NotificationManager.queue().isEmpty()) {
+                drawToastPreview(m, w, h);
+            }
+        }
+
+        if (editor) {
+            HudEditor.overlay(m, w, h);
+        }
+        Blur.hudContext = false;
+        FontRenderer.flushDeferred();
     }
 
+    // ------------------------------------------------------ placement / editor
+
     /**
-     * Toast stack, centered under the crosshair. Shared with ClickGuiScreen:
+     * Top-left corner of an element: the saved editor position when the
+     * element was dragged, otherwise the LoxeDLC default; clamped on-screen.
+     * Registers the final bounds with the editor either way.
+     */
+    public static float[] place(String id, float w, float totalH, float screenW, float screenH) {
+        float[] saved = HudEditor.placed(id);
+        float x;
+        float y;
+        if (saved != null) {
+            x = clamp(saved[0], 2f, Math.max(2f, screenW - w - 2f));
+            y = clamp(saved[1], 2f, Math.max(2f, screenH - totalH - 2f));
+        } else {
+            float[] def = defaultPos(id, screenW, screenH);
+            x = clamp(def[0], 2f, Math.max(2f, screenW - w - 2f));
+            y = clamp(def[1], 2f, Math.max(2f, screenH - totalH - 2f));
+        }
+        HudEditor.bind(id, x, y, w, totalH);
+        return new float[]{x, y};
+    }
+
+    /** LoxeDLC default positions per element (scaled down when the screen is small). */
+    private static float[] defaultPos(String id, float sw, float sh) {
+        return switch (id) {
+            case WATERMARK -> new float[]{10, 10};
+            case COOLDOWNS -> new float[]{10, 40};
+            case POTIONS -> new float[]{Math.min(200, sw * 0.45f), 40};
+            case HOTKEYS -> new float[]{Math.min(300, sw * 0.65f), 40};
+            case TARGETHUD -> new float[]{10, 80};
+            case SCOREBOARD -> new float[]{10, 100};
+            case MEDIAPLAYER -> new float[]{10, 120};
+            case ARMOR -> new float[]{10, 150};
+            case KEYSTROKES -> new float[]{10, 160};
+            case BINDS -> new float[]{10, Math.min(180, sh - 70)};
+            case EPR -> new float[]{20, Math.min(200, sh - 120)};
+            case INVENTORY -> new float[]{sw - 140, 40};
+            case TOTEM -> new float[]{sw - 60, sh - 60};
+            case STAFF -> new float[]{8, sh - 130};
+            default -> new float[]{10, 30};
+        };
+    }
+
+    public static float clamp(float v, float min, float max) {
+        return v < min ? min : v > max ? max : v;
+    }
+
+    // ----------------------------------------------------------------- panel
+
+    /**
+     * LoxeDLC panel: soft drop shadow + optional blurred glass + the theme's
+     * 4-corner gradient + a 0.1 hairline outline (ColorAssist gradient).
+     */
+    public static void panel(MatrixStack m, float x, float y, float w, float h, float round) {
+        panel(m, x, y, w, h, round, 1f);
+    }
+
+    public static void panel(MatrixStack m, float x, float y, float w, float h, float round, float alpha) {
+        plate(m, x, y, w, h, new Vector4f(round), alpha, true);
+    }
+
+    /** Same but with per-corner radii (LoxeDLC header/body split). */
+    public static void plate(MatrixStack m, float x, float y, float w, float h,
+                             Vector4f round, float alpha, boolean outline) {
+        if (setting("Shadow", true) && !Blur.glassMode) {
+            UiRender.rect(m, x, y + 1f, w, h, round.x, HudTheme.multAlpha(0x96000000, alpha));
+        }
+        int[] g = HudTheme.gradient();
+        int c1 = HudTheme.multAlpha(g[0], alpha);
+        int c2 = HudTheme.multAlpha(g[1], alpha);
+        int c3 = HudTheme.multAlpha(g[2], alpha);
+        int c4 = HudTheme.multAlpha(g[3], alpha);
+        if (blurActive) {
+            QuickImports.blur.renderSmooth(ShapeProperties.create(m, x, y, w, h)
+                    .round(round)
+                    .quality(blurSamples())
+                    .color(c1, c2, c3, c4)
+                    .build(), blurSamples());
+        }
+        rectangle_render(m, x, y, w, h, round, outline, c1, c2, c3, c4);
+    }
+
+    private static void rectangle_render(MatrixStack m, float x, float y, float w, float h,
+                                         Vector4f round, boolean outline, int c1, int c2, int c3, int c4) {
+        var props = ShapeProperties.create(m, x, y, w, h)
+                .round(round)
+                .color(c1, c2, c3, c4);
+        if (outline) {
+            props.thickness(0.1f).outlineColor(HudTheme.outline());
+        }
+        QuickImports.rectangle.render(props.build());
+    }
+
+    /** Header plate (rounded top corners only) + body plate, LoxeDLC split. */
+    public static void headerPlate(MatrixStack m, float x, float y, float w, float alpha) {
+        plate(m, x, y, w, PILL_H, new Vector4f(RADIUS, 0f, RADIUS, 0f), alpha, true);
+    }
+
+    public static void bodyPlate(MatrixStack m, float x, float y, float w, float h, float alpha) {
+        plate(m, x, y, w, h, new Vector4f(0f, RADIUS, 0f, RADIUS), alpha, true);
+    }
+
+    /** "Title / Active: N" header content; returns nothing, pure draw. */
+    public static void drawHeader(MatrixStack m, float x, float y, String title, String counter,
+                                  FontRenderer iconFont, String iconGlyph) {
+        int text = HudTheme.text();
+        // divider like the reference: 0.5×6 hairline at x+18
+        QuickImports.rectangle.render(ShapeProperties.create(m, x + 18, y + 5, 0.5f, 6)
+                .color(HudTheme.text(0.5f)).build());
+        if (iconFont != null && iconGlyph != null) {
+            iconFont.drawString(m, iconGlyph, x + 4.5f, y + 5.5f, text);
+        }
+        F_TITLE_13.drawString(m, title, x + 22, y + 4f, text);
+        if (counter != null) {
+            FontRenderer f12 = F_12;
+            float cw = f12.getStringWidth(counter);
+            f12.drawString(m, counter, x + getWidth(m) - cw - 4f, y + 4.5f, HudTheme.text2());
+        }
+    }
+
+    /** Width bookkeeping for headers — set by the caller before drawHeader. */
+    private static float headerWidth;
+
+    private static float getWidth(MatrixStack m) {
+        return headerWidth;
+    }
+
+    public static void setHeaderWidth(float w) {
+        headerWidth = w;
+    }
+
+    // ----------------------------------------------------------- Staff panel
+
+    private static void renderStaff(MinecraftClient mc, MatrixStack m, float sw, float sh, boolean editor) {
+        List<StaffManager.Entry> staff = StaffManager.collect(mc);
+        if (staff.isEmpty()) {
+            if (!editor) {
+                return;
+            }
+            staff = List.of(new StaffManager.Entry("MrDomer", false));
+        }
+        float w = staffWidth(staff);
+        float totalH = PILL_H + 2f + staff.size() * ROW_H + BODY_PAD;
+        float[] pos = place(STAFF, w, totalH, sw, sh);
+        float x = pos[0];
+        float y = pos[1];
+
+        panel(m, x, y, w, totalH, RADIUS);
+        bodyPlate(m, x, y + BODY_TOP, w, totalH - BODY_TOP, 1f);
+
+        setHeaderWidth(w);
+        drawHeader(m, x, y, "Staff Online", "Online: " + staff.size(), F_GI_20, "A");
+
+        float rowY = y + BODY_TOP + 2f;
+        for (StaffManager.Entry e : staff) {
+            float cy = rowY + ROW_H / 2f;
+            // avatar chip: reference hair palette (orange for "domer", brown otherwise)
+            int hair = e.name().toLowerCase(Locale.ROOT).contains("domer") ? 0xFFE67E22 : 0xFF734426;
+            UiRender.rect(m, x + 3.5f, cy - 4f, 8f, 8f, 2.5f, hair);
+            String initial = e.name().substring(0, 1);
+            F_11_SEMI.drawString(m, initial, x + 3.5f + (8 - F_11_SEMI.getStringWidth(initial)) / 2f,
+                    cy - 4f + (8 - F_11_SEMI.getStringHeight(initial)) / 2f + 1f, 0xFFFFFFFF);
+
+            QuickImports.rectangle.render(ShapeProperties.create(m, x + 14, cy - 3.5f, 0.5f, 7)
+                    .color(HudTheme.outline(0.5f)).build());
+
+            float ty = cy - F_ROW_13.getStringHeight(e.name()) / 2f + 1f;
+            F_ROW_13.drawString(m, e.name(), x + 18, ty, HudTheme.text());
+
+            String tag = e.vanished() ? "[VANISH]" : "Online";
+            int tagC = e.vanished() ? 0xFFFF6B81 : HudTheme.text2();
+            int dotC = e.vanished() ? 0xFFFF4757 : 0xFF2ED573;
+            float right = x + w - 4f;
+            UiRender.rect(m, right - 3.5f, cy - 1.75f, 3.5f, 3.5f, 1.75f, dotC);
+            float tw = F_11_SEMI.getStringWidth(tag);
+            F_11_SEMI.drawString(m, tag, right - 3.5f - 3.5f - tw, cy - F_11_SEMI.getStringHeight(tag) / 2f + 1f, tagC);
+            rowY += ROW_H;
+        }
+    }
+
+    private static float staffWidth(List<StaffManager.Entry> staff) {
+        float max = 0f;
+        for (StaffManager.Entry e : staff) {
+            String tag = e.vanished() ? "[VANISH]" : "Online";
+            max = Math.max(max, F_ROW_13.getStringWidth(e.name()) + 14f + F_11_SEMI.getStringWidth(tag) + 12f);
+        }
+        return Math.max(104f, PAD + max + 8f);
+    }
+
+    // --------------------------------------------------------------- toasts
+
+    /**
+     * Toast stack, centered under the crosshair (LoxeDLC Notifications: a
+     * 1px accent progress bar on top of each card). Shared with ClickGuiScreen:
      * the screen draws them on top of its overlay; {@code drive} is true only
      * where the HUD frame is not already advancing the animation.
      */
     public static void renderToasts(MinecraftClient mc, MatrixStack m, float screenW, float screenH, boolean drive) {
+        if (!setting("Notifications", true)) {
+            return;
+        }
         if (drive) {
             NotificationManager.update(screenH);
         }
@@ -97,14 +524,18 @@ public final class HudRenderer {
             return;
         }
 
-        float textH = F_TOAST.getStringHeight("Aa");
+        FontRenderer f = Fonts.getSize(11, Fonts.Type.REGULAR);
+        FontRenderer fb = Fonts.getSize(11, Fonts.Type.SEMI);
+        float textH = f.getStringHeight("Aa");
+        boolean boundsBound = false;
+        long now = System.nanoTime();
         for (NotificationManager.Toast t : queue) {
-            float pw = F_TOAST.getStringWidth(t.prefix);
-            float nw = F_TOAST_SEMI.getStringWidth(t.name);
-            float mw = F_TOAST.getStringWidth(t.middle);
-            float sw = F_TOAST_SEMI.getStringWidth(t.status);
-            float textW = pw + nw + mw + sw;
-            float cardW = textW + 24f;
+            float pw = f.getStringWidth(t.prefix);
+            float nw = fb.getStringWidth(t.name);
+            float mw = f.getStringWidth(t.middle);
+            float sw2 = fb.getStringWidth(t.status);
+            float textW = pw + nw + mw + sw2;
+            float cardW = textW + 22f;
             float cardH = NotificationManager.TOAST_H;
 
             float alpha = NotificationManager.clamp01(t.enterEased) * (1f - t.exitP);
@@ -116,247 +547,70 @@ public final class HudRenderer {
                     : 0.92f + 0.08f * NotificationManager.clamp01(t.enterEased);
             float yOffset = (1f - t.enterEased) * 13f - 9f * t.exitP;
 
-            float sw2 = cardW * scale;
-            float sh2 = cardH * scale;
-            float x = screenW / 2f - sw2 / 2f;
-            float y = t.animY + yOffset + (cardH - sh2) / 2f;
+            float dw = cardW * scale;
+            float dh = cardH * scale;
+            float x = screenW / 2f - dw / 2f;
+            float y = t.animY + yOffset + (cardH - dh) / 2f;
 
-            UiRender.rect(m, x, y, sw2, sh2, RADIUS, UiRender.mulAlpha(BG, alpha));
-            UiRender.outline(m, x + 0.5f, y + 0.5f, sw2 - 1f, sh2 - 1f, RADIUS, UiRender.mulAlpha(LINE, alpha), 1f);
+            panel(m, x, y, dw, dh, 4f, alpha);
 
-            float tx = x + (sw2 - textW) / 2f;
-            float ty = y + (sh2 - textH) / 2f;
-            UiRender.text(F_TOAST, m, t.prefix, tx, ty, UiRender.mulAlpha(TOAST_TEXT_C, alpha));
-            UiRender.text(F_TOAST_SEMI, m, t.name, tx + pw, ty, UiRender.mulAlpha(0xFFFFFFFF, alpha));
-            UiRender.text(F_TOAST, m, t.middle, tx + pw + nw, ty, UiRender.mulAlpha(TOAST_TEXT_C, alpha));
-            UiRender.text(F_TOAST_SEMI, m, t.status, tx + pw + nw + mw, ty, UiRender.mulAlpha(t.statusColor, alpha));
-        }
-    }
+            // progress bar on the top edge: shrinks with the remaining lifetime
+            float life = NotificationManager.ENTER_MS + NotificationManager.HOLD_MS + NotificationManager.EXIT_MS;
+            float age = (now - t.bornAt) / 1_000_000f;
+            float prog = Math.max(0f, 1f - age / life);
+            if (prog > 0.01f) {
+                QuickImports.rectangle.render(ShapeProperties.create(m, x + 2, y + 0.05f, (dw - 4) * prog + 4, 1)
+                        .round(0.75f, 0f, 0.75f, 0f)
+                        .color(HudTheme.fade(0))
+                        .build());
+            }
 
-    // ------------------------------------------------------------------ panels
+            float tx = x + (dw - textW) / 2f;
+            float ty = y + (dh - textH) / 2f;
+            f.drawString(m, t.prefix, tx, ty, HudTheme.multAlpha(HudTheme.text2(), alpha));
+            fb.drawString(m, t.name, tx + pw, ty, HudTheme.multAlpha(HudTheme.text(), alpha));
+            f.drawString(m, t.middle, tx + pw + nw, ty, HudTheme.multAlpha(HudTheme.text2(), alpha));
+            fb.drawString(m, t.status, tx + pw + nw + mw, ty, HudTheme.multAlpha(t.statusColor, alpha));
 
-    private static void renderPanels(MinecraftClient mc, DrawContext ctx, MatrixStack m, float screenW, float screenH) {
-        List<String[]> hotkeys = hotkeyRows();
-        List<PotionRow> potions = potionRows(mc);
-        List<StaffManager.Entry> staff = StaffManager.collect(mc);
-
-        float x = X0;
-        float bottom = screenH - BOTTOM_MARGIN;
-
-        if (!hotkeys.isEmpty()) {
-            float w = hotkeysWidth(hotkeys);
-            drawHotkeys(m, x, bottom, w, hotkeys);
-            x += w + COL_GAP;
-        }
-        if (!potions.isEmpty()) {
-            float w = potionsWidth(potions);
-            drawPotions(m, ctx, mc, x, bottom, w, potions);
-            x += w + COL_GAP;
-        }
-        if (!staff.isEmpty()) {
-            float w = staffWidth(staff);
-            drawStaff(m, x, bottom, w, staff);
-        }
-    }
-
-    private static List<String[]> hotkeyRows() {
-        List<ModuleStub> bound = new ArrayList<>();
-        for (ModuleStub m : ModuleRegistry.ALL) {
-            if (m.enabled() && m.bind() > 0 && m.bindName() != null) {
-                bound.add(m);
+            // the topmost visible card is the editor's drag target for toasts
+            if (!boundsBound) {
+                HudEditor.bind(TOASTS, x, y, dw, dh);
+                boundsBound = true;
             }
         }
-        bound.sort(Comparator.comparing(ModuleStub::name));
-        List<String[]> rows = new ArrayList<>(bound.size());
-        for (ModuleStub m : bound) {
-            rows.add(new String[]{m.name(), m.bindName()});
-        }
-        return rows;
     }
 
-    private static void drawHotkeys(MatrixStack m, float x, float bottom, float w, List<String[]> rows) {
-        float bodyH = rows.size() * ROW_H + BODY_PAD;
-        float totalH = PILL_H + PILL_GAP + bodyH;
-        float pillY = bottom - totalH;
+    /** Editor-only preview so the toast slot is visible and draggable when the queue is empty. */
+    private static void drawToastPreview(MatrixStack m, float screenW, float screenH) {
+        FontRenderer f = Fonts.getSize(11, Fonts.Type.REGULAR);
+        FontRenderer fb = Fonts.getSize(11, Fonts.Type.SEMI);
+        String prefix = "Module ", name = "HUD", middle = " was ", status = "enabled";
+        float textW = f.getStringWidth(prefix) + fb.getStringWidth(name)
+                + f.getStringWidth(middle) + fb.getStringWidth(status);
+        float cardW = textW + 22f;
+        float cardH = NotificationManager.TOAST_H;
+        float x = screenW / 2f - cardW / 2f;
+        float y = screenH / 2f + NotificationManager.START_OFFSET + NotificationManager.yOffset;
 
-        drawPill(m, x, pillY, w, "HotKeys", Icon.KEYBOARD);
-        float bodyY = pillY + PILL_H + PILL_GAP;
-        UiRender.rect(m, x, bodyY, w, bodyH, RADIUS, BG);
-        UiRender.outline(m, x + 0.5f, bodyY + 0.5f, w - 1f, bodyH - 1f, RADIUS, LINE, 1f);
-
-        float rowY = bodyY + 3.5f;
-        for (String[] r : rows) {
-            float textH = F_ROW.getStringHeight(r[0]);
-            float ty = rowY + (ROW_H - textH) / 2f;
-            UiRender.text(F_ROW, m, r[0], x + PAD, ty, KEY_C);
-            float kw = F_ROW.getStringWidth(r[1]);
-            UiRender.text(F_ROW, m, r[1], x + w - PAD - kw, ty, VALUE_C);
-            rowY += ROW_H;
-        }
+        panel(m, x, y, cardW, cardH, 4f);
+        QuickImports.rectangle.render(ShapeProperties.create(m, x + 2, y + 0.05f, cardW - 4, 1)
+                .round(0.75f, 0f, 0.75f, 0f)
+                .color(HudTheme.fade(0))
+                .build());
+        float tx = x + (cardW - textW) / 2f;
+        float ty = y + (cardH - f.getStringHeight("Aa")) / 2f;
+        f.drawString(m, prefix, tx, ty, HudTheme.text2());
+        fb.drawString(m, name, tx + f.getStringWidth(prefix), ty, HudTheme.text());
+        f.drawString(m, middle, tx + f.getStringWidth(prefix) + fb.getStringWidth(name), ty, HudTheme.text2());
+        fb.drawString(m, status, tx + f.getStringWidth(prefix) + fb.getStringWidth(name)
+                + f.getStringWidth(middle), ty, 0xFF2ED573);
+        HudEditor.bind(TOASTS, x, y, cardW, cardH);
     }
 
-    private static float hotkeysWidth(List<String[]> rows) {
-        float max = 0f;
-        for (String[] r : rows) {
-            max = Math.max(max, F_ROW.getStringWidth(r[0]) + 10f + F_ROW.getStringWidth(r[1]));
-        }
-        return Math.max(96f, PAD * 2f + max);
-    }
+    // ------------------------------------------------------- potion naming
 
-    private static void drawPotions(MatrixStack m, DrawContext ctx, MinecraftClient mc, float x, float bottom, float w, List<PotionRow> rows) {
-        float bodyH = rows.size() * ROW_H + BODY_PAD;
-        float totalH = PILL_H + PILL_GAP + bodyH;
-        float pillY = bottom - totalH;
-
-        drawPill(m, x, pillY, w, "Active Potions", Icon.FLASK);
-        float bodyY = pillY + PILL_H + PILL_GAP;
-        UiRender.rect(m, x, bodyY, w, bodyH, RADIUS, BG);
-        UiRender.outline(m, x + 0.5f, bodyY + 0.5f, w - 1f, bodyH - 1f, RADIUS, LINE, 1f);
-
-        float rowY = bodyY + 3.5f;
-        for (PotionRow r : rows) {
-            float iconY = rowY + (ROW_H - POTION_ICON) / 2f;
-            drawEffectSprite(m, ctx, mc, r.inst, x + PAD, iconY);
-
-            float nameX = x + PAD + POTION_ICON + 4.5f;
-            float textH = F_ROW.getStringHeight(r.name);
-            float ty = rowY + (ROW_H - textH) / 2f;
-            UiRender.text(F_ROW, m, r.name, nameX, ty, ROW_C);
-            float cursor = nameX + F_ROW.getStringWidth(r.name);
-            if (!r.roman.isEmpty()) {
-                float romanX = cursor + F_ROW.getStringWidth(" ");
-                UiRender.text(F_ROW, m, r.roman, romanX, ty, r.chipColor);
-            }
-            float tw = F_ROW.getStringWidth(r.time);
-            UiRender.text(F_ROW, m, r.time, x + w - PAD - tw, ty, ROW_C);
-            rowY += ROW_H;
-        }
-    }
-
-    private static void drawEffectSprite(MatrixStack m, DrawContext ctx, MinecraftClient mc, StatusEffectInstance inst, float x, float y) {
-        try {
-            Sprite sprite = mc.getStatusEffectSpriteManager().getSprite(inst.getEffectType());
-            if (sprite != null) {
-                ctx.drawSpriteStretched(RenderLayer::getGuiTextured, sprite, (int) x, (int) y, (int) POTION_ICON, (int) POTION_ICON);
-                return;
-            }
-        } catch (Throwable ignored) {
-            // missing atlas entry → colour chip below
-        }
-        UiRender.rect(m, x, y, POTION_ICON, POTION_ICON, 2.5f, 0xFF7E8494);
-    }
-
-    private static float potionsWidth(List<PotionRow> rows) {
-        float max = 0f;
-        for (PotionRow r : rows) {
-            float nameW = F_ROW.getStringWidth(r.name);
-            if (!r.roman.isEmpty()) {
-                nameW += F_ROW.getStringWidth(" ") + F_ROW.getStringWidth(r.roman);
-            }
-            max = Math.max(max, nameW + 18f + F_ROW.getStringWidth(r.time));
-        }
-        return Math.max(106f, PAD * 2f + POTION_ICON + 4.5f + max);
-    }
-
-    private static void drawStaff(MatrixStack m, float x, float bottom, float w, List<StaffManager.Entry> staff) {
-        float bodyH = staff.size() * ROW_H + BODY_PAD;
-        float totalH = PILL_H + PILL_GAP + bodyH;
-        float pillY = bottom - totalH;
-
-        drawPill(m, x, pillY, w, "Staff Online", Icon.PERSON);
-        float bodyY = pillY + PILL_H + PILL_GAP;
-        UiRender.rect(m, x, bodyY, w, bodyH, RADIUS, BG);
-        UiRender.outline(m, x + 0.5f, bodyY + 0.5f, w - 1f, bodyH - 1f, RADIUS, LINE, 1f);
-
-        float rowY = bodyY + 3.5f;
-        for (StaffManager.Entry e : staff) {
-            // avatar chip: reference hair palette (orange for "domer", brown otherwise)
-            int hair = e.name().toLowerCase(Locale.ROOT).contains("domer") ? 0xFFE67E22 : 0xFF734426;
-            float chipY = rowY + (ROW_H - POTION_ICON) / 2f;
-            UiRender.rect(m, x + PAD, chipY, POTION_ICON, POTION_ICON, 2.5f, hair);
-            String initial = e.name().substring(0, 1);
-            float iw = F_TAG.getStringWidth(initial);
-            float ih = F_TAG.getStringHeight(initial);
-            UiRender.text(F_TAG, m, initial, x + PAD + (POTION_ICON - iw) / 2f, chipY + (POTION_ICON - ih) / 2f, 0xFFFFFFFF);
-
-            float nameX = x + PAD + POTION_ICON + 4.5f;
-            float textH = F_ROW.getStringHeight(e.name());
-            float ty = rowY + (ROW_H - textH) / 2f;
-            UiRender.text(F_ROW, m, e.name(), nameX, ty, STAFF_C);
-
-            String tag = e.vanished() ? "[VANISH]" : "Online";
-            int tagC = e.vanished() ? VANISH_C : VALUE_C;
-            int dotC = e.vanished() ? RED_DOT : GREEN;
-            float right = x + w - PAD;
-            UiRender.rect(m, right - DOT, rowY + (ROW_H - DOT) / 2f, DOT, DOT, DOT / 2f, dotC);
-            float tw = F_TAG.getStringWidth(tag);
-            float th = F_TAG.getStringHeight(tag);
-            UiRender.text(F_TAG, m, tag, right - DOT - 3.5f - tw, rowY + (ROW_H - th) / 2f, tagC);
-            rowY += ROW_H;
-        }
-    }
-
-    private static float staffWidth(List<StaffManager.Entry> staff) {
-        float max = 0f;
-        for (StaffManager.Entry e : staff) {
-            String tag = e.vanished() ? "[VANISH]" : "Online";
-            max = Math.max(max, F_ROW.getStringWidth(e.name()) + 14f + F_TAG.getStringWidth(tag) + 7f);
-        }
-        return Math.max(104f, PAD * 2f + POTION_ICON + 4.5f + max);
-    }
-
-    // ------------------------------------------------------------------ pill
-
-    private enum Icon {KEYBOARD, FLASK, PERSON}
-
-    private static void drawPill(MatrixStack m, float x, float y, float w, String title, Icon icon) {
-        UiRender.rect(m, x, y, w, PILL_H, RADIUS, BG);
-        UiRender.outline(m, x + 0.5f, y + 0.5f, w - 1f, PILL_H - 1f, RADIUS, LINE, 1f);
-
-        float iconY = y + (PILL_H - ICON) / 2f;
-        switch (icon) {
-            case KEYBOARD -> {
-                UiRender.outline(m, x + PAD, iconY + 0.5f, 9f, 6.5f, 1.5f, TITLE_C, 1f);
-                for (int row = 0; row < 2; row++) {
-                    for (int c = 0; c < 4; c++) {
-                        UiRender.rect(m, x + PAD + 1.6f + c * 1.9f, iconY + 2.1f + row * 1.9f, 1.1f, 1.1f, 0.3f, TITLE_C);
-                    }
-                }
-            }
-            case FLASK -> {
-                UiRender.rect(m, x + PAD + 3.2f, iconY, 2.6f, 2.6f, 0.5f, TITLE_C);
-                UiRender.rect(m, x + PAD + 1f, iconY + 2.6f, 7f, 6.4f, 2.2f, TITLE_C);
-            }
-            case PERSON -> {
-                UiRender.rect(m, x + PAD + 2.6f, iconY, 3.4f, 3.4f, 1.7f, TITLE_C);
-                UiRender.rect(m, x + PAD + 0.75f, iconY + 4.4f, 7f, 3.6f, 1.8f, TITLE_C);
-            }
-        }
-        float th = F_TITLE.getStringHeight(title);
-        UiRender.text(F_TITLE, m, title, x + PAD + ICON + 4.5f, y + (PILL_H - th) / 2f, TITLE_C);
-    }
-
-    // ------------------------------------------------------------------ potions data
-
-    private record PotionRow(String name, String roman, String time, int chipColor, StatusEffectInstance inst) {
-    }
-
-    private static List<PotionRow> potionRows(MinecraftClient mc) {
-        List<PotionRow> out = new ArrayList<>();
-        for (StatusEffectInstance inst : mc.player.getStatusEffects()) {
-            String key = effectKey(inst.getTranslationKey());
-            String name = effectName(key);
-            int level = inst.getAmplifier() + 1;
-            String roman = level > 1 ? roman(level) : "";
-            String time = inst.isInfinite() ? "∞" : formatDuration(inst.getDuration());
-            out.add(new PotionRow(name, roman, time, effectColor(key), inst));
-        }
-        // shortest duration first — matches the reference ordering
-        out.sort(Comparator.comparingInt(a -> a.inst().isInfinite() ? Integer.MAX_VALUE : a.inst().getDuration()));
-        return out;
-    }
-
-    private static String effectKey(String translationKey) {
+    /** "effect.minecraft.speed" → "speed". */
+    public static String effectKey(String translationKey) {
         String key = translationKey;
         if (key.startsWith("effect.minecraft.")) {
             key = key.substring("effect.minecraft.".length());
@@ -367,25 +621,8 @@ public final class HudRenderer {
         return key.toLowerCase(Locale.ROOT);
     }
 
-    private static String roman(int level) {
-        return switch (level) {
-            case 1 -> "I";
-            case 2 -> "II";
-            case 3 -> "III";
-            case 4 -> "IV";
-            case 5 -> "V";
-            default -> "L" + level;
-        };
-    }
-
-    private static String formatDuration(int ticks) {
-        int sec = Math.max(0, ticks) / 20;
-        int min = sec / 60;
-        int rem = sec % 60;
-        return min + ":" + (rem < 10 ? "0" + rem : String.valueOf(rem));
-    }
-
-    private static String effectName(String key) {
+    /** Display name of a potion effect by its translation-key tail. */
+    public static String effectName(String key) {
         return switch (key) {
             case "speed" -> "Speed";
             case "strength" -> "Strength";
@@ -439,23 +676,5 @@ public final class HudRenderer {
             sb.append(Character.toUpperCase(p.charAt(0))).append(p, 1, p.length());
         }
         return sb.toString();
-    }
-
-    private static int effectColor(String key) {
-        return switch (key) {
-            case "speed" -> 0xFF54A0FF;
-            case "strength" -> 0xFFFF5A5F;
-            case "fire_resistance" -> 0xFFFB923C;
-            case "regeneration" -> 0xFFFF6BC1;
-            case "resistance" -> 0xFF34D399;
-            case "haste" -> 0xFFFBBF24;
-            case "night_vision" -> 0xFF818CF8;
-            case "invisibility" -> 0xFF9CA3AF;
-            case "jump_boost" -> 0xFFA3E635;
-            case "slowness" -> 0xFF64748B;
-            case "poison" -> 0xFF4ADE80;
-            case "wither" -> 0xFF374151;
-            default -> 0xFF8B93A7;
-        };
     }
 }

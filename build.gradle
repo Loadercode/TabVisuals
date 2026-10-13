@@ -1,5 +1,8 @@
 plugins {
-	id 'fabric-loom' version '1.9.2'
+	// 1.9.2 remaps yarn record component accessors to comp_NNNN (owner()/value()/
+	// cooldownGroup() all become uncallable) — 1.7-SNAPSHOT is what LoxeDLC builds
+	// with and produces a correctly named jar.
+	id 'fabric-loom' version '1.7-SNAPSHOT'
 }
 
 version = project.mod_version
@@ -19,7 +22,10 @@ repositories {
 
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	mappings "net.fabricmc:yarn:${project.yarn_mappings}"
+	// :v2 classifier = native tiny-v2 mappings — record component accessors
+	// (owner()/value()/cooldownGroup()) stay mapped; plain v1-converted tiny
+	// leaves them as comp_NNNN and the port won't compile.
+	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
