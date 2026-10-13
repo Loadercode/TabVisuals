@@ -62,7 +62,7 @@ public class HotKeys extends AbstractDraggable {
 
         int activeCount = 0;
         for (ModuleStub module : ModuleRegistry.ALL) {
-            if (module.bind() == -1 || module.bind() == 0) {
+            if ((module.bind() == -1 || module.bind() == 0) && holdKey(module) == null) {
                 continue;
             }
             if (!module.enabled()) {
@@ -155,7 +155,9 @@ public class HotKeys extends AbstractDraggable {
             offset += 11;
         } else {
             for (ModuleStub module : keysList) {
-                java.lang.String bind = "[" + StringHelper.getBindName(module.bind()) + "]";
+                java.lang.String keyName = module.bind() > 0
+                        ? StringHelper.getBindName(module.bind()) : holdKey(module);
+                java.lang.String bind = "[" + keyName + "]";
                 float centerY = getY() + offset;
                 float animation = 1.0f;
                 java.lang.String iconChar = categoryGlyph(module.category());
@@ -176,5 +178,15 @@ public class HotKeys extends AbstractDraggable {
         }
         setWidth(maxWidth + 10);
         setHeight(offset);
+    }
+
+    /** Hold-key label (Zoom/FreeLook KeySetting) shown when the toggle bind is empty. */
+    private static java.lang.String holdKey(ModuleStub module) {
+        for (com.loadercode.tabvisuals.gui.setting.Setting s : module.settings()) {
+            if (s instanceof com.loadercode.tabvisuals.gui.setting.KeySetting ks && ks.get() > 0) {
+                return ks.label();
+            }
+        }
+        return null;
     }
 }

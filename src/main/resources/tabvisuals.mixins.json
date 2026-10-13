@@ -7,9 +7,12 @@
 	"client": [
 		"BossBarHudAccessor",
 		"BossBarHudMixin",
+		"CameraMixin",
 		"ClientPlayNetworkMixin",
+		"GameRendererMixin",
 		"InGameHudAccessor",
 		"InGameHudMixin",
+		"MouseMixin",
 		"PlayerListHudMixin",
 		"TitleScreenMixin"
 	],

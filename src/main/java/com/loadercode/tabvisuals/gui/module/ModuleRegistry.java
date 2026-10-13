@@ -5,7 +5,9 @@ import com.loadercode.tabvisuals.gui.Category;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
 import com.loadercode.tabvisuals.gui.setting.ColorSetting;
 import com.loadercode.tabvisuals.gui.setting.DoubleSetting;
+import com.loadercode.tabvisuals.gui.setting.KeySetting;
 import com.loadercode.tabvisuals.gui.setting.ModeSetting;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -79,6 +81,14 @@ public final class ModuleRegistry {
                         new BooleanSetting("Cover glow", true),
                         new BooleanSetting("Animated lyrics", true),
                         new BooleanSetting("Music cover", true)));
+
+        // --- Render: LoxeDLC camera features (hold-key modules) ---
+        ALL.add(new ModuleStub("zoom", "Zoom",
+                "Smooth camera zoom while the key is held; scroll adjusts the zoom level", Category.RENDER, false)
+                .with(new KeySetting("Зум", GLFW.GLFW_KEY_C)));
+        ALL.add(new ModuleStub("freelook", "FreeLook",
+                "Look around with the mouse without turning the player (third-person camera)", Category.RENDER, false)
+                .with(new KeySetting("Свободный обзор", GLFW.GLFW_KEY_V)));
     }
 
     public static List<ModuleStub> byCategory(Category category) {

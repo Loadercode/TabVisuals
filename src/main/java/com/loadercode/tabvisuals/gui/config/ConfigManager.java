@@ -11,6 +11,7 @@ import com.loadercode.tabvisuals.gui.module.ModuleStub;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
 import com.loadercode.tabvisuals.gui.setting.ColorSetting;
 import com.loadercode.tabvisuals.gui.setting.DoubleSetting;
+import com.loadercode.tabvisuals.gui.setting.KeySetting;
 import com.loadercode.tabvisuals.gui.setting.ModeSetting;
 import com.loadercode.tabvisuals.gui.setting.Setting;
 import net.fabricmc.loader.api.FabricLoader;
@@ -73,6 +74,8 @@ public final class ConfigManager {
                     v = md.index();
                 } else if (s instanceof ColorSetting cs) {
                     v = cs.get();
+                } else if (s instanceof KeySetting ks) {
+                    v = ks.get();
                 } else {
                     continue;
                 }
@@ -126,6 +129,8 @@ public final class ConfigManager {
                     md.setIndex(n.intValue());
                 } else if (s instanceof ColorSetting cs && v instanceof Number n) {
                     cs.set(n.intValue());
+                } else if (s instanceof KeySetting ks && v instanceof Number n) {
+                    ks.set(n.intValue());
                 }
             }
         }

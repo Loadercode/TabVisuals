@@ -9,6 +9,7 @@ import com.loadercode.tabvisuals.gui.module.ModuleRegistry;
 import com.loadercode.tabvisuals.gui.module.ModuleStub;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
 import com.loadercode.tabvisuals.gui.setting.DoubleSetting;
+import com.loadercode.tabvisuals.gui.setting.KeySetting;
 import com.loadercode.tabvisuals.gui.setting.ModeSetting;
 import com.loadercode.tabvisuals.gui.setting.Setting;
 import com.loadercode.tabvisuals.gui.title.LogoManager;
@@ -101,6 +102,7 @@ public final class ClickGuiScreen extends Screen {
     private DoubleSetting dragging;
     private float dragTrackX, dragTrackW;
     private ModeSetting dropdown;
+    private KeySetting capturing;
     private float dropX, dropY, dropW;
 
     // --- custom theme color picker (loxeDLC-style HSV popup) ---
@@ -546,6 +548,17 @@ public final class ClickGuiScreen extends Screen {
             UiRender.rect(m, chx, chy, 7, 1.2f, 0.6f, t.textSecondary());
             UiRender.rect(m, chx + 1, chy + 1.3f, 5, 1.2f, 0.6f, t.textSecondary());
             UiRender.rect(m, chx + 2, chy + 2.6f, 3, 1.2f, 0.6f, t.textSecondary());
+        } else if (s instanceof KeySetting k) {
+            F_SMALL.drawString(m, k.name(), x, cy + 1, t.text());
+            String val = capturing == k ? "..." : k.label();
+            float fw = 66, fh = 14;
+            float px2 = sb.x + sb.w - 10 - fw, py2 = y + (ROW_H - fh) / 2f;
+            boolean hov = UiRender.inside(mouseX, mouseY, px2, py2, fw, fh);
+            UiRender.rect(m, px2, py2, fw, fh, 3, hov ? t.cardHover() : UiRender.withAlpha(t.card(), 210));
+            UiRender.outline(m, px2, py2, fw, fh, 3,
+                    capturing == k ? t.accent() : UiRender.withAlpha(t.outline(), 155), 1);
+            F_SMALL.drawStringWithScroll(m, val, px2 + 7,
+                    py2 + (fh - F_SMALL.getStringHeight(val)) / 2f + 1, fw - 14, t.text());
         }
     }
 
@@ -1025,6 +1038,13 @@ public final class ClickGuiScreen extends Screen {
                         return true;
                     }
                 }
+                if (s instanceof KeySetting k) {
+                    float px2 = sb.x + sb.w - 76, py2 = sb.y + 4;
+                    if (UiRender.inside(mouseX, mouseY, px2, py2, 66, 14)) {
+                        capturing = k;
+                        return true;
+                    }
+                }
             }
             return true;
         }
@@ -1134,6 +1154,18 @@ public final class ClickGuiScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (capturing != null) {
+            if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+                capturing = null;
+            } else if (keyCode == GLFW.GLFW_KEY_BACKSPACE) {
+                capturing.set(-1);
+                capturing = null;
+            } else {
+                capturing.set(keyCode);
+                capturing = null;
+            }
+            return true;
+        }
         if (searchFocused || configNameFocused) {
             if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
                 searchFocused = false;
@@ -1186,6 +1218,7 @@ public final class ClickGuiScreen extends Screen {
     public void close() {
         if (!closing) {
             closing = true;
+            capturing = null;
             closeStart = System.currentTimeMillis();
         }
     }
