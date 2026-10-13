@@ -27,6 +27,8 @@ $propsType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMed
 $streamType = [Windows.Storage.IRandomAccessStreamWithContentType,Windows.Storage,ContentType=WindowsRuntime]
 
 $coverPath = Join-Path $env:TEMP 'tabvisuals_cover.jpg'
+$cmdPath = Join-Path $PSScriptRoot 'media_cmd.txt'
+$lastCmdStamp = [int64]-1
 $lastKey = ''
 $lastPosSent = [int64]-1
 $status = ''
@@ -36,6 +38,29 @@ while ($true) {
         $mgr = AwaitOp ($mgrType::RequestAsync()) $mgrType
         if (-not $mgr) { Start-Sleep -Milliseconds 2000; continue }
         $session = $mgr.GetCurrentSession()
+
+        # media_cmd.txt: command line + unix-millis stamp written by the HUD media player
+        if (Test-Path -LiteralPath $cmdPath) {
+            try {
+                $raw = Get-Content -LiteralPath $cmdPath -Raw
+                $parts = $raw -split "`r?`n"
+                $cmd = $parts[0].Trim()
+                $stamp = if ($parts.Count -gt 1) { [int64]$parts[1].Trim() } else { [int64]0 }
+                $age = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $stamp
+                if ($stamp -gt $lastCmdStamp -and $age -ge 0 -and $age -lt 3000) {
+                    $lastCmdStamp = $stamp
+                    if ($session) {
+                        switch ($cmd) {
+                            'playPause' { [void]$session.TryPlayPauseAsync() }
+                            'next'      { [void]$session.TrySkipNextAsync() }
+                            'prev'      { [void]$session.TrySkipPreviousAsync() }
+                        }
+                    }
+                }
+            } catch { }
+            Remove-Item -LiteralPath $cmdPath -Force -ErrorAction SilentlyContinue
+        }
+
         if (-not $session) {
             if ($lastKey -ne 'NONE') {
                 $lastKey = 'NONE'

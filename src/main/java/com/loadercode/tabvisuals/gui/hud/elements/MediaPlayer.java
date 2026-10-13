@@ -106,9 +106,14 @@ public class MediaPlayer extends AbstractDraggable {
      */
     public static void sendCommand(String command) {
         try {
-            Path file = FabricLoader.getInstance().getConfigDir().resolve("tabvisuals").resolve("media_cmd.txt");
-            Files.createDirectories(file.getParent());
-            Files.writeString(file, command + "\n" + System.currentTimeMillis());
+            Path dir = FabricLoader.getInstance().getConfigDir().resolve("tabvisuals");
+            Files.createDirectories(dir);
+            // tmp + rename: скрипт-мост читает файл по таймеру и не должен
+            // увидеть недописанную команду
+            Path tmp = dir.resolve("media_cmd.txt.tmp");
+            Files.writeString(tmp, command + "\n" + System.currentTimeMillis());
+            Files.move(tmp, dir.resolve("media_cmd.txt"),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         } catch (Throwable ignored) {
         }
     }
