@@ -311,15 +311,15 @@ public final class ClickGuiScreen extends Screen {
         UiRender.outline(m, logoBoxX, logoBoxY, TAB, TAB, 5, UiRender.withAlpha(t.outline(), 160), 1f);
         Identifier logo = LogoManager.texture();
         if (logo != null) {
-            // crop to the TV ligature (u230..805, v265..610) — the wordmark turns
-            // to mush at this size, so only the mark is shown here
-            float ih = TAB * 0.6f;
+            // crop to the TV ligature of the keyed logo (1254²: x212..1048, y343..717) —
+            // the wordmark turns to mush at this size, so only the mark is shown here
+            float ih = TAB * 0.447f;
             float iy = logoBoxY + (TAB - ih) / 2f;
             RenderSystem.enableBlend();
             RenderSystem.defaultBlendFunc();
             com.loadercode.tabvisuals.render.geometry.Render2D.drawTexture(m, logo,
                     Math.round(logoBoxX), Math.round(iy), TAB, ih,
-                    230, 265, 575, 345, 1024, 1024, 0xFFFFFFFF);
+                    212, 343, 836, 374, 1254, 1254, 0xFFFFFFFF);
             RenderSystem.disableBlend();
         } else {
             F_TITLE.drawCenteredString(m, "T", logoBoxX + TAB / 2.0,

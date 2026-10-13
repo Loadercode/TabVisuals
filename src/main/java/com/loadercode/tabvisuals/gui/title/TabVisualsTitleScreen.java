@@ -94,6 +94,9 @@ public final class TabVisualsTitleScreen extends Screen {
     private long lineChangedAt;
     /** Per-nav-item hover easing, 0..1. */
     private final float[] navHover = new float[5];
+    /** Frame delta (seconds) for FPS-independent animation smoothing. */
+    private long lastFrameMs;
+    private float frameDt = 1f / 60f;
 
     // --- modal state ---
     private boolean modal;
@@ -139,6 +142,10 @@ public final class TabVisualsTitleScreen extends Screen {
         MatrixStack m = context.getMatrices();
         this.ctx = context;
         long now = System.currentTimeMillis();
+        if (lastFrameMs != 0) {
+            frameDt = Math.min(0.1f, (now - lastFrameMs) / 1000f);
+        }
+        lastFrameMs = now;
 
         // lyric line change drives the fade/slide-in of the new line
         String curLine = mediaOn() && MusicManager.hasLyrics() ? MusicManager.currentLine() : "";
@@ -184,16 +191,18 @@ public final class TabVisualsTitleScreen extends Screen {
         // photo 1: brand logo image when the asset exists, text mark otherwise
         Identifier logo = LogoManager.texture();
         if (logo != null && ctx != null) {
-            float lh = 52f;
-            float lw = logoWidth(lh);
-            float ly = height * 0.315f + (1f - aLogo) * 8f;
-            drawLogo(m, logo, width / 2f - lw / 2f, ly, lh, alpha * aLogo);
+            // full logo (ligature + TabVisuals wordmark), aspect-correct, floating
+            // on the gradient (background keyed transparent) — shown crisp, no slogan
+            float lh = 90f;
+            float lw = lh * FL_ASPECT;
+            float ly = height * 0.335f + (1f - aLogo) * 8f;
+            drawLogoFull(m, logo, width / 2f - lw / 2f, ly, lh, alpha * aLogo);
         } else {
             F_LOGO.drawCenteredString(m, "TabVisuals", width / 2.0, height * 0.415 + (1f - aLogo) * 8f,
                     mulAlpha(TEXT, alpha * aLogo));
+            F_SLOGAN.drawCenteredString(m, spaced("TABVISUALS"), width / 2.0, height * 0.545f + (1f - aSlogan) * 6f,
+                    mulAlpha(TEXT_2, alpha * aSlogan));
         }
-        F_SLOGAN.drawCenteredString(m, spaced("TABVISUALS"), width / 2.0, height * 0.545 + (1f - aSlogan) * 6f,
-                mulAlpha(TEXT_2, alpha * aSlogan));
 
         // lyrics low on the screen: big current line + small next one
         // (hidden until SMTC reports a track — no placeholder text)
@@ -341,13 +350,14 @@ public final class TabVisualsTitleScreen extends Screen {
         float lx = width * 0.0325f, ly = height * 0.038f;
         Identifier logo = LogoManager.texture();
         if (logo != null && ctx != null) {
-            // brand logo image, cropped to the ligature, aspect-correct, aligned with the text
-            float lh = tile;
+            // subtle breathing keeps the mark feeling alive; text optically centred on it
+            float breathe = 1f + 0.012f * (float) Math.sin(System.currentTimeMillis() * 0.0016);
+            float lh = tile * breathe;
             float lw = logoWidth(lh);
             drawLogo(m, logo, lx, ly + (tile - lh) / 2f, lh, alpha);
             String mark0 = spaced("TABVISUALS");
             F_SLOGAN.drawString(m, mark0, lx + lw + width * 0.010f,
-                    ly + (tile - F_SLOGAN.getStringHeight(mark0)) / 2f + 1, mulAlpha(TEXT, alpha));
+                    centerTextY(F_SLOGAN, mark0, ly + tile / 2f), mulAlpha(TEXT, alpha));
             return;
         }
         UiRender.rect(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x1AFFFFFF, alpha));
@@ -392,15 +402,15 @@ public final class TabVisualsTitleScreen extends Screen {
                 ? MusicManager.discordNick() : AccountManager.current();
         // nickname (dim), right of status
         float x = ax - 6;
-        x = rightText(F_TINY, m, nick, x, cy - F_TINY.getStringHeight(nick) / 2f + 1,
+        x = rightText(F_TINY, m, nick, x, centerTextY(F_TINY, nick, cy),
                 mulAlpha(TEXT_2, alpha)) - 8;
 
         // "Protected" — the bright one
-        x = rightText(F_TINY, m, "Protected", x, cy - F_TINY.getStringHeight("Protected") / 2f + 1,
+        x = rightText(F_TINY, m, "Protected", x, centerTextY(F_TINY, "Protected", cy),
                 mulAlpha(TEXT, alpha)) - 8;
 
         // version
-        rightText(F_TINY, m, "v1.0.0", x, cy - F_TINY.getStringHeight("v1.0.0") / 2f + 1,
+        rightText(F_TINY, m, "v1.0.0", x, centerTextY(F_TINY, "v1.0.0", cy),
                 mulAlpha(TEXT_3, alpha));
     }
 
@@ -479,8 +489,9 @@ public final class TabVisualsTitleScreen extends Screen {
             R box = new R(iconX, cy - step / 2f, boxW, step);
             boolean hover = UiRender.inside(mx, my, box.x(), box.y(), box.w(), box.h());
 
-            // eased hover: the glass pill grows in over ~150ms
-            float hv = navHover[i] + ((hover ? 1f : 0f) - navHover[i]) * 0.28f;
+            // eased hover: the glass pill grows in over ~150ms (FPS-independent)
+            float k = (float) (1.0 - Math.exp(-frameDt * 16.0));
+            float hv = navHover[i] + ((hover ? 1f : 0f) - navHover[i]) * k;
             if (hv < 0.004f) hv = 0f;
             navHover[i] = hv;
 
@@ -500,8 +511,7 @@ public final class TabVisualsTitleScreen extends Screen {
 
             int col = mulAlpha(UiRender.mix(NAV_IDLE, NAV_HOVER, hv), itemA);
             drawNavIcon(m, i, iconX + iconSz / 2f, cy + slide, iconSz, col);
-            F_NAV.drawString(m, label, textX,
-                    cy - F_NAV.getStringHeight(label) / 2f + 1 + slide, col);
+            F_NAV.drawString(m, label, textX, centerTextY(F_NAV, label, cy) + slide, col);
             navHits.add(new NavHit(i, box));
             cy += step;
         }
@@ -1010,21 +1020,36 @@ public final class TabVisualsTitleScreen extends Screen {
     }
 
     /** Aspect-correct logo quad with a global fade (vertex-color alpha). */
-    /** TV-ligature crop of logo.png (u,v fractions). The embedded wordmark turns to
-     *  mush at menu sizes, so we crop to the mark and let the TABVISUALS text slogan
-     *  below carry the name in the real font. */
-    private static final float LG_U0 = 0.225f, LG_V0 = 0.259f, LG_U1 = 0.786f, LG_V1 = 0.596f;
+    /** TV-ligature crop of the keyed logo.png (1254², u/v fractions). Used for the
+     *  small top-left mark and GUI rail, where the wordmark would turn to mush. */
+    private static final float LG_U0 = 0.1691f, LG_V0 = 0.2735f, LG_U1 = 0.8357f, LG_V1 = 0.5718f;
     private static final float LG_ASPECT = (LG_U1 - LG_U0) / (LG_V1 - LG_V0);
+
+    /** Full-content crop (ligature + TabVisuals wordmark) for the splash. */
+    private static final float FL_U0 = 0.1005f, FL_V0 = 0.2759f, FL_U1 = 0.9067f, FL_V1 = 0.7671f;
+    private static final float FL_ASPECT = (FL_U1 - FL_U0) / (FL_V1 - FL_V0);
 
     /** Width the logo draws at for a given box height (ligature crop aspect). */
     private static float logoWidth(float h) { return h * LG_ASPECT; }
 
+    /** Ligature-only mark (small top-left badge / GUI rail). */
     private void drawLogo(MatrixStack m, Identifier logo, float x, float y, float h, float alpha) {
         float w = logoWidth(h);
         int col = ((int) (Math.max(0f, Math.min(1f, alpha)) * 255f) << 24) | 0x00FFFFFF;
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
         Render2D.drawTexturedQuad(m, logo, x, x + w, y, y + h, LG_U0, LG_U1, LG_V0, LG_V1, col);
+        RenderSystem.disableBlend();
+    }
+
+    /** Full logo (ligature + wordmark), aspect-correct, for the splash — floats on
+     *  the menu gradient (background keyed to transparent). */
+    private void drawLogoFull(MatrixStack m, Identifier logo, float x, float y, float h, float alpha) {
+        float w = h * FL_ASPECT;
+        int col = ((int) (Math.max(0f, Math.min(1f, alpha)) * 255f) << 24) | 0x00FFFFFF;
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        Render2D.drawTexturedQuad(m, logo, x, x + w, y, y + h, FL_U0, FL_U1, FL_V0, FL_V1, col);
         RenderSystem.disableBlend();
     }
 
@@ -1069,6 +1094,15 @@ public final class TabVisualsTitleScreen extends Screen {
     private static float easeOut(float p) {
         float inv = 1f - p;
         return 1f - inv * inv * inv;
+    }
+
+    /**
+     * Draw-y that visually centres a string of height {@code h} on the line {@code cy}.
+     * The font renders at 0.5 scale with a -3 translate, so a plain {@code cy - h/2}
+     * sits the text too high against a centred icon/avatar; this compensates.
+     */
+    private static float centerTextY(FontRenderer f, java.lang.String s, float cy) {
+        return cy + 3f - f.getStringHeight(s) * 0.25f;
     }
 
     private static int mulAlpha(int argb, float factor) {

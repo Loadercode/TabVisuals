@@ -118,7 +118,9 @@ public final class DiscordBridge {
             String evt = msg.has("evt") && msg.get("evt").isJsonPrimitive() ? msg.get("evt").getAsString() : "";
             if ("READY".equals(evt)) {
                 handleReady(msg);
-                return true;
+                // READY is only the first event — keep the pipe alive and stay in the
+                // read loop so we don't churn reconnects (and re-download the avatar)
+                continue;
             }
             if ("ERROR".equals(evt)) {
                 TabVisualsClient.LOGGER.debug("Discord IPC error: {}", msg);
@@ -129,7 +131,9 @@ public final class DiscordBridge {
 
     private static void handleReady(JsonObject msg) {
         try {
-            JsonObject data = msg.getAsJsonObject("payload").getAsJsonObject("data");
+            // READY is a DISPATCH event: {"cmd":"DISPATCH","data":{...,"user":{...}},"evt":"READY"}
+            JsonObject data = msg.has("payload") ? msg.getAsJsonObject("payload").getAsJsonObject("data")
+                                                 : msg.getAsJsonObject("data");
             JsonObject user = data.getAsJsonObject("user");
             nick = str(user, "username");
             globalName = str(user, "global_name");
