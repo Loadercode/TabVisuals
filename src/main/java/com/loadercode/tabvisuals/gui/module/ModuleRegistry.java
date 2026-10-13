@@ -54,8 +54,8 @@ public final class ModuleRegistry {
                         new BooleanSetting("Magnetic snapping", true),
                         // --- theme system (LoxeDLC Hud) ---
                         new ModeSetting("Тема", 0, "Темная", "Светлая", "Кастомная"),
-                        new ColorSetting("Цвет клиента", 0xFF22D3EE)
-                                .presets(0xFF22D3EE, 0xFF6C9AFD, 0xFF8C7FFF, 0xFFFFA576, 0xFFFF7B7B),
+                        new ColorSetting("Цвет клиента", 0xFF8B5CF6)
+                                .presets(0xFF8B5CF6, 0xFF22D3EE, 0xFF6C9AFD, 0xFFFFA576, 0xFFFF7B7B),
                         new ColorSetting("Текст темы", 0xFFFFFFFF),
                         new ColorSetting("Вторичный текст", 0xFFAFAFAF),
                         new ColorSetting("Фон HUD 1", 0x4B121314),

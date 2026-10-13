@@ -15,15 +15,15 @@ import java.util.List;
 public final class NotificationManager {
 
     /** Slide/pop-in duration before the toast settles. */
-    public static final float ENTER_MS = 180f;
+    public static final float ENTER_MS = 400f;
     /** Full-opacity hold before the exit fade starts. */
     public static final float HOLD_MS = 1400f;
     /** Exit fade + float-away duration. */
     public static final float EXIT_MS = 400f;
-    public static final float TOAST_H = 17f;
-    public static final float TOAST_GAP = 3.5f;
-    /** Offset below the crosshair for the first (topmost) toast. */
-    public static final float START_OFFSET = 18f;
+    public static final float TOAST_H = 15f;
+    public static final float TOAST_GAP = 3f;
+    /** Offset below the crosshair for the first (topmost) toast — LoxeDLC anchor. */
+    public static final float START_OFFSET = 100f;
     /** Extra drag offset from the in-chat HUD editor; 0 = default slot. */
     public static float yOffset = 0f;
 

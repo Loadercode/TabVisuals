@@ -84,7 +84,7 @@ public record Theme(String id, String name,
         CUSTOM.put("background", 0xFF0A1216);
         CUSTOM.put("panel", 0xFF0F1A20);
         CUSTOM.put("card", 0xFF16242C);
-        CUSTOM.put("accent", 0xFF22D3EE);
+        CUSTOM.put("accent", 0xFF8B5CF6);
         CUSTOM.put("text", 0xFFF0F7FA);
     }
 
@@ -213,7 +213,7 @@ public record Theme(String id, String name,
         int bg = CUSTOM.getOrDefault("background", 0xFF0A1216);
         int panel = CUSTOM.getOrDefault("panel", 0xFF0F1A20);
         int card = CUSTOM.getOrDefault("card", 0xFF16242C);
-        int accent = CUSTOM.getOrDefault("accent", 0xFF22D3EE);
+        int accent = CUSTOM.getOrDefault("accent", 0xFF8B5CF6);
         int text = CUSTOM.getOrDefault("text", 0xFFF0F7FA);
         return new Theme("custom", "Custom",
                 bg,

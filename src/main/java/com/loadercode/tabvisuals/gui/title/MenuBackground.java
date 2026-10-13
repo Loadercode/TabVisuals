@@ -19,10 +19,11 @@ import org.joml.Matrix4f;
 
 /**
  * Full-screen animated backdrop rendered by the core shader
- * (assets/minecraft/shaders/core/menubg): a per-pixel smooth diagonal gradient
- * with gaussian teal/blue glows that slowly drift, a vignette and a dither so
- * 8-bit output never bands — the "photo-like" background. Falls back to a plain
- * 4-corner gradient when the shader cannot load.
+ * (assets/minecraft/shaders/core/menubg): a per-pixel smooth dark
+ * navy -> indigo gradient with indigo/violet corner glows that slowly drift,
+ * a vignette and a dither so 8-bit output never bands — the logo-matched
+ * "photo-like" background. Falls back to a plain 4-corner gradient when the
+ * shader cannot load.
  */
 public final class MenuBackground {
 
@@ -79,9 +80,9 @@ public final class MenuBackground {
                 TabVisualsClient.LOGGER.warn("menu background shader failed, using plain gradient", t);
             }
         }
-        UiRender.gradient(m, 0, 0, w, h, 0xFFF8FAFD, 0xFFE9EEF7, 0xFFDDE4F2, 0xFFF1F4FA);
+        UiRender.gradient(m, 0, 0, w, h, 0xFF12153A, 0xFF0C0E2A, 0xFF1A1140, 0xFF0A0B24);
         if (alpha < 1f) {
-            UiRender.rect(m, 0, 0, w, h, 0, UiRender.mulAlpha(0xFFF8FAFD, 1f - alpha));
+            UiRender.rect(m, 0, 0, w, h, 0, UiRender.mulAlpha(0xFF0A0B24, 1f - alpha));
         }
     }
 }

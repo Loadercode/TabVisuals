@@ -90,7 +90,7 @@ public final class HudTheme {
 
     /** Accent («Цвет клиента»). */
     public static int clientColor() {
-        return color("Цвет клиента", 0xFF22D3EE);
+        return color("Цвет клиента", 0xFF8B5CF6);
     }
 
     /** Glass opacity multiplier, 0.2..0.9 (LoxeDLC «Прозрачность стекла»). */

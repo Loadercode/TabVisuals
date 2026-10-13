@@ -20,8 +20,15 @@ public enum Category {
         return displayName;
     }
 
-    /** Single safe letter for the tab icon (no exotic glyphs, always in font coverage). */
+    /** categoryicons glyph, LoxeDLC-faithful: A=swords, D=person, B=arrows, C=image, E=box, H=clipboard. */
     public char icon() {
-        return displayName.charAt(0);
+        return switch (this) {
+            case COMBAT -> 'A';
+            case PLAYER -> 'D';
+            case MOVEMENT -> 'B';
+            case RENDER -> 'C';
+            case MISC -> 'E';
+            case CONFIGS -> 'H';
+        };
     }
 }

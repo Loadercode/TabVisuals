@@ -6,6 +6,7 @@ import com.loadercode.tabvisuals.gui.account.AccountManager;
 import com.loadercode.tabvisuals.gui.module.ModuleRegistry;
 import com.loadercode.tabvisuals.gui.module.ModuleStub;
 import com.loadercode.tabvisuals.gui.music.MusicManager;
+import com.loadercode.tabvisuals.media.DiscordBridge;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
 import com.loadercode.tabvisuals.gui.setting.Setting;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
@@ -37,24 +38,24 @@ import java.util.List;
  */
 public final class TabVisualsTitleScreen extends Screen {
 
-    // --- palette (liquid white: milky surface, slate text, cyan accent) ---
-    private static final int ACCENT = 0xFF22D3EE;
-    private static final int ACCENT_HOVER = 0xFF67E8F9;
-    /** Accent for text/marker on the white surface — deeper for contrast. */
-    private static final int ACCENT_DEEP = 0xFF0891B2;
+    // --- palette (logo-matched: deep navy/indigo surface, violet accent) ---
+    private static final int ACCENT = 0xFF8B5CF6;
+    private static final int ACCENT_HOVER = 0xFFA78BFA;
+    /** Accent for text/marker on the dark surface — bright enough to pop. */
+    private static final int ACCENT_DEEP = 0xFF9D7BFF;
     /** Ink on accent fills (buttons, chips). */
-    private static final int INK = 0xFF052730;
-    /** Primary / secondary / dim text on the white surface. */
-    private static final int TEXT = 0xFF1A2431;
-    private static final int TEXT_2 = 0xFF4A5768;
-    private static final int TEXT_3 = 0xFF8A97A6;
-    private static final int NAV_IDLE = 0xFF5A6877;
-    /** Nav hover end — text darkens toward ink instead of brightening. */
-    private static final int NAV_HOVER = 0xFF101923;
-    /** Dark glass on the white surface. */
-    private static final int GLASS_FILL = 0x14000000;
-    private static final int GLASS_LINE = 0x2A000000;
-    private static final int GLASS_SHEEN = 0x1FFFFFFF;
+    private static final int INK = 0xFFF4F1FF;
+    /** Primary / secondary / dim text on the dark surface. */
+    private static final int TEXT = 0xFFF0F1FA;
+    private static final int TEXT_2 = 0xFFB9BDD6;
+    private static final int TEXT_3 = 0xFF7E84A6;
+    private static final int NAV_IDLE = 0xFF9BA1BE;
+    /** Nav hover end — text brightens to pure white. */
+    private static final int NAV_HOVER = 0xFFFFFFFF;
+    /** Light glass on the dark surface. */
+    private static final int GLASS_FILL = 0x18FFFFFF;
+    private static final int GLASS_LINE = 0x2AFFFFFF;
+    private static final int GLASS_SHEEN = 0x14FFFFFF;
 
     private static final String URL_TELEGRAM = "https://t.me/tabvisuals";
     private static final String URL_GITHUB = "https://github.com/Loadercode/TabVisuals";
@@ -184,9 +185,9 @@ public final class TabVisualsTitleScreen extends Screen {
         Identifier logo = LogoManager.texture();
         if (logo != null && ctx != null) {
             float lh = 52f;
-            float lw = lh * LogoManager.aspect();
+            float lw = logoWidth(lh);
             float ly = height * 0.315f + (1f - aLogo) * 8f;
-            drawLogo(m, logo, width / 2f - lw / 2f, ly, lw, lh, alpha * aLogo);
+            drawLogo(m, logo, width / 2f - lw / 2f, ly, lh, alpha * aLogo);
         } else {
             F_LOGO.drawCenteredString(m, "TabVisuals", width / 2.0, height * 0.415 + (1f - aLogo) * 8f,
                     mulAlpha(TEXT, alpha * aLogo));
@@ -207,7 +208,7 @@ public final class TabVisualsTitleScreen extends Screen {
                     float cy = lineY - cover - 12f;
                     Render2D.drawTexture(ctx, cov, width / 2f - cover / 2f, cy, (int) cover);
                     UiRender.outline(m, width / 2f - cover / 2f, cy, cover, cover, 6f,
-                            mulAlpha(0x40000000, alpha * aLyric), 1f);
+                            mulAlpha(0x40FFFFFF, alpha * aLyric), 1f);
                 }
             }
             if (MusicManager.hasLyrics()) {
@@ -231,7 +232,7 @@ public final class TabVisualsTitleScreen extends Screen {
         renderProfileRow(m, alpha * enter(splashStart, 180, 480));
         renderSocials(m, mx, my, alpha * enter(splashStart, 440, 480));
         F_COPY.drawCenteredString(m, "© 2026 TabVisuals", width / 2.0, height * 0.968,
-                mulAlpha(0x995A6877, alpha * enter(splashStart, 500, 480)));
+                mulAlpha(0x997E84A6, alpha * enter(splashStart, 500, 480)));
 
         m.pop();
     }
@@ -273,7 +274,7 @@ public final class TabVisualsTitleScreen extends Screen {
         renderMenuLyrics(m, enter(menuStart, 240, 460), now);
         renderSocials(m, mx, my, enter(menuStart, 310, 460));
         F_COPY.drawCenteredString(m, "© 2026 TabVisuals", width / 2.0, height * 0.968,
-                mulAlpha(0x995A6877, enter(menuStart, 360, 460)));
+                mulAlpha(0x997E84A6, enter(menuStart, 360, 460)));
 
         m.pop();
     }
@@ -295,8 +296,8 @@ public final class TabVisualsTitleScreen extends Screen {
             if (cover != null && ctx != null) {
                 float sz = Math.max(w, h);
                 Render2D.drawTexture(ctx, cover, (w - sz) / 2f, (h - sz) / 2f, (int) sz);
-                // cover fades in with the menu and stays translucent for the overlay look
-                UiRender.rect(m, 0, 0, w, h, 0, mulAlpha(0xA6FFFFFF, alpha));
+                // cover fades in with the menu, dimmed by the dark readability scrim
+                UiRender.rect(m, 0, 0, w, h, 0, mulAlpha(0xB0060718, alpha));
             }
         }
     }
@@ -340,17 +341,17 @@ public final class TabVisualsTitleScreen extends Screen {
         float lx = width * 0.0325f, ly = height * 0.038f;
         Identifier logo = LogoManager.texture();
         if (logo != null && ctx != null) {
-            // brand logo image, aspect-correct, aligned with the wordmark row
+            // brand logo image, cropped to the ligature, aspect-correct, aligned with the text
             float lh = tile;
-            float lw = lh * LogoManager.aspect();
-            drawLogo(m, logo, lx, ly + (tile - lh) / 2f, lw, lh, alpha);
+            float lw = logoWidth(lh);
+            drawLogo(m, logo, lx, ly + (tile - lh) / 2f, lh, alpha);
             String mark0 = spaced("TABVISUALS");
             F_SLOGAN.drawString(m, mark0, lx + lw + width * 0.010f,
                     ly + (tile - F_SLOGAN.getStringHeight(mark0)) / 2f + 1, mulAlpha(TEXT, alpha));
             return;
         }
-        UiRender.rect(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x1A000000, alpha));
-        UiRender.outline(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x30000000, alpha), 1f);
+        UiRender.rect(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x1AFFFFFF, alpha));
+        UiRender.outline(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x30FFFFFF, alpha), 1f);
         F_MARK.drawCenteredString(m, "T", lx + tile / 2.0,
                 ly + (tile - F_MARK.getStringHeight("T")) / 2f + 1, mulAlpha(TEXT, alpha));
         String mark = spaced("TABVISUALS");
@@ -366,9 +367,9 @@ public final class TabVisualsTitleScreen extends Screen {
         float cy = top + av / 2f;
 
         // avatar: Discord avatar (round, alpha-masked) when IPC is up, else the
-        // account initial on a tinted chip
+        // account initial on a tinted chip — always shown, module-independent
         float ax = right - av;
-        Identifier avatar = mediaOn() ? MusicManager.discordAvatar() : null;
+        Identifier avatar = DiscordBridge.avatar();
         if (avatar != null && ctx != null) {
             // the avatar is pre-masked to a circle (alpha) — no backing rect;
             // drawn via the vertex-color variant so the entry fade applies
@@ -387,7 +388,7 @@ public final class TabVisualsTitleScreen extends Screen {
         }
 
         // nickname: the Discord nick when connected, the account otherwise
-        String nick = mediaOn() && !MusicManager.discordNick().isEmpty()
+        String nick = !MusicManager.discordNick().isEmpty()
                 ? MusicManager.discordNick() : AccountManager.current();
         // nickname (dim), right of status
         float x = ax - 6;
@@ -404,8 +405,8 @@ public final class TabVisualsTitleScreen extends Screen {
     }
 
     /** Bottom-right inline socials row (photo 1/2): badge, platform, handle — clickable. */
-    private static final Identifier TG_ICON = Identifier.of("tabvisuals", "menu/icon_telegram");
-    private static final Identifier GH_ICON = Identifier.of("tabvisuals", "menu/icon_github");
+    private static final Identifier TG_ICON = Identifier.of("tabvisuals", "textures/menu/icon_telegram.png");
+    private static final Identifier GH_ICON = Identifier.of("tabvisuals", "textures/menu/icon_github.png");
 
     private void renderSocials(MatrixStack m, float mx, float my, float alpha) {
         String[] labels = {"Telegram", "GitHub"};
@@ -430,8 +431,8 @@ public final class TabVisualsTitleScreen extends Screen {
             float itemW = badge + 5 + F_TINY.getStringWidth(labels[i]) + 5 + F_TINY.getStringWidth(handles[i]);
             boolean hover = UiRender.inside(mx, my, x, y - 1, itemW, rowH);
 
-            UiRender.rect(m, x, y, badge, badge, 3.5f, mulAlpha(hover ? 0x26000000 : 0x14000000, alpha));
-            // white glyph texture tinted to ink so it reads on the light badge;
+            UiRender.rect(m, x, y, badge, badge, 3.5f, mulAlpha(hover ? 0x2AFFFFFF : 0x18FFFFFF, alpha));
+            // white glyph texture tinted to match the text colors;
             // blend back on — UiRender.rect left the pipeline with blend disabled
             float iconSz = badge - 4;
             RenderSystem.enableBlend();
@@ -566,7 +567,7 @@ public final class TabVisualsTitleScreen extends Screen {
                 float cover = 42f;
                 float cy = height * 0.45f - cover - 12f;
                 Render2D.drawTexture(ctx, cov, rightX - cover, cy, (int) cover);
-                UiRender.outline(m, rightX - cover, cy, cover, cover, 6f, mulAlpha(0x40000000, alpha), 1f);
+                UiRender.outline(m, rightX - cover, cy, cover, cover, 6f, mulAlpha(0x40FFFFFF, alpha), 1f);
             }
         }
 
@@ -594,7 +595,7 @@ public final class TabVisualsTitleScreen extends Screen {
 
     private void renderModal(MatrixStack m, float mx, float my, long now) {
         float ap = enter(modalStart, 0, 260);
-        // dimming scrim: the white panel needs a gray backdrop to read against the light menu
+        // dimming scrim over the dark menu
         UiRender.rect(m, 0, 0, width, height, 0, mulAlpha(0x66000000, ap));
 
         // fit any GUI scale: 500x380 is a max, never larger than the screen
@@ -614,10 +615,10 @@ public final class TabVisualsTitleScreen extends Screen {
         boolean blink = (now / 500) % 2 == 0;
         boolean tall = panelH >= 300;
 
-        // white glass panel with a top hairline
-        UiRender.rect(m, panelX, panelY, panelW, panelH, 14, 0xF5FFFFFF);
-        UiRender.outline(m, panelX, panelY, panelW, panelH, 14, 0x33000000, 1f);
-        UiRender.rect(m, panelX + 1, panelY + 1, panelW - 2, 1, 0.5f, 0x14000000);
+        // dark indigo glass panel with a top hairline
+        UiRender.rect(m, panelX, panelY, panelW, panelH, 14, 0xF212142E);
+        UiRender.outline(m, panelX, panelY, panelW, panelH, 14, 0x33FFFFFF, 1f);
+        UiRender.rect(m, panelX + 1, panelY + 1, panelW - 2, 1, 0.5f, 0x14FFFFFF);
 
         F_MODAL_T.drawString(m, "Аккаунты", panelX + 18, panelY + 13, TEXT);
         if (tall) {
@@ -628,14 +629,14 @@ public final class TabVisualsTitleScreen extends Screen {
         String countLabel = count + (count == 1 ? " профиль" : count < 5 ? " профиля" : " профилей");
         float countW = F_TINY.getStringWidth(countLabel) + 14;
         float countX = panelX + panelW - 34 - 10 - countW;
-        UiRender.rect(m, countX, panelY + 14, countW, 16, 8, 0x14000000);
+        UiRender.rect(m, countX, panelY + 14, countW, 16, 8, 0x18FFFFFF);
         F_TINY.drawString(m, countLabel, countX + 7, panelY + 14 + (16 - F_TINY.getStringHeight(countLabel)) / 2f + 1,
                 TEXT_2);
 
         // close button
         closeHit = new R(panelX + panelW - 34, panelY + 10, 24, 24);
         if (UiRender.inside(mx, my, closeHit.x(), closeHit.y(), closeHit.w(), closeHit.h())) {
-            UiRender.rect(m, closeHit.x(), closeHit.y(), closeHit.w(), closeHit.h(), 6, 0x1A000000);
+            UiRender.rect(m, closeHit.x(), closeHit.y(), closeHit.w(), closeHit.h(), 6, 0x1AFFFFFF);
         }
         F_MODAL_T.drawCenteredString(m, "×", closeHit.x() + 12,
                 closeHit.y() + (24 - F_MODAL_T.getStringHeight("×")) / 2f + 1, TEXT);
@@ -645,9 +646,9 @@ public final class TabVisualsTitleScreen extends Screen {
         float rowH30 = 30;
         float createW = 92;
         inputHit = new R(panelX + 18, inputY, panelW - 36 - 6 - createW, rowH30);
-        UiRender.rect(m, inputHit.x(), inputHit.y(), inputHit.w(), inputHit.h(), 8, 0x0F000000);
+        UiRender.rect(m, inputHit.x(), inputHit.y(), inputHit.w(), inputHit.h(), 8, 0x18000000);
         UiRender.outline(m, inputHit.x(), inputHit.y(), inputHit.w(), inputHit.h(), 8,
-                focus == 1 ? ACCENT_DEEP : 0x2A000000, 1f);
+                focus == 1 ? ACCENT_DEEP : 0x2AFFFFFF, 1f);
         String shown;
         int shownCol;
         if (input.isEmpty() && focus != 1) {
@@ -694,11 +695,11 @@ public final class TabVisualsTitleScreen extends Screen {
             R row = new R(panelX + 18, ry, panelW - 36, rowH);
             boolean rowHover = UiRender.inside(mx, my, row.x(), row.y(), row.w(), row.h());
             boolean isActiveRow = name.equals(AccountManager.current());
-            // light hover + cyan marker on the active profile
+            // light hover + violet marker on the active profile
             UiRender.rect(m, row.x(), row.y(), row.w(), row.h(), 8,
-                    rowHover ? 0x14000000 : 0x0A000000);
+                    rowHover ? 0x14FFFFFF : 0x0AFFFFFF);
             if (isActiveRow) {
-                UiRender.outline(m, row.x(), row.y(), row.w(), row.h(), 8, 0x440891B2, 1f);
+                UiRender.outline(m, row.x(), row.y(), row.w(), row.h(), 8, 0x448B5CF6, 1f);
                 UiRender.rect(m, row.x(), row.y() + 6, 2f, rowH - 12, 1f, ACCENT_DEEP);
             }
 
@@ -711,7 +712,7 @@ public final class TabVisualsTitleScreen extends Screen {
             boolean editing = focus == 2 && editIndex == i;
             if (editing) {
                 float fw = Math.max(70f, login.x() - 16 - row.x());
-                UiRender.rect(m, row.x() + 10, ry + 3, fw, 24, 6, 0x16000000);
+                UiRender.rect(m, row.x() + 10, ry + 3, fw, 24, 6, 0x18FFFFFF);
                 UiRender.outline(m, row.x() + 10, ry + 3, fw, 24, 6, ACCENT_DEEP, 1f);
                 String shownEdit = editText + (blink ? "_" : "");
                 F_ROW.drawString(m, shownEdit, row.x() + 20,
@@ -728,7 +729,7 @@ public final class TabVisualsTitleScreen extends Screen {
                         ry + (rowH - nameH) / 2f + 1, TEXT);
                 if (tag != null) {
                     float tagX = login.x() - 10 - tagW + 4;
-                    UiRender.rect(m, tagX, ry + (rowH - 14) / 2f, tagW, 14, 7, 0x1A0891B2);
+                    UiRender.rect(m, tagX, ry + (rowH - 14) / 2f, tagW, 14, 7, 0x1A8B5CF6);
                     F_TINY.drawString(m, tag, tagX + 6,
                             ry + (rowH - F_TINY.getStringHeight(tag)) / 2f + 1, ACCENT_DEEP);
                 }
@@ -747,7 +748,7 @@ public final class TabVisualsTitleScreen extends Screen {
                 F_BTN.drawCenteredString(m, "OK", edit.x() + edit.w() / 2.0,
                         edit.y() + (edit.h() - F_BTN.getStringHeight("OK")) / 2f + 1, INK);
             } else {
-                UiRender.rect(m, edit.x(), edit.y(), edit.w(), edit.h(), 6, hov ? 0x26000000 : 0x16000000);
+                UiRender.rect(m, edit.x(), edit.y(), edit.w(), edit.h(), 6, hov ? 0x26FFFFFF : 0x16FFFFFF);
                 F_BTN.drawCenteredString(m, "Изм.", edit.x() + edit.w() / 2.0,
                         edit.y() + (edit.h() - F_BTN.getStringHeight("Изм.")) / 2f + 1, TEXT);
             }
@@ -1009,11 +1010,21 @@ public final class TabVisualsTitleScreen extends Screen {
     }
 
     /** Aspect-correct logo quad with a global fade (vertex-color alpha). */
-    private void drawLogo(MatrixStack m, Identifier logo, float x, float y, float w, float h, float alpha) {
+    /** TV-ligature crop of logo.png (u,v fractions). The embedded wordmark turns to
+     *  mush at menu sizes, so we crop to the mark and let the TABVISUALS text slogan
+     *  below carry the name in the real font. */
+    private static final float LG_U0 = 0.225f, LG_V0 = 0.259f, LG_U1 = 0.786f, LG_V1 = 0.596f;
+    private static final float LG_ASPECT = (LG_U1 - LG_U0) / (LG_V1 - LG_V0);
+
+    /** Width the logo draws at for a given box height (ligature crop aspect). */
+    private static float logoWidth(float h) { return h * LG_ASPECT; }
+
+    private void drawLogo(MatrixStack m, Identifier logo, float x, float y, float h, float alpha) {
+        float w = logoWidth(h);
         int col = ((int) (Math.max(0f, Math.min(1f, alpha)) * 255f) << 24) | 0x00FFFFFF;
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
-        Render2D.drawTexturedQuad(m, logo, x, x + w, y, y + h, 0f, 1f, 0f, 1f, col);
+        Render2D.drawTexturedQuad(m, logo, x, x + w, y, y + h, LG_U0, LG_U1, LG_V0, LG_V1, col);
         RenderSystem.disableBlend();
     }
 

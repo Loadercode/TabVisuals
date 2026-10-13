@@ -463,8 +463,8 @@ public final class HudRenderer {
             return;
         }
 
-        FontRenderer f = Fonts.getSize(11, Fonts.Type.REGULAR);
-        FontRenderer fb = Fonts.getSize(11, Fonts.Type.SEMI);
+        FontRenderer f = Fonts.getSize(12, Fonts.Type.REGULAR);
+        FontRenderer fb = Fonts.getSize(12, Fonts.Type.SEMI);
         float textH = f.getStringHeight("Aa");
         boolean boundsBound = false;
         long now = System.nanoTime();
@@ -521,8 +521,8 @@ public final class HudRenderer {
 
     /** Editor-only preview so the toast slot is visible and draggable when the queue is empty. */
     private static void drawToastPreview(MatrixStack m, float screenW, float screenH) {
-        FontRenderer f = Fonts.getSize(11, Fonts.Type.REGULAR);
-        FontRenderer fb = Fonts.getSize(11, Fonts.Type.SEMI);
+        FontRenderer f = Fonts.getSize(12, Fonts.Type.REGULAR);
+        FontRenderer fb = Fonts.getSize(12, Fonts.Type.SEMI);
         String prefix = "Module ", name = "HUD", middle = " was ", status = "enabled";
         float textW = f.getStringWidth(prefix) + fb.getStringWidth(name)
                 + f.getStringWidth(middle) + fb.getStringWidth(status);
