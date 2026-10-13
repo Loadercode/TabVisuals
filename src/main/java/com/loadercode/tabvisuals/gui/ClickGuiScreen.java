@@ -103,6 +103,11 @@ public final class ClickGuiScreen extends Screen {
     /** Theme overlay (gear) state. */
     private boolean settingsView;
     private float settingsAnim;
+    /** Entrance ease of the module-settings popup (0..1). */
+    private float popupAnim = 1f;
+    /** Wall-clock of the last category switch — drives the card grid entrance. */
+    private long catChangeAt;
+    private Category lastCat;
 
     /** Smooth toggle knobs: module/setting id → eased 0..1 state. */
     private final Map<String, Float> toggleAnim = new HashMap<>();
@@ -186,6 +191,10 @@ public final class ClickGuiScreen extends Screen {
             frameDt = Math.min(0.1f, (now - lastFrameMs) / 1000f);
         }
         lastFrameMs = now;
+        if (lastCat != activeCategory) {
+            lastCat = activeCategory;
+            catChangeAt = now;
+        }
         if (closing) {
             if (now - closeStart >= 220L) {
                 if (!exited) {
@@ -426,8 +435,17 @@ public final class ClickGuiScreen extends Screen {
         m.push();
         m.translate(0, -scroll, 0);
         scissor.push(clipMatrix, winX + GRID_X - 4, winY + GRID_TOP, WIN_W - GRID_X - 6, viewportH);
-        for (CardBounds cb : layout) {
+        long gridNow = System.currentTimeMillis();
+        for (int ci = 0; ci < layout.size(); ci++) {
+            CardBounds cb = layout.get(ci);
+            // staggered slide-in on category switch / open: each card trails the last
+            float p = clamp01((gridNow - catChangeAt - ci * 20L) / 220f);
+            float ce = 1f - (1f - p) * (1f - p);
+            float enter = (1f - ce) * 9f;
+            m.push();
+            m.translate(0, enter, 0);
             drawCard(m, cb, scroll);
+            m.pop();
         }
         scissor.pop();
         m.pop();
@@ -466,7 +484,7 @@ public final class ClickGuiScreen extends Screen {
 
     /** LoxeDLC module card: name, wrapped description, separator, glyphs, pill, bind. */
     private float cardHeight(ModuleStub mod) {
-        int lines = Math.max(1, wrapDesc(mod.description(), CARD_W - 25).size());
+        int lines = Math.max(1, wrapDesc(mod.description(), CARD_W - 30).size());
         return 47 + (lines - 1) * 8;
     }
 
@@ -483,22 +501,22 @@ public final class ClickGuiScreen extends Screen {
         UiRender.rect(m, x, y, w, h, 5, fill);
         UiRender.outline(m, x, y, w, h, 5, UiRender.withAlpha(t.outline(), 110), 1f);
 
-        // name: "• Module"
-        String name = "• " + mod.name();
+        // name: bullet in the glyph gutter, text on the description's left
+        // column (x+15) — name and description read as one aligned block
         int nameCol = UiRender.mix(UiRender.withAlpha(t.text(), 170), t.text(), k);
-        F_TITLE.drawString(m, name, x + 11, y + 6, nameCol);
+        F_TITLE.drawString(m, "•", x + 6.5f, y + 6, nameCol);
+        F_TITLE.drawString(m, mod.name(), x + 15, y + 6, nameCol);
 
-        // description: first line tagged with the info glyph
-        List<String> lines = wrapDesc(mod.description(), w - 25);
+        // description: first line tagged with the info glyph, continuations aligned
+        // to the same text column so the block reads straight
+        List<String> lines = wrapDesc(mod.description(), w - 30);
         int descCol = UiRender.withAlpha(t.textSecondary(), 186);
         float dy = y + 19;
         for (int i = 0; i < lines.size(); i++) {
             if (i == 0) {
                 F_ICON_C.drawString(m, "C", x + 6.5f, dy, t.textSecondary());
-                F_BODY.drawString(m, lines.get(i), x + 15, dy, descCol);
-            } else {
-                F_BODY.drawString(m, lines.get(i), x + 7, dy, descCol);
             }
+            F_BODY.drawString(m, lines.get(i), x + 15, dy, descCol);
             dy += 8;
         }
 
@@ -536,9 +554,25 @@ public final class ClickGuiScreen extends Screen {
 
     /** Right-click settings popup (LoxeDLC ModuleSettingsWindow). */
     private void renderPopup(MatrixStack m, Theme t) {
+        // ease the entrance: grow + slide toward the window with a light settle
+        popupAnim += (1f - popupAnim) * (float) (1.0 - Math.exp(-frameDt * 18.0));
+        if (popupAnim > 0.995f) {
+            popupAnim = 1f;
+        }
+        float e = easeOutBack(popupAnim);
+        float slide = (1f - e) * 12f;
+
         popRows.clear();
         List<Setting> settings = popupModule.settings();
         popH = 26 + settings.size() * ROW_H + 10;
+
+        float anchorX = popX;
+        float anchorY = popY + popH / 2f;
+        m.push();
+        m.translate(anchorX + slide, anchorY, 0f);
+        float psc = 0.92f + 0.08f * e;
+        m.scale(psc, psc, 1f);
+        m.translate(-anchorX, -anchorY, 0f);
 
         if (HudRenderer.blurEnabled()) {
             QuickImports.blur.setup();
@@ -562,6 +596,7 @@ public final class ClickGuiScreen extends Screen {
             drawPopupRow(m, t, s, popX, ry);
             ry += ROW_H;
         }
+        m.pop();
     }
 
     private void drawPopupRow(MatrixStack m, Theme t, Setting s, float x, float y) {
@@ -1256,6 +1291,7 @@ public final class ClickGuiScreen extends Screen {
     /** Opens the settings popup for a module, right of the window (clamped). */
     private void openPopup(ModuleStub mod) {
         popupModule = mod;
+        popupAnim = 0f;
         dropdown = null;
         capturing = null;
         popW = 160;
