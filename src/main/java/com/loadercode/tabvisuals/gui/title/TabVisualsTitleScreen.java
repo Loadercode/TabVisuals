@@ -346,7 +346,8 @@ public final class TabVisualsTitleScreen extends Screen {
 
     /** Top-left logo tile + letterspaced wordmark — main menu only (photo 2). */
     private void renderMark(MatrixStack m, float alpha) {
-        float tile = Math.max(18f, width * 0.024f);
+        // compact badge so the mark fits neatly in the top-left chrome
+        float tile = Math.max(15f, width * 0.0165f);
         float lx = width * 0.0325f, ly = height * 0.038f;
         Identifier logo = LogoManager.texture();
         if (logo != null && ctx != null) {
