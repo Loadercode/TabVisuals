@@ -1006,6 +1006,10 @@ public final class ClickGuiScreen extends Screen {
             if (!UiRender.inside(mouseX, mouseY, cb.x, y, cb.w, cb.h)) {
                 continue;
             }
+            // a partially clipped card is only clickable inside the visible band
+            if (mouseY < gridTop || mouseY >= gridTop + viewportH) {
+                continue;
+            }
             ModuleStub mod = cb.module;
 
             if (UiRender.inside(mouseX, mouseY, cb.x + cb.w - 48, y + 12.5f, 6, 6)) {

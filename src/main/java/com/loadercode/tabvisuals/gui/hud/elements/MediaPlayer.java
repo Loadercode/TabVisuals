@@ -29,7 +29,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MediaPlayer extends AbstractDraggable {
-    private final ExecutorService controlExecutor = Executors.newCachedThreadPool();
+    /** Daemon workers: a leaked pool must never keep the JVM alive on exit. */
+    private final ExecutorService controlExecutor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "tabvisuals-media-control");
+        t.setDaemon(true);
+        return t;
+    });
     /** Пустой снапшот до первого опроса (MediaBridge.Snapshot.NONE package-private — не используем). */
     private static final MediaBridge.Snapshot EMPTY = new MediaBridge.Snapshot(false, "", "", "", "", false, 0, 0, false, 0);
     /** Последний опрос моста: позиция уже экстраполирована по wall-clock внутри MediaBridge. */

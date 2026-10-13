@@ -40,6 +40,7 @@ public final class MenuBackground {
      */
     public static void render(MatrixStack m, float w, float h, float alpha, long now) {
         if (!failed) {
+            BufferBuilder buffer = null;
             try {
                 FontRenderer.flushDeferred();
                 RenderSystem.enableBlend();
@@ -49,16 +50,26 @@ public final class MenuBackground {
                 shader.getUniformOrDefault("Time").set((now % 1_000_000L) / 1000f);
                 shader.getUniformOrDefault("Alpha").set(alpha);
 
-                BufferBuilder buffer = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION);
+                buffer = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION);
                 Matrix4f mat = m.peek().getPositionMatrix();
                 buffer.vertex(mat, 0f, 0f, 0f);
                 buffer.vertex(mat, 0f, h, 0f);
                 buffer.vertex(mat, w, h, 0f);
                 buffer.vertex(mat, w, 0f, 0f);
                 BufferRenderer.drawWithGlobalProgram(buffer.end());
+                buffer = null;
                 RenderSystem.disableBlend();
                 return;
             } catch (Throwable t) {
+                // end the begun buffer (left building it breaks every later
+                // Tessellator.begin) and drop blend before falling back
+                if (buffer != null) {
+                    try {
+                        buffer.endNullable();
+                    } catch (Throwable ignored) {
+                    }
+                }
+                RenderSystem.disableBlend();
                 failed = true;
                 TabVisualsClient.LOGGER.warn("menu background shader failed, using plain gradient", t);
             }

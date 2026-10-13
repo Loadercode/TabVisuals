@@ -74,6 +74,20 @@ public class Network implements QuickImports {
         updateTeleportCountdown();
     }
 
+    /** Called on GameJoin: wipe the previous world's values (ClientPlayNetworkMixin). */
+    public void reset() {
+        server = "Vanilla";
+        TPS = 20;
+        timestamp = 0;
+        anarchy = 0;
+        pvpEnd = false;
+        hasPvpCountdown = false;
+        pvpCountdownSeconds = 0;
+        hasTeleportCountdown = false;
+        teleportCountdownSeconds = 0;
+        hasPvpActive = false;
+    }
+
     /** Босбар «PVP режим: Активен» — вечный PVP без таймера. */
     private void updatePvpActive() {
         hasPvpActive = false;
@@ -216,8 +230,8 @@ public class Network implements QuickImports {
     }
 
     public String getWorldType() {
-        assert mc.world != null;
-        return mc.world.getRegistryKey().getValue().getPath();
+        // no assert: this runs on the HUD path where the world may be absent
+        return mc.world == null ? "world" : mc.world.getRegistryKey().getValue().getPath();
     }
 
     public boolean isFunTime() {

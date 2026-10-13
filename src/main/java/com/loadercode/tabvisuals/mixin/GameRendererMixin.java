@@ -3,17 +3,30 @@ package com.loadercode.tabvisuals.mixin;
 
 import com.loadercode.tabvisuals.feature.FreeLook;
 import com.loadercode.tabvisuals.feature.Zoom;
+import com.loadercode.tabvisuals.render.scissor.ScissorAssist;
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import net.minecraft.client.render.GameRenderer;
+import net.minecraft.client.render.RenderTickCounter;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * LoxeDLC GameRendererMixin FovEvent part: the FOV read out of the options is
- * rewritten by {@link Zoom} while it is easing toward the zoomed value.
+ * LoxeDLC GameRendererMixin, two hooks: the FOV read out of the options is
+ * rewritten by {@link Zoom} while it is easing toward the zoomed value, and
+ * the scissor stack is reset at the start of every frame (a swallowed
+ * exception inside a scissored HUD element would otherwise leave the whole
+ * render clipped until restart).
  */
 @Mixin(GameRenderer.class)
 public class GameRendererMixin {
+
+    /** LoxeDLC loxedlc$resetScissor: clean scissor leaks once per frame. */
+    @Inject(method = "render(Lnet/minecraft/client/render/RenderTickCounter;Z)V", at = @At("HEAD"))
+    private void tabvisuals$resetScissor(RenderTickCounter tickCounter, boolean tick, CallbackInfo ci) {
+        ScissorAssist.INSTANCE.endFrame();
+    }
 
     @ModifyExpressionValue(method = "getFov",
             at = @At(value = "INVOKE", target = "Ljava/lang/Integer;intValue()I", remap = false))

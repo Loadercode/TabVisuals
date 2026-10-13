@@ -226,15 +226,17 @@ public final class HudRenderer {
 
     private static void render(DrawContext ctx) {
         MinecraftClient mc = MinecraftClient.getInstance();
+        // sync BEFORE any early return: InGameHudMixin.hide() reads Hud.state
+        // every frame, and a stale state=true with the module off would keep
+        // vanilla cancelled while nothing draws (blank HUD until restart)
+        Hud hud = Hud.getInstance();
+        hud.syncFromSettings();
         if (mc.player == null || mc.options.hudHidden || !hudEnabled()) {
             return;
         }
         MatrixStack m = ctx.getMatrices();
         float w = mc.getWindow().getScaledWidth();
         float h = mc.getWindow().getScaledHeight();
-
-        Hud hud = Hud.getInstance();
-        hud.syncFromSettings();
 
         ColorAssist.flushFrameCache();
         HudTheme.flushFrameCache();
@@ -249,6 +251,7 @@ public final class HudRenderer {
         }
 
         boolean editor = HudEditor.shouldRun(mc);
+        HudEditor.setActive(editor);
         HudEditor.beginFrame();
         if (editor) {
             HudEditor.tick(mc, w, h);

@@ -47,7 +47,12 @@ public class MusicStatus extends IslandStatus implements QuickImports {
     private boolean controlsVisible = false;
     private float controlsAnim = 0f;
 
-    private static final ExecutorService controlExecutor = Executors.newCachedThreadPool();
+    /** Daemon workers: a leaked pool must never keep the JVM alive on exit. */
+    private static final ExecutorService controlExecutor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "tabvisuals-island-media");
+        t.setDaemon(true);
+        return t;
+    });
 
     // Иконки управления (PNG) только для островка
     private static final net.minecraft.util.Identifier ICON_FORWARD =

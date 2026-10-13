@@ -62,7 +62,9 @@ public final class LrcClient {
      */
     public static void request(String title, String artist, long durationMs, Consumer<Lyrics> onReady) {
         String key = (title + "|" + artist).toLowerCase(Locale.ROOT);
-        if (key.equals(cacheKey) && cache != Lyrics.EMPTY) {
+        // cache by key alone: a fetched "no lyrics" result IS Lyrics.EMPTY, and
+        // requiring a different identity made every no-lyrics track refetch forever
+        if (key.equals(cacheKey)) {
             onReady.accept(cache);
             return;
         }

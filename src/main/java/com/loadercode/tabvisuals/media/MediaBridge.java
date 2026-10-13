@@ -39,8 +39,8 @@ public final class MediaBridge {
     private static Thread worker;
     private static long trackCounter;
     /** Wall-clock anchor for extrapolating a playing position between ticks. */
-    private static long basePosMs;
-    private static long baseNano;
+    private static volatile long basePosMs;
+    private static volatile long baseNano;
     private static volatile boolean playing;
 
     private MediaBridge() {
@@ -79,10 +79,14 @@ public final class MediaBridge {
     }
 
     private static void publish(Snapshot s) {
-        snapshot = s;
-        playing = s.playing();
+        // anchor + playing BEFORE the volatile snapshot write: a reader that
+        // sees the new snapshot is guaranteed to see the matching anchor (the
+        // old order let the render thread pair a new baseNano with a stale
+        // basePosMs and jump the position backwards)
         basePosMs = s.posMs();
         baseNano = System.nanoTime();
+        playing = s.playing();
+        snapshot = s;
         for (Consumer<Snapshot> l : LISTENERS) {
             try {
                 l.accept(s);

@@ -54,6 +54,12 @@ public class Blur implements Shape, QuickImports {
         if (hudContext && !useGlass && !hudBlurEnabled) {
             return;
         }
+        // window check BEFORE blend/begin: the old position (after the buffer
+        // was begun) leaked blend state and an unfinished Tessellator buffer
+        var currentWindow = mc.getWindow();
+        if (currentWindow == null) {
+            return;
+        }
 
         float quality = shape.getQuality();
         if (quality <= 0) {
@@ -64,7 +70,7 @@ public class Blur implements Shape, QuickImports {
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
 
-        float scale = (float) mc.getWindow().getScaleFactor();
+        float scale = (float) currentWindow.getScaleFactor();
         float alpha = RenderSystem.getShaderColor()[3];
         Matrix4f matrix4f = shape.getMatrix().peek().getPositionMatrix();
         Vector3f pos = matrix4f.transformPosition(shape.getX(), shape.getY(), 0, posScratch).mul(scale);
@@ -81,10 +87,6 @@ public class Blur implements Shape, QuickImports {
         GlStateManager._activeTexture(GL13.GL_TEXTURE0);
         if (input != null) RenderSystem.bindTexture(input.getColorAttachment());
         ShaderProgram shader = RenderSystem.setShader(useGlass ? GLASS_KEY : BLUR_KEY);
-        var currentWindow = mc.getWindow();
-        if (currentWindow == null) {
-            return;
-        }
         shader(pos, round, softness, thickness, width, height, shader, currentWindow.getHeight());
         shader.getUniformOrDefault("Quality").set(quality);
         shader.getUniformOrDefault("SampleCount").set((float) samples);

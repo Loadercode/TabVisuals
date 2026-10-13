@@ -71,6 +71,7 @@ public final class HudEditor {
     private static String dragging;
     private static String hovered;
     private static String menuFor;
+    private static boolean wasActive;
     private static float grabX, grabY;
     private static float menuX, menuY;
     private static float menuGrabX, menuGrabY;
@@ -95,16 +96,19 @@ public final class HudEditor {
         }
         for (Map.Entry<String, float[]> e : in.entrySet()) {
             String k = e.getKey();
-            // ids from the pre-port editor → LoxeDLC element names
+            // ids from the pre-port editor → current element ids ("staff" stays:
+            // the staff panel is placed directly by HudRenderer, not a draggable)
             if (HOTKEYS.equals(k)) {
                 k = "Hot Keys";
             } else if (POTIONS.equals(k)) {
                 k = "Potions";
-            } else if (STAFF.equals(k)) {
-                k = "Staff list";
             }
             float[] v = e.getValue();
             if (v == null || v.length == 0 || !isElement(k)) {
+                continue;
+            }
+            // cleanup: the old loader remapped "staff" to a key nothing reads
+            if ("Staff list".equals(k)) {
                 continue;
             }
             boolean finite = true;
@@ -183,6 +187,17 @@ public final class HudEditor {
         BOUNDS.clear();
         GUIDES.clear();
         hovered = null;
+    }
+
+    /** Rising edge of the editor opening: remember the real button state so a
+     * click held in the world before chat opened is not treated as a press. */
+    static void setActive(boolean active) {
+        if (active && !wasActive) {
+            long handle = MinecraftClient.getInstance().getWindow().getHandle();
+            lastLeft = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
+            lastRight = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
+        }
+        wasActive = active;
     }
 
     static void tick(MinecraftClient mc, float sw, float sh) {

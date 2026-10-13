@@ -159,10 +159,17 @@ public final class MusicManager {
     /** Decodes the captured cover file once per track, off-thread, registers it on the client thread. */
     private static void syncCover() {
         MediaBridge.Snapshot s = track();
-        if (!s.active() || !s.cover() || s.trackId() == 0 || coverForTrack == s.trackId()) {
+        if (s.trackId() == 0 || coverForTrack == s.trackId()) {
             return;
         }
         coverForTrack = s.trackId();
+        if (!s.active() || !s.cover()) {
+            // a new track without artwork — drop the previous cover instead of
+            // showing the last track's picture
+            coverTex = null;
+            coverSize = 0;
+            return;
+        }
         Thread t = new Thread(() -> {
             // the bridge writes the file right when the session appears — retry a
             // few times and accept JPEG thumbnails too (NativeImage is PNG-only)
