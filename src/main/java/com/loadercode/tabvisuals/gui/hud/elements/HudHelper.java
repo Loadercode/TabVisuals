@@ -75,4 +75,41 @@ public final class HudHelper implements QuickImports {
     public static PlayerEntity self() {
         return mc.player;
     }
+
+    // ------------------------------------------------------------------
+    //  ADDITIVE: wall-clock animation helpers (EPRender, TotemCounterHud).
+    //  Время берётся из System.nanoTime(), поэтому анимации не зависят от FPS.
+    // ------------------------------------------------------------------
+
+    /** Доля прошедшего времени 0..1 от startNs; результат всегда в [0..1]. */
+    public static float hud_anim_progress(long startNs, long nowNs, float durationSeconds) {
+        if (durationSeconds <= 0f) {
+            return 1f;
+        }
+        return hud_anim_clamp01((nowNs - startNs) / 1_000_000_000f / durationSeconds);
+    }
+
+    public static float hud_anim_clamp01(float value) {
+        return value < 0f ? 0f : Math.min(value, 1f);
+    }
+
+    /** ease-out cubic: резкий старт, мягкое завершение без толчка. */
+    public static float hud_anim_cubic_out(float t) {
+        float inv = 1f - hud_anim_clamp01(t);
+        return 1f - inv * inv * inv;
+    }
+
+    /** ease-out back: «пружина» — выходит за 1 и возвращается. overshoot — сила. */
+    public static float hud_anim_back_out(float t, float overshoot) {
+        float x = hud_anim_clamp01(t) - 1f;
+        return 1f + (overshoot + 1f) * x * x * x + overshoot * x * x;
+    }
+
+    /** Экспоненциальное сглаживание к цели: speed — затухание в 1/сек, dt — секунды. */
+    public static float hud_anim_approach(float current, float target, float speed, float dt) {
+        if (!(dt > 0f)) {
+            return current;
+        }
+        return target + (current - target) * (float) Math.exp(-speed * Math.min(dt, 0.1f));
+    }
 }

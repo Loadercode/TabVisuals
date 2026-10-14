@@ -18,12 +18,23 @@ import com.loadercode.tabvisuals.gui.setting.Setting;
  */
 public final class HudTheme {
 
+    /**
+     * Shared HUD rounding — LoxeDLC panel radius (round 4, 0.1 hairline),
+     * used by the panels in HudRenderer and by the editor boxes here.
+     */
+    public static final float PANEL_ROUND = 4f;
+
     // built-in dark/light constants (LoxeDLC ColorAssist)
     private static final int DARK_TEXT = 0xFFFFFFFF;
     private static final int DARK_TEXT2 = 0xAFAFAFFF;
     private static final int DARK_OUTLINE_EL = 0x373746FF;   // (55,55,70,255)
     private static final int LIGHT_TEXT = 0x1E1E1EFF;
     private static final int LIGHT_TEXT2 = 0x646464FF;
+    /** LoxeDLC GUI_DARK_BLUR / light counterpart — full-screen scrim @200. */
+    private static final int DARK_SCRIM = 0xC8000000;
+    private static final int LIGHT_SCRIM = 0xC8FFFFFF;
+    /** LoxeDLC glass element outline — wins over the light/dark one. */
+    private static final int GLASS_OUTLINE_EL = 0xB43C414B;   // (60,65,75,180)
 
     /** Per-frame cache — mirrors LoxeDLC's ensureCache(). */
     private static boolean valid;
@@ -129,7 +140,9 @@ public final class HudTheme {
             cText2 = color("Вторичный текст", DARK_TEXT2);
             cBlur = multAlpha(color("Цвет блюра", 0x00000000 | blurA), opacity);
             cRect = multAlpha(color("Фон HUD 1", 0x12131400 | rectA), opacity);
-            cRectOutline = withAlpha(color("Обводка", DARK_OUTLINE_EL), outA);
+            // LoxeDLC: alpha of the picked colour is multiplied by outA, not
+            // replaced — a translucent custom outline keeps its own weight
+            cRectOutline = multAlpha(color("Обводка", DARK_OUTLINE_EL), outA / 255f);
             int g1 = multAlpha(color("Фон HUD 1", 0x12131400 | rectA), opacity);
             int g2 = multAlpha(color("Фон HUD 2", 0x00020500 | rectA), opacity);
             cGradient = new int[]{g1, g2, g2, g1};
@@ -147,7 +160,8 @@ public final class HudTheme {
                     pack(245, 245, 250, rectA), pack(255, 255, 255, rectA)};
             cRect1 = pack(255, 255, 255, 232);
             cRectDarker1 = pack(240, 240, 240, 255);
-            cOutlineEl = pack(224, 224, 224, 255);
+            // LoxeDLC: glass outline outranks the light one
+            cOutlineEl = glass ? GLASS_OUTLINE_EL : pack(224, 224, 224, 255);
         } else {
             cText = DARK_TEXT;
             cText2 = DARK_TEXT2;
@@ -159,7 +173,7 @@ public final class HudTheme {
                     pack(0, 2, 5, rectA), pack(18, 19, 20, rectA)};
             cRect1 = pack(0, 0, 0, 228);
             cRectDarker1 = pack(0x18, 0x18, 0x1E, 255);
-            cOutlineEl = glass ? pack(60, 65, 75, 180) : DARK_OUTLINE_EL;
+            cOutlineEl = glass ? GLASS_OUTLINE_EL : DARK_OUTLINE_EL;
         }
         valid = true;
     }
@@ -224,6 +238,18 @@ public final class HudTheme {
 
     public static int outline(float alpha) {
         return multAlpha(outline(), alpha);
+    }
+
+    /**
+     * Full-screen overlay scrim (LoxeDLC getClickGuiBlurColor): near-black @200
+     * in the dark theme, white @200 in the light one, «Цвет блюра» in the
+     * custom one. Accent colours are untouched — this is only the backdrop.
+     */
+    public static int scrimColor() {
+        if (isCustom()) {
+            return color("Цвет блюра", DARK_SCRIM);
+        }
+        return isLight() ? LIGHT_SCRIM : DARK_SCRIM;
     }
 
     public static int clientColor(float alpha) {

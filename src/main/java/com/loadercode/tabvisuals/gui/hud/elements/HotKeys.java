@@ -18,8 +18,12 @@ import com.loadercode.tabvisuals.render.math.calc.Calculate;
 import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 public class HotKeys extends AbstractDraggable {
     private final List<ModuleStub> keysList = new ArrayList<>();
@@ -34,8 +38,49 @@ public class HotKeys extends AbstractDraggable {
     private static final Random RANDOM = new Random();
     private static final List<java.lang.String> PREVIEW_KEYS = List.of("A", "B", "C", "D", "E");
 
+    private static final long ROW_STAGGER_MS = 45L;
+    private static final long ROW_ENTER_MS = 320L;
+    private static final long ROW_HIGHLIGHT_MS = 650L;
+    /** Появление строки по имени модуля — вход и подсветка считаются от него. */
+    private final Map<java.lang.String, RowAnim> row_anims = new HashMap<>();
+
+    private static final class RowAnim {
+        long appear_nanos;
+        float last_enter;
+    }
+
     public HotKeys() {
         super("Hot Keys", 300, 40, 80, 23, true);
+    }
+
+    private static float clamp01(float v) {
+        return v < 0f ? 0f : Math.min(1f, v);
+    }
+
+    private static float smoothstep(float t) {
+        t = clamp01(t);
+        return t * t * (3f - 2f * t);
+    }
+
+    /** Временной прогресс входа строки: elapsed_ms уже включает задержку стаггера.
+     *  Считается от nanoTime, поэтому не зависит от FPS. Прогресс монотонный:
+     *  при сдвиге индекса (новый бинд сверху) строка не «схлопывается» обратно.
+     */
+    private static float row_enter(RowAnim state, int index, long now_nanos) {
+        float elapsed = (now_nanos - state.appear_nanos) / 1_000_000f - index * ROW_STAGGER_MS;
+        float progress = smoothstep(elapsed / ROW_ENTER_MS);
+        if (progress < state.last_enter) {
+            progress = state.last_enter;
+        } else {
+            state.last_enter = progress;
+        }
+        return progress;
+    }
+
+    /** Пульс подсветки строки при срабатывании бинда: 1 → 0 за ROW_HIGHLIGHT_MS. */
+    private static float row_highlight(long appear_nanos, long now_nanos) {
+        float elapsed = (now_nanos - appear_nanos) / 1_000_000f;
+        return 1f - smoothstep(elapsed / ROW_HIGHLIGHT_MS);
     }
 
     /** Category tab glyph in the ICONSCATEGORY atlas (stable letters only). */
@@ -135,49 +180,99 @@ public class HotKeys extends AbstractDraggable {
         int offset = 23;
         int maxWidth = 80;
 
+        long now = System.nanoTime();
+        Set<java.lang.String> live_rows = new HashSet<>();
+
         if (keysList.isEmpty() && HudHelper.isChat(mc.currentScreen)) {
             float centerY = getY() + offset;
             java.lang.String name = "Example Module";
             java.lang.String bind = "[" + currentRandomKey + "]";
             java.lang.String iconChar = "A";
+            RowAnim state = row_anims.computeIfAbsent("__preview__", k -> {
+                RowAnim a = new RowAnim();
+                a.appear_nanos = now;
+                return a;
+            });
+            live_rows.add("__preview__");
+            float enter = row_enter(state, 0, now);
+            float highlight = row_highlight(state.appear_nanos, now);
             int textColor = ColorAssist.getText();
+            int bindColor = ColorAssist.lerp(highlight, textColor, ColorAssist.getClientColor());
             int textAlpha = 255;
             int colorWithAlpha = ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
             float bindWidth = fontModule.getStringWidth(bind);
-            Calculate.scale(matrix, centerX, centerY, 1, 1, () -> {
+            matrix.push();
+            // Скольжение строки из-под шапки: 8px слева при enter=0
+            matrix.translate((enter - 1f) * 8f, 0f, 0f);
+            Calculate.scale(matrix, centerX, centerY, 1, enter, () -> {
+                draw_row_highlight(matrix, centerY, highlight);
                 categoryIcon.drawString(matrix, iconChar, getX() + 4.5f, centerY + 1.5f, textColor);
                 rectangle.render(ShapeProperties.create(matrix, getX() + 15F, centerY - 1, 0.5F, 7).color(ColorAssist.getOutline(1, 0.5F)).build());
                 fontModule.drawString(matrix, name, getX() + 19, centerY + 1, colorWithAlpha);
-                fontModule.drawString(matrix, bind, getX() + getWidth() - bindWidth - 8, centerY + 1, textColor);
+                fontModule.drawString(matrix, bind, getX() + getWidth() - bindWidth - 8, centerY + 1, bindColor);
             });
+            matrix.pop();
             int width = (int) fontModule.getStringWidth(name + bind) + 25;
             maxWidth = Math.max(width, maxWidth);
             offset += 11;
         } else {
+            int row_index = 0;
             for (ModuleStub module : keysList) {
                 java.lang.String keyName = module.bind() > 0
                         ? StringHelper.getBindName(module.bind()) : holdKey(module);
                 java.lang.String bind = "[" + keyName + "]";
                 float centerY = getY() + offset;
-                float animation = 1.0f;
+                RowAnim state = row_anims.computeIfAbsent(module.name(), k -> {
+                    RowAnim a = new RowAnim();
+                    a.appear_nanos = now;
+                    return a;
+                });
+                live_rows.add(module.name());
+                float enter = row_enter(state, row_index, now);
+                float highlight = row_highlight(state.appear_nanos, now);
+                row_index++;
                 java.lang.String iconChar = categoryGlyph(module.category());
                 int textColor = ColorAssist.getText();
+                int bindColor = ColorAssist.lerp(highlight, textColor, ColorAssist.getClientColor());
                 int textAlpha = 255;
                 int colorWithAlpha = ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
                 float bindWidth = fontModule.getStringWidth(bind);
-                Calculate.scale(matrix, centerX, centerY, 1, animation, () -> {
+                matrix.push();
+                // Скольжение строки из-под шапки: 8px слева при enter=0
+                matrix.translate((enter - 1f) * 8f, 0f, 0f);
+                Calculate.scale(matrix, centerX, centerY, 1, enter, () -> {
+                    draw_row_highlight(matrix, centerY, highlight);
                     categoryIcon.drawString(matrix, iconChar, getX() + 4.5f, centerY + 1.5f, textColor);
                     rectangle.render(ShapeProperties.create(matrix, getX() + 15F, centerY - 1, 0.5F, 7).color(ColorAssist.getOutline(1, 0.5F)).build());
                     fontModule.drawString(matrix, module.name(), getX() + 19, centerY + 1, colorWithAlpha);
-                    fontModule.drawString(matrix, bind, getX() + getWidth() - bindWidth - 8, centerY + 1, textColor);
+                    fontModule.drawString(matrix, bind, getX() + getWidth() - bindWidth - 8, centerY + 1, bindColor);
                 });
+                matrix.pop();
                 float width = fontModule.getStringWidth(module.name() + bind) + 25;
                 maxWidth = (int) Math.max(width, maxWidth);
-                offset += (int) (animation * 11);
+                offset += 11;
             }
         }
+        row_anims.keySet().retainAll(live_rows);
         setWidth(maxWidth + 10);
         setHeight(offset);
+    }
+
+    /** Акцентная подложка строки при срабатывании бинда: плавный всплеск alpha. */
+    private void draw_row_highlight(MatrixStack matrix, float centerY, float highlight) {
+        if (highlight <= 0.01f) {
+            return;
+        }
+        int accent = ColorAssist.getClientColor();
+        rectangle.render(ShapeProperties.create(matrix, getX() + 2f, centerY - 4.5f, getWidth() - 4f, 10f)
+                .round(3f)
+                .color(ColorAssist.multAlpha(accent, 0.16f * highlight))
+                .build());
+        // Тонкая слева-акцентная черта, ярче основной подложки
+        rectangle.render(ShapeProperties.create(matrix, getX() + 2f, centerY - 3.5f, 1.25f, 8f)
+                .round(0.6f)
+                .color(ColorAssist.multAlpha(accent, 0.85f * highlight))
+                .build());
     }
 
     /** Hold-key label (Zoom/FreeLook KeySetting) shown when the toggle bind is empty. */

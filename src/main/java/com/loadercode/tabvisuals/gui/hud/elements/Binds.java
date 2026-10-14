@@ -56,6 +56,13 @@ public class Binds extends AbstractDraggable {
     private int currentItemIndex3 = 2;
     private static final Item[] EXAMPLE_ITEMS = {Items.ENDER_EYE, Items.SUGAR, Items.DRIED_KELP, Items.NETHERITE_SCRAP};
     private final Animation animation = new Decelerate().setMs(300).setValue(1);
+    /** Акцентная вспышка пилюли: предмет → время срабатывания бинда. */
+    private final Map<Item, Long> pulse_ms = new HashMap<>();
+    /** Время первого появления пилюли — стартовая задержка по ряду. */
+    private final Map<Item, Long> pill_born_ms = new HashMap<>();
+    private final Map<Item, Integer> prev_item_counts = new HashMap<>();
+    private final Set<Item> active_pill_items = new HashSet<>();
+    private long preview_born_ms;
     private FontRenderer font13;
     private FontRenderer font11;
     private FontRenderer font10;
@@ -244,11 +251,23 @@ public class Binds extends AbstractDraggable {
             if (mc.player.getItemCooldownManager().isCoolingDown(itemStack)) {
                 if (!cooldownStartTimes.containsKey(item)) {
                     cooldownStartTimes.put(item, currentTime);
+                    // бинд «сработал»: предмет использован, кулдаун пошёл
+                    pulse_ms.put(item, currentTime);
                 }
                 activeCooldowns.add(item);
             }
         }
         cooldownStartTimes.keySet().removeIf(item -> !activeCooldowns.contains(item));
+        // бинд «сработал»: количество предмета в инвентаре уменьшилось
+        for (Map.Entry<Item, Integer> e : itemCounts.entrySet()) {
+            Integer prev = prev_item_counts.get(e.getKey());
+            if (prev != null && e.getValue() < prev) {
+                pulse_ms.put(e.getKey(), currentTime);
+            }
+        }
+        prev_item_counts.clear();
+        prev_item_counts.putAll(itemCounts);
+        pulse_ms.entrySet().removeIf(e -> currentTime - e.getValue() > 500L);
         if (activeBindsCache.isEmpty() && HudHelper.isChat(mc.currentScreen)) {
             if (currentTime - lastBindChange >= 1000) {
                 currentRandomKey1 = PREVIEW_KEYS.get(RANDOM.nextInt(PREVIEW_KEYS.size()));
@@ -271,6 +290,7 @@ public class Binds extends AbstractDraggable {
         if (!Hud.getInstance().interfaceSettings.isSelected("Binds") || !Hud.getInstance().state || animation.isFinished(Direction.BACKWARDS))
             return;
         MatrixStack matrix = context.getMatrices();
+        final long now = System.currentTimeMillis();
         float animationValue = animation.getOutput().floatValue();
         if (animationValue <= 0) return;
         List<BindInfo> activeBinds = activeBindsCache;
@@ -328,8 +348,12 @@ public class Binds extends AbstractDraggable {
             java.lang.String name = "Example Bind";
             java.lang.String[] keys = {currentRandomKey1, currentRandomKey2, currentRandomKey3};
             ItemStack[] stacks = {new ItemStack(EXAMPLE_ITEMS[currentItemIndex1]), new ItemStack(EXAMPLE_ITEMS[currentItemIndex2]), new ItemStack(EXAMPLE_ITEMS[currentItemIndex3])};
+            if (preview_born_ms == 0) preview_born_ms = now;
             float offsetX = padding;
             for (int i = 0; i < 3; i++) {
+                final float enter = ease_out_cubic(clamp01((now - preview_born_ms - i * 45L) / 200f));
+                matrix.push();
+                matrix.translate(0f, (1f - enter) * 6f, 0f);
                 float textWidth = font11.getStringWidth(keys[i]) + 1.5f;
                 float backgroundWidth = iconSize + padding + textWidth + padding + 4;
 
@@ -358,10 +382,18 @@ public class Binds extends AbstractDraggable {
                 font11.drawString(matrix, keys[i], textX + 1f, textY + 3f, ColorAssist.getText(textAlpha / 255f));
 
                 font10.drawString(matrix, "64", posX + offsetX + 7, posY + rowHeight - 12, ColorAssist.getText(textAlpha / 255f));
+                matrix.pop();
 
                 offsetX += backgroundWidth + spacing;
             }
         } else {
+            preview_born_ms = 0;
+            // пилюли, показываемые прямо сейчас: время их первого появления не сбрасывается
+            active_pill_items.clear();
+            for (BindInfo active : activeBinds) {
+                active_pill_items.add(active.keyBind.item());
+            }
+            pill_born_ms.keySet().retainAll(active_pill_items);
             for (int row = 0; row < rowCount; row++) {
                 float rowWidth = rowWidths.get(row);
                 float offsetX = row == 0 ? padding : padding + (firstRowWidth - rowWidth) / 2;
@@ -385,6 +417,22 @@ public class Binds extends AbstractDraggable {
                     float totalHeight = rowHeight - 6;
                     float cooldownHeight = totalHeight * cooldownProgress;
                     float cooldownStartY = currentY + totalHeight - cooldownHeight;
+
+                    // стартовая задержка по позиции пилюли + вспышка «бинд сработал»
+                    final long bornAt = pill_born_ms.computeIfAbsent(bind.keyBind.item(), k -> now);
+                    final float enter = ease_out_cubic(clamp01((now - bornAt - Math.min(bindIndex, 5) * 40L) / 200f));
+                    final float pulse = pulse_env(now - pulse_ms.getOrDefault(bind.keyBind.item(), 0L), 450L);
+
+                    matrix.push();
+                    matrix.translate(0f, (1f - enter) * 6f, 0f);
+                    if (pulse > 0.01f) {
+                        // акцентное свечение вокруг пилюли на время пульса
+                        rectangle.render(ShapeProperties.create(matrix, posX + offsetX - 2.5f, currentY - 1.5f,
+                                        backgroundWidth + 3f, rowHeight - 3f)
+                                .round(4f)
+                                .color(ColorAssist.getClientColor(0.9f * pulse))
+                                .build());
+                    }
 
                     blur.render(ShapeProperties.create(matrix, posX + offsetX - 1, currentY, backgroundWidth, rowHeight - 6)
                             .round(3).quality(com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality())
@@ -428,6 +476,14 @@ public class Binds extends AbstractDraggable {
                                 .build());
                     }
 
+                    // подсветка слота иконки акцентом поверх фона, но под предметом
+                    if (pulse > 0.01f) {
+                        rectangle.render(ShapeProperties.create(matrix, posX + offsetX - 1, currentY, 16, rowHeight - 6)
+                                .round(0, 0, 3, 3)
+                                .color(ColorAssist.getClientColor(0.45f * pulse))
+                                .build());
+                    }
+
                     renderItemStack(context, stack, posX + offsetX + 2, currentY + padding + 0.5f);
 
                     float textX = posX + offsetX + iconSize + padding;
@@ -436,6 +492,7 @@ public class Binds extends AbstractDraggable {
                     font13.drawString(matrix, keyName, textX + 1f, textY + 3f, ColorAssist.getText(textAlpha / 255f));
 
                     font10.drawString(matrix, String.valueOf(itemCount), posX + offsetX + 7, currentY + rowHeight - 12, ColorAssist.getText(textAlpha / 255f));
+                    matrix.pop();
 
                     offsetX += backgroundWidth + spacing;
                 }
@@ -445,5 +502,20 @@ public class Binds extends AbstractDraggable {
         // hitbox иначе расходился с нарисованным контентом, и элемент было не схватить.
         setWidth((int) width);
         setHeight((int) height);
+    }
+
+    private static float clamp01(float value) {
+        return value < 0f ? 0f : Math.min(1f, value);
+    }
+
+    private static float ease_out_cubic(float t) {
+        float u = 1f - t;
+        return 1f - u * u * u;
+    }
+
+    /** Огибающая пульса: синус на отрезке [0, duration), иначе 0. */
+    private static float pulse_env(long elapsedMs, long durationMs) {
+        if (elapsedMs < 0 || elapsedMs >= durationMs) return 0f;
+        return (float) Math.sin(Math.PI * (elapsedMs / (double) durationMs));
     }
 }

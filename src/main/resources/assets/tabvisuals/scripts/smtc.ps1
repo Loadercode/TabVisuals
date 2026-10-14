@@ -1,6 +1,7 @@
 # TabVisuals SMTC bridge: prints one JSON object per line to stdout.
 # state=none  -> no media session
 # state=track -> new/changed track (full metadata)
+# state=cover -> artwork for the current track appeared after its track event
 # state=tick  -> position/status update for the current track
 # state=error -> transient failure
 $ErrorActionPreference = 'SilentlyContinue'
@@ -22,9 +23,37 @@ function AwaitOp($op, [type]$resultType) {
     } catch { return $null }
 }
 
+# Writes the media properties thumbnail to $coverPath, returns 'true'/'false'.
+# No member of the WinRT stream RCW is reachable from PowerShell (Size reads as
+# $null, Close throws), so the stream converts via reflection and emptiness is
+# checked on the copied file instead.
+function Save-Cover($p) {
+    if (-not $p -or -not $p.Thumbnail) { return 'false' }
+    $stream = AwaitOp $p.Thumbnail.OpenReadAsync() $streamType
+    if (-not $stream) { return 'false' }
+    $tmp = $coverPath + '.tmp'
+    try {
+        $net = $streamAsNetMethod.Invoke($null, @(, $stream))
+        $fs = [System.IO.File]::Create($tmp)
+        try { $net.CopyTo($fs) } finally { $fs.Close(); $net.Close() }
+        if ((Get-Item -LiteralPath $tmp).Length -gt 0) {
+            Move-Item -Force $tmp $coverPath
+            return 'true'
+        }
+    } catch { }
+    Remove-Item -Force -LiteralPath $tmp -ErrorAction SilentlyContinue
+    return 'false'
+}
+
 $mgrType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media.Control,ContentType=WindowsRuntime]
 $propsType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties,Windows.Media.Control,ContentType=WindowsRuntime]
-$streamType = [Windows.Storage.IRandomAccessStreamWithContentType,Windows.Storage,ContentType=WindowsRuntime]
+$streamType = [Windows.Storage.Streams.IRandomAccessStreamWithContentType,Windows.Storage.Streams,ContentType=WindowsRuntime]
+# AsStreamForRead is called through reflection: PowerShell cannot convert the
+# WinRT stream RCW to the IInputStream parameter itself (no visible members),
+# while the CLR binds it with a plain interface cast (QueryInterface)
+$streamAsNetMethod = [System.IO.WindowsRuntimeStreamExtensions].GetMethods() |
+    Where-Object { $_.Name -eq 'AsStreamForRead' -and $_.GetParameters().Count -eq 1 } |
+    Select-Object -First 1
 
 $coverPath = Join-Path $env:TEMP 'tabvisuals_cover.jpg'
 $cmdPath = Join-Path $PSScriptRoot 'media_cmd.txt'
@@ -32,6 +61,8 @@ $lastCmdStamp = [int64]-1
 $lastKey = ''
 $lastPosSent = [int64]-1
 $status = ''
+$coverPending = 'false'
+$coverAttempts = 0
 
 while ($true) {
     try {
@@ -64,6 +95,8 @@ while ($true) {
         if (-not $session) {
             if ($lastKey -ne 'NONE') {
                 $lastKey = 'NONE'
+                $coverPending = 'false'
+                $coverAttempts = 0
                 Remove-Item -Force $coverPath -ErrorAction SilentlyContinue
                 '{"state":"none"}'
                 [Console]::Out.Flush()
@@ -88,22 +121,15 @@ while ($true) {
 
         if ($key -ne $lastKey) {
             $lastKey = $key
-            $ok = 'false'
-            try {
-                if ($props.Thumbnail) {
-                    $stream = AwaitOp $props.Thumbnail.OpenReadAsync() $streamType
-                    if ($stream -and $stream.Size -gt 0) {
-                        $net = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($stream)
-                        $tmp = $coverPath + '.tmp'
-                        $fs = [System.IO.File]::Create($tmp)
-                        $net.CopyTo($fs)
-                        $fs.Flush(); $fs.Close(); $net.Close(); $stream.Close()
-                        Move-Item -Force $tmp $coverPath
-                        $ok = 'true'
-                    }
-                }
-            } catch { Remove-Item -Force ($coverPath + '.tmp') -ErrorAction SilentlyContinue }
-            if ($ok -ne 'true') { Remove-Item -Force $coverPath -ErrorAction SilentlyContinue }
+            $coverAttempts = 0
+            $coverPending = 'false'
+            $ok = Save-Cover $props
+            if ($ok -ne 'true') {
+                Remove-Item -Force $coverPath -ErrorAction SilentlyContinue
+                # some apps publish the thumbnail a moment after the metadata —
+                # keep retrying on ticks and announce late art with a cover event
+                $coverPending = 'true'
+            }
 
             $o = [ordered]@{
                 state = 'track'
@@ -116,6 +142,14 @@ while ($true) {
             $lastPosSent = $posMs
             $status = $st
         } else {
+            if ($coverPending -eq 'true' -and $coverAttempts -lt 10) {
+                $coverAttempts++
+                if ((Save-Cover $props) -eq 'true') {
+                    $coverPending = 'false'
+                    '{"state":"cover"}'
+                    [Console]::Out.Flush()
+                }
+            }
             if ([Math]::Abs($posMs - $lastPosSent) -ge 400 -or $st -ne $status) {
                 $status = $st
                 $lastPosSent = $posMs

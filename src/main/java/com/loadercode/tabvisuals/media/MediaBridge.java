@@ -168,6 +168,14 @@ public final class MediaBridge {
                 publish(new Snapshot(true, s.app(), s.title(), s.artist(), s.album(), playingNow,
                         num(o, "posMs"), num(o, "endMs"), s.cover(), s.trackId()));
             }
+            case "cover" -> {
+                // artwork arrived after the track event — same track, flip the flag
+                Snapshot s = current();
+                if (s.active() && !s.cover()) {
+                    publish(new Snapshot(true, s.app(), s.title(), s.artist(), s.album(), s.playing(),
+                            s.posMs(), s.endMs(), true, s.trackId()));
+                }
+            }
             default -> { /* error / unknown: keep last snapshot */ }
         }
     }

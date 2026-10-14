@@ -6,12 +6,19 @@ import com.loadercode.tabvisuals.gui.config.ConfigManager;
 import com.loadercode.tabvisuals.gui.hud.draggable.AbstractDraggable;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
+import com.loadercode.tabvisuals.render.interfaces.QuickImports;
+import com.loadercode.tabvisuals.render.shape.ShapeProperties;
+import com.loadercode.tabvisuals.render.shape.implement.Blur;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.ChatScreen;
 import net.minecraft.client.util.math.MatrixStack;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +30,16 @@ import java.util.Map;
  * right-click menu ("Сбросить позицию" / "Закрыть"). Active only while the
  * chat screen is open and the HUD module's "Interactive editor" is on.
  *
+ * <p>The overlay itself follows the LoxeDLC look: a translucent dark scrim
+ * (fade + blur ramp), a subtle grid, a rounded outline box with a name label
+ * over every element, hover highlight and a lift/scale pop when a box is
+ * grabbed. All of that motion is FPS-independent exponential easing
+ * ({@code 1 - exp(-dt * k)}, see {@link #ease_exp}) written for this file.
+ *
+ * <p>Opening is drawn from {@link #overlay} (called by HudRenderer only while
+ * chat is open); the closing tail is drawn from a private HUD callback,
+ * because HudRenderer stops calling the editor the instant chat closes.
+ *
  * <p>Mouse buttons are polled with GLFW (as the reference does), so no screen
  * mixin is needed and the chat field keeps its own clicks. Positions live in
  * {@link #POS} and are persisted through {@link ConfigManager}.
@@ -31,8 +48,6 @@ public final class HudEditor {
 
     public static final String HOTKEYS = "hotkeys";
     public static final String POTIONS = "potions";
-    /** Legacy static staff panel id → the Staff List draggable name. */
-    public static final String STAFF = "staff";
     /** Toast stack: Y offset only, X stays locked to the crosshair column. */
     public static final String TOASTS = "toasts";
 
@@ -51,6 +66,19 @@ public final class HudEditor {
     private static final int MENU_TITLE = 0xFFF0F2F8;
     private static final int ROW_HOVER = 0x14FFFFFF;
 
+    // easing speeds (k in 1 - exp(-dt*k)); larger = snappier
+    private static final float K_OPEN = 14f;    // ~95% за 0.21 с
+    private static final float K_CLOSE = 20f;   // закрытие чуть резче открытия
+    private static final float K_HOVER = 18f;   // подсветка бокса
+    private static final float K_GUIDE = 16f;   // проявление направляющих
+    private static final float K_MENU = 22f;    // всплывающее меню
+    /** Шаг сетки в scaled-пикселях. */
+    private static final float GRID = 16f;
+    /** Ниже этой альфы скрим/сетка не рисуются вообще (не видно — не тратим draw). */
+    private static final float MIN_VISIBLE = 0.05f;
+    private static final float LABEL_H = 13f;
+    private static final float BADGE_H = 14f;
+
     private static final FontRenderer F_BADGE = Fonts.getSize(10, Fonts.Type.SEMI);
     private static final FontRenderer F_MENU = Fonts.getSize(11, Fonts.Type.REGULAR);
     private static final FontRenderer F_MENU_SEMI = Fonts.getSize(11, Fonts.Type.SEMI);
@@ -63,6 +91,8 @@ public final class HudEditor {
     private static final Map<String, float[]> BOUNDS = new LinkedHashMap<>();
     /** Bounds of the previous frame — hit-testing runs before the render pass. */
     private static final Map<String, float[]> LAST = new LinkedHashMap<>();
+    /** Per-element hover highlight 0..1 (exponential ease, see ease_exp). */
+    private static final Map<String, float[]> HOVER = new HashMap<>();
 
     private record Guide(boolean vertical, float pos) {
     }
@@ -72,6 +102,8 @@ public final class HudEditor {
     private static String dragging;
     private static String hovered;
     private static String menuFor;
+    /** Title of the open menu — kept so the label survives the closing fade. */
+    private static String menuLabel;
     private static boolean wasActive;
     private static float grabX, grabY;
     private static float menuX, menuY;
@@ -79,6 +111,17 @@ public final class HudEditor {
     private static boolean menuDrag;
     private static boolean lastLeft, lastRight;
     private static float mouseX, mouseY;
+
+    /** Общий прогресс оверлея 0..1 (fade + scale + blur ramp). */
+    private static float open;
+    /** Проявленность направляющих 0..1. */
+    private static float guideAlpha;
+    /** Проявленность меню 0..1. */
+    private static float menuAlpha;
+    /** Наносекунды предыдущего кадра редактора — источник dt. */
+    private static long frameNano;
+    private static boolean tailRequested;
+    private static boolean tailInstalled;
 
     private HudEditor() {
     }
@@ -102,16 +145,9 @@ public final class HudEditor {
                 k = "Hot Keys";
             } else if (POTIONS.equals(k)) {
                 k = "Potions";
-            } else if (STAFF.equals(k)) {
-                // the staff panel became the Staff List draggable — keep the position
-                k = "Staff List";
             }
             float[] v = e.getValue();
             if (v == null || v.length == 0 || !isElement(k)) {
-                continue;
-            }
-            // cleanup: the old loader remapped "staff" to a key nothing reads
-            if ("Staff list".equals(k)) {
                 continue;
             }
             boolean finite = true;
@@ -195,12 +231,60 @@ public final class HudEditor {
     /** Rising edge of the editor opening: remember the real button state so a
      * click held in the world before chat opened is not treated as a press. */
     static void setActive(boolean active) {
+        request_tail_hook();
         if (active && !wasActive) {
             long handle = MinecraftClient.getInstance().getWindow().getHandle();
             lastLeft = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
             lastRight = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
         }
         wasActive = active;
+    }
+
+    /**
+     * Хвост закрытия рисуется собственным HUD-колбэком. Ставим его из тика,
+     * а не сразу: setActive() вызывается прямо во время диспатча HUD-события,
+     * и менять список слушателей внутри его же итерации небезопасно. Первый
+     * тик гарантированно наступает раньше первого чата, так что колбэк всегда
+     * успевает зарегистрироваться — и всегда ПОСЛЕ колбэка HudRenderer,
+     * поэтому наш слой ложится поверх элементов.
+     */
+    private static void request_tail_hook() {
+        if (tailRequested) {
+            return;
+        }
+        tailRequested = true;
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (tailInstalled) {
+                return;
+            }
+            tailInstalled = true;
+            HudRenderCallback.EVENT.register((ctx, tick) -> on_hud_render(ctx));
+        });
+    }
+
+    /**
+     * Closing tail: HudRenderer stops calling {@link #overlay} the moment the
+     * chat screen goes away, so the fade-out lives here. Skipped while the
+     * editor is active (that frame already drew through overlay()).
+     */
+    private static void on_hud_render(DrawContext ctx) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (shouldRun(mc)) {
+            return; // активный кадр рисует overlay()
+        }
+        if (mc.player == null || mc.options.hudHidden || !HudRenderer.hudEnabled() || open <= 0f) {
+            open = 0f;
+            return;
+        }
+        MatrixStack m = ctx.getMatrices();
+        m.push();
+        try {
+            // та же высота слоя, что у HUD-элементов (HudRenderer рисует их в z=400)
+            m.translate(0.0, 0.0, 400.0);
+            draw_editor(m, mc.getWindow().getScaledWidth(), mc.getWindow().getScaledHeight(), false);
+        } finally {
+            m.pop();
+        }
     }
 
     static void tick(MinecraftClient mc, float sw, float sh) {
@@ -245,6 +329,7 @@ public final class HudEditor {
             String hit = hitTest(mouseX, mouseY);
             if (hit != null) {
                 menuFor = hit;
+                menuLabel = labelOf(hit);
                 menuDrag = false;
                 menuX = clamp(mouseX, 2, sw - MENU_W - 2);
                 menuY = clamp(mouseY, 2, sh - MENU_H - 2);
@@ -389,72 +474,277 @@ public final class HudEditor {
 
     // -------------------------------------------------------------- overlay
 
+    /** One editor frame while chat is open (called by HudRenderer). */
     static void overlay(MatrixStack m, float sw, float sh) {
-        for (Guide g : GUIDES) {
-            if (g.vertical()) {
-                UiRender.rect(m, g.pos() - 0.5f, 0, 1, sh, 0, GUIDE_C);
-            } else {
-                UiRender.rect(m, 0, g.pos() - 0.5f, sw, 1, 0, GUIDE_C);
-            }
+        draw_editor(m, sw, sh, true);
+    }
+
+    /**
+     * Скрим + сетка + боксы + направляющие + меню. {@code interactive} = false
+     * на хвосте закрытия: там hover/drag/guides/gaps уже не имеют смысла и
+     * вся геометрия просто растворяется.
+     */
+    private static void draw_editor(MatrixStack m, float sw, float sh, boolean interactive) {
+        float dt = frame_dt();
+        open = ease_exp(open, interactive ? 1f : 0f, dt, interactive ? K_OPEN : K_CLOSE);
+        if (open <= 0.005f) {
+            open = 0f;
+            return;
         }
 
-        String target = dragging != null ? dragging : hovered;
-        if (target != null) {
-            float[] b = BOUNDS.get(target);
-            if (b != null) {
-                UiRender.outline(m, b[0], b[1], b[2], b[3], 4.5f, HOVER_C, 1f);
-                drawBadge(m, b[0], b[1], b[3]);
-            }
-        }
+        m.push();
+        try {
+            m.translate(0.0, 0.0, 10.0);   // свой слой поверх элементов HUD (z=400)
+            draw_scrim(m, sw, sh);
 
-        if (menuFor != null) {
-            drawMenu(m);
+            // контент проявляется чуть «крупнее» и оседает на место
+            float scale = 0.975f + 0.025f * open;
+            m.push();
+            try {
+                m.translate(sw / 2.0, sh / 2.0, 0.0);
+                m.scale(scale, scale, 1f);
+                m.translate(-sw / 2.0, -sh / 2.0, 0.0);
+
+                draw_grid(m, sw, sh);
+                draw_boxes(m, sh, interactive, dt);
+                draw_guides(m, sw, sh, dt);
+                draw_menu(m, interactive, dt);
+            } finally {
+                m.pop();
+            }
+        } finally {
+            m.pop();
         }
     }
 
-    private static void drawBadge(MatrixStack m, float x, float y, float h) {
+    /**
+     * Тёмный скрим LoxeDLC ({@link HudTheme#scrimColor()}) с fade-ramp'ом;
+     * при включённом Blur фон ещё и размывается — альфа цвета формы
+     * переключает смесь «резкий кадр ↔ размытый», поэтому blur проявляется
+     * синхронно с затемнением (это и есть blur ramp).
+     */
+    private static void draw_scrim(MatrixStack m, float sw, float sh) {
+        if (open < MIN_VISIBLE) {
+            return;
+        }
+        int scrim = HudTheme.multAlpha(HudTheme.scrimColor(), open);
+        if (!HudRenderer.blurEnabled()) {
+            UiRender.rect(m, 0, 0, sw, sh, 0, scrim);
+            return;
+        }
+        int quality = Math.max(6, HudRenderer.blurSamples());
+        // Скриму нужен обычный blur: стеклянный шейдер анимирован (блики по Time)
+        // и на полноэкранный заливке выглядит мерцанием. Статус возвращается
+        // сразу после вызова, внутри того же кадра других draw-вызовов нет.
+        boolean glass = Blur.glassMode;
+        Blur.glassMode = false;
+        try {
+            QuickImports.blur.renderSmooth(ShapeProperties.create(m, 0, 0, sw, sh)
+                    .round(0f)
+                    .quality(quality)
+                    .color(scrim, scrim, scrim, scrim)
+                    .build(), quality);
+        } finally {
+            Blur.glassMode = glass;
+        }
+    }
+
+    /** Едва заметная сетка: тот же фиолетовый акцент, что у направляющих. */
+    private static void draw_grid(MatrixStack m, float sw, float sh) {
+        int c = HudTheme.multAlpha(GUIDE_C, 0.085f * open);
+        if (((c >>> 24) & 0xFF) == 0) {
+            return;
+        }
+        for (float x = GRID; x < sw - 0.5f; x += GRID) {
+            UiRender.rect(m, x, 0, 1, sh, 0, c);
+        }
+        for (float y = GRID; y < sh - 0.5f; y += GRID) {
+            UiRender.rect(m, 0, y, sw, 1, 0, c);
+        }
+    }
+
+    /** Rounded outline box + name label per element; hover/lift on top. */
+    private static void draw_boxes(MatrixStack m, float sh, boolean interactive, float dt) {
+        HOVER.keySet().retainAll(BOUNDS.keySet());
+        for (Map.Entry<String, float[]> e : BOUNDS.entrySet()) {
+            String id = e.getKey();
+            float[] b = e.getValue();
+            if (b[2] < 1f || b[3] < 1f) {
+                continue;
+            }
+            boolean on = interactive && (id.equals(dragging) || id.equals(hovered));
+            float[] h = HOVER.computeIfAbsent(id, k -> new float[1]);
+            h[0] = ease_exp(h[0], on ? 1f : 0f, dt, K_HOVER);
+
+            AbstractDraggable d = find_draggable(id);
+            float lift = d == null ? 0f : d.ease_lift(interactive && id.equals(dragging), dt);
+            draw_box(m, b, id, h[0], lift, sh);
+        }
+    }
+
+    private static AbstractDraggable find_draggable(String id) {
+        for (AbstractDraggable d : Hud.getRepository().draggable()) {
+            if (d.getName().equalsIgnoreCase(id)) {
+                return d;
+            }
+        }
+        return null;
+    }
+
+    private static void draw_box(MatrixStack m, float[] b, String id, float hover, float lift, float sh) {
+        float x = b[0], y = b[1], w = b[2], h = b[3];
+        // «подъём» при схватывании: бокс растёт вокруг центра и приподнимается,
+        // под ним проступает тень — это и есть snap/lift-анимация
+        float s = 1f + 0.05f * lift;
+        float bw = w * s;
+        float bh = h * s;
+        float bx = x + (w - bw) / 2f;
+        float by = y + (h - bh) / 2f - 1.5f * lift;
+
+        if (lift > 0.01f) {
+            UiRender.rect(m, bx + 2f, by + 3f, bw, bh, HudTheme.PANEL_ROUND,
+                    UiRender.mulAlpha(0xFF000000, 0.40f * lift * open));
+        }
+        if (hover > 0.01f) {
+            UiRender.rect(m, bx, by, bw, bh, HudTheme.PANEL_ROUND,
+                    UiRender.mulAlpha(HOVER_C, 0.12f * hover * open));
+        }
+        UiRender.outline(m, bx, by, bw, bh, HudTheme.PANEL_ROUND,
+                UiRender.mulAlpha(HOVER_C, (0.32f + 0.68f * hover) * open), 1f);
+
+        draw_label(m, id, bx, by, hover, lift);
+        if (hover > 0.02f) {
+            draw_coord(m, x, y, w, h, hover * open, sh);
+        }
+    }
+
+    /** Name tag над боксом (внутрь — если сверху нет места). */
+    private static void draw_label(MatrixStack m, String id, float bx, float by, float hover, float lift) {
+        String text = labelOf(id);
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        float lw = F_BADGE.getStringWidth(text) + 10f;
+        float ly = by - LABEL_H - 3f - 2f * lift;
+        if (ly < 2f) {
+            ly = by + 3f;
+        }
+        float a = open * (0.55f + 0.45f * hover);
+        UiRender.rect(m, bx, ly, lw, LABEL_H, 3.5f, UiRender.mulAlpha(BADGE_BG, a));
+        UiRender.outline(m, bx, ly, lw, LABEL_H, 3.5f, UiRender.mulAlpha(BADGE_BORDER, a), 1f);
+        // x фиксирован: getStringWidth для коротких строк завышает ширину
+        UiRender.text(F_BADGE, m, text, bx + 5f,
+                ly + (LABEL_H - F_BADGE.getStringHeight(text)) / 2f + 1f,
+                HudTheme.multAlpha(HudTheme.text(), a * 0.95f));
+    }
+
+    /** X/Y badge под боксом — для подсвеченного или схваченного элемента. */
+    private static void draw_coord(MatrixStack m, float x, float y, float w, float h, float alpha, float sh) {
         String label = "X: " + (int) Math.round(x) + "   Y: " + (int) Math.round(y);
         float bw = F_BADGE.getStringWidth(label) + 10f;
-        float bh = 14f;
-        float by = y - bh - 4f;
-        if (by < 2f) {
-            by = y + h + 4f;
+        float by = y + h + 4f;
+        if (by + BADGE_H > sh - 2f) {
+            by = y - BADGE_H - 4f;
         }
-        UiRender.rect(m, x, by, bw, bh, 3.5f, BADGE_BG);
-        UiRender.outline(m, x, by, bw, bh, 3.5f, BADGE_BORDER, 1f);
+        if (by < 2f) {
+            by = Math.max(2f, y + h - BADGE_H);
+        }
+        UiRender.rect(m, x, by, bw, BADGE_H, 3.5f, UiRender.mulAlpha(BADGE_BG, alpha));
+        UiRender.outline(m, x, by, bw, BADGE_H, 3.5f, UiRender.mulAlpha(BADGE_BORDER, alpha), 1f);
         UiRender.text(F_BADGE, m, label, x + 5f,
-                by + (bh - F_BADGE.getStringHeight(label)) / 2f + 1f, 0xFFF5F5F8);
+                by + (BADGE_H - F_BADGE.getStringHeight(label)) / 2f + 1f,
+                HudTheme.multAlpha(0xFFF5F5F8, alpha));
     }
 
-    private static void drawMenu(MatrixStack m) {
-        UiRender.rect(m, menuX, menuY, MENU_W, MENU_H, 6f, BADGE_BG);
-        UiRender.outline(m, menuX, menuY, MENU_W, MENU_H, 6f, BADGE_BORDER, 1f);
-
-        String title = labelOf(menuFor);
-        UiRender.text(F_MENU_SEMI, m, title, menuX + 8f,
-                menuY + 4f + (12f - F_MENU_SEMI.getStringHeight(title)) / 2f + 1f, MENU_TITLE);
-
-        drawMenuRow(m, menuY + 20f, "Сбросить позицию");
-        drawMenuRow(m, menuY + 36f, "Закрыть");
+    private static void draw_guides(MatrixStack m, float sw, float sh, float dt) {
+        guideAlpha = ease_exp(guideAlpha, GUIDES.isEmpty() ? 0f : 1f, dt, K_GUIDE);
+        float a = open * guideAlpha;
+        if (a <= 0.01f) {
+            return;
+        }
+        int c = UiRender.mulAlpha(GUIDE_C, a);
+        for (Guide g : GUIDES) {
+            if (g.vertical()) {
+                UiRender.rect(m, g.pos() - 0.5f, 0, 1, sh, 0, c);
+            } else {
+                UiRender.rect(m, 0, g.pos() - 0.5f, sw, 1, 0, c);
+            }
+        }
     }
 
-    private static void drawMenuRow(MatrixStack m, float ry, String label) {
-        boolean hov = UiRender.inside(mouseX, mouseY, menuX + 4, ry, MENU_W - 8, 14);
+    private static void draw_menu(MatrixStack m, boolean interactive, float dt) {
+        menuAlpha = ease_exp(menuAlpha, interactive && menuFor != null ? 1f : 0f, dt, K_MENU);
+        if (menuAlpha <= 0.01f || menuLabel == null) {
+            return;
+        }
+        float a = open * menuAlpha;
+        float s = 0.92f + 0.08f * menuAlpha;
+        float cx = menuX + MENU_W / 2f;
+        float cy = menuY + MENU_H / 2f;
+        m.push();
+        try {
+            m.translate(cx, cy, 0.0);
+            m.scale(s, s, 1f);
+            m.translate(-cx, -cy, 0.0);
+
+            UiRender.rect(m, menuX, menuY, MENU_W, MENU_H, 6f, UiRender.mulAlpha(BADGE_BG, a));
+            UiRender.outline(m, menuX, menuY, MENU_W, MENU_H, 6f, UiRender.mulAlpha(BADGE_BORDER, a), 1f);
+
+            String title = menuLabel;
+            UiRender.text(F_MENU_SEMI, m, title, menuX + 8f,
+                    menuY + 4f + (12f - F_MENU_SEMI.getStringHeight(title)) / 2f + 1f,
+                    UiRender.mulAlpha(MENU_TITLE, a));
+
+            draw_menu_row(m, menuY + 20f, "Сбросить позицию", a, interactive);
+            draw_menu_row(m, menuY + 36f, "Закрыть", a, interactive);
+        } finally {
+            m.pop();
+        }
+    }
+
+    private static void draw_menu_row(MatrixStack m, float ry, String label, float alpha, boolean interactive) {
+        boolean hov = interactive
+                && UiRender.inside(mouseX, mouseY, menuX + 4, ry, MENU_W - 8, 14);
         if (hov) {
             UiRender.rect(m, menuX + 4, ry, MENU_W - 8, 14, 3f, ROW_HOVER);
         }
         UiRender.text(F_MENU, m, label, menuX + 8f,
-                ry + (14f - F_MENU.getStringHeight(label)) / 2f + 1f, MENU_TEXT);
+                ry + (14f - F_MENU.getStringHeight(label)) / 2f + 1f,
+                UiRender.mulAlpha(MENU_TEXT, alpha));
     }
 
     private static String labelOf(String id) {
+        if (id == null) {
+            return null;
+        }
         return switch (id) {
             case HOTKEYS -> "HotKeys";
             case POTIONS -> "Active Potions";
-            case STAFF -> "Staff Online";
             case TOASTS -> "Notifications";
             default -> id;
         };
+    }
+
+    // ------------------------------------------------------------ easing/dt
+
+    /**
+     * FPS-independent easing: the value glides to {@code target} with
+     * {@code 1 - exp(-dt * k)} — same wall-clock speed at 30 and 300 FPS,
+     * no overshoot, no per-frame constants. Snaps once it is visually there
+     * so the final scale/alpha is exact (boxes must align with elements).
+     */
+    private static float ease_exp(float current, float target, float dt, float k) {
+        float step = 1f - (float) Math.exp(-clamp(dt, 0f, 0.05f) * k);
+        float next = current + (target - current) * step;
+        return Math.abs(target - next) < 0.0015f ? target : next;
+    }
+
+    /** Seconds since the previous overlay frame (0.016 on the first frame). */
+    private static float frame_dt() {
+        long now = System.nanoTime();
+        long prev = frameNano;
+        frameNano = now;
+        return prev == 0L ? 0.016f : (now - prev) / 1_000_000_000f;
     }
 
     private static float clamp(float v, float min, float max) {

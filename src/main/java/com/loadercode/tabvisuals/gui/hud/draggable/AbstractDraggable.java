@@ -35,6 +35,38 @@ public abstract class AbstractDraggable implements Draggable, QuickImports, Quic
 
     public final Animation scaleAnimation = new Decelerate().setValue(1).setMs(200);
 
+    /**
+     * «Подъём» элемента при схватывании бокса в HUD-редакторе: 0..1,
+     * обновляется только из {@link #ease_lift}. Поле с противоположным
+     * именем в классе отсутствует, lombok-геттер {@code getLift()} свободен.
+     */
+    private float lift;
+
+    /**
+     * Плавный snap/lift при захвате элемента — независимо от FPS: значение
+     * идёт к цели по {@code 1 - exp(-dt * k)}, поэтому на 30 и на 300 FPS
+     * подъём занимает одно и то же wall-clock время. Возвращает текущие
+     * 0..1 — им рисуется подсвеченный бокс в редакторе.
+     *
+     * @param grabbed элемент схвачен в этом кадре
+     * @param dt      секунд с прошлого кадра редактора
+     */
+    public float ease_lift(boolean grabbed, float dt) {
+        float step = 1f - (float) Math.exp(-clamp_dt(dt) * 14f);
+        float target = grabbed ? 1f : 0f;
+        float next = lift + (target - lift) * step;
+        lift = Math.abs(target - next) < 0.0015f ? target : next;
+        return lift;
+    }
+
+    /** Alt-tab/подвисание не должны рвать анимацию — dt ограничивается 50 мс. */
+    private static float clamp_dt(float dt) {
+        if (!(dt > 0f)) {
+            return 0.0001f;
+        }
+        return Math.min(dt, 0.05f);
+    }
+
     @Override
     public boolean visible() {
         return true;

@@ -28,14 +28,22 @@ public class CoolDownItem extends AbstractDraggable {
     private final Item item;
     private final StopWatch time;
     private final Animation anim;
+    /** Полный срок кулдауна в мс — база для полосы остатка. */
+    private final float total_ms;
     private FontRenderer fontCached;
     private boolean active = true;
+    /** Сглаженная полоса остатка (-1 — ещё не инициализирована). */
+    private float fill = -1f;
+    private long last_frame_ms;
+    /** Первый кадр, когда остаток дошёл до нуля (0 — не истекал). */
+    private long expire_ms;
 
     public CoolDownItem(Item item, StopWatch time, float x, float y) {
         super(item.getName().getString() + " CD", (int)x, (int)y, 100, 15, false);
         this.item = item;
         this.time = time;
         this.anim = new Decelerate().setMs(150).setValue(1.0F);
+        this.total_ms = Math.max(1f, (float) -time.elapsedTime());
     }
 
     @Override
@@ -78,7 +86,14 @@ public class CoolDownItem extends AbstractDraggable {
 
         MatrixStack matrix = context.getMatrices();
         float animation = anim.getOutput().floatValue();
-        
+
+        long now = System.currentTimeMillis();
+        long prevFrame = last_frame_ms;
+        last_frame_ms = now;
+        // rawGap — для отлова возвращения после скрытия, dt — для сглаживания
+        float rawGap = prevFrame == 0 ? 0f : (now - prevFrame) / 1000f;
+        float dt = Math.min(0.1f, rawGap);
+
         long elapsedTime = time.elapsedTime();
         int timeSeconds = 0;
         if (elapsedTime >= -2147483648L && elapsedTime <= 2147483647L) {
@@ -87,12 +102,28 @@ public class CoolDownItem extends AbstractDraggable {
             timeSeconds = elapsedTime < 0 ? Integer.MAX_VALUE : Integer.MIN_VALUE;
         }
 
+        // остаток кулдауна 1..0; полоса догоняет цель экспоненциально (кадронезависимо)
+        float target = Math.max(0f, Math.min(1f, -elapsedTime / total_ms));
+        if (fill < 0f || rawGap > 0.15f) {
+            fill = target;
+        } else {
+            fill += (target - fill) * smooth_factor(dt, 0.08f);
+        }
+
+        // кулдаун истёк — гасим карточку до вызова setInactive() из тика
+        if (expire_ms == 0 && target <= 0f) {
+            expire_ms = now;
+        }
+        float expireP = expire_ms == 0 ? 0f : Math.min(1f, (now - expire_ms) / 350f);
+        float expireFade = 1f - expireP * expireP * (3f - 2f * expireP);
+        float cardAlpha = animation * expireFade;
+
         ItemStack displayStack = item.getDefaultStack();
         String name = displayStack.getName().getString();
         String duration = StringHelper.getDuration(timeSeconds);
         
         int textColor = ColorAssist.getText();
-        int textAlpha = (int) (255 * animation);
+        int textAlpha = (int) (255 * cardAlpha);
         int colorWithAlpha = ColorAssist.rgba(
             (textColor >> 16) & 255, 
             (textColor >> 8) & 255, 
@@ -109,7 +140,7 @@ public class CoolDownItem extends AbstractDraggable {
 
         int[] gc = ColorAssist.getRectangleGradientColors();
         
-        Calculate.scale(matrix, getX() + getWidth() / 2, getY() + getHeight() / 2, 1, animation, () -> {
+        Calculate.scale(matrix, getX() + getWidth() / 2, getY() + getHeight() / 2, 1, cardAlpha, () -> {
             // Фон
             blur.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), getHeight())
                     .round(4f)
@@ -136,7 +167,28 @@ public class CoolDownItem extends AbstractDraggable {
             
             // Время
             fontCached.drawString(matrix, duration, getX() + getWidth() - durationWidth - 4, getY() + 5, colorWithAlpha);
+
+            // Линейная полоса остатка — акцент темы, ширина сглажена на прошлом кадре
+            if (fill > 0.02f) {
+                rectangle.render(ShapeProperties.create(matrix, getX() + 3, getY() + getHeight() - 2.5f,
+                                (getWidth() - 6f) * fill, 1.5f)
+                        .round(1f)
+                        .color(ColorAssist.getClientColor(0.9f))
+                        .build());
+            }
+            // Короткая акцентная вспышка в момент истечения
+            if (expireP > 0f && expireP < 1f) {
+                rectangle.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), getHeight())
+                        .round(4f)
+                        .color(ColorAssist.getClientColor(0.35f * (1f - expireP)))
+                        .build());
+            }
         });
+    }
+
+    /** Кадронезависимый экспоненциальный фильтр: tau — время «догоняния» в секундах. */
+    private static float smooth_factor(float dt, float tau) {
+        return (float) (1.0 - Math.exp(-dt / Math.max(0.0001f, tau)));
     }
 
     @Override

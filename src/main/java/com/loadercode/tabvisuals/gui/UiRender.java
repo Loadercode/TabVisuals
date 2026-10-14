@@ -1,9 +1,11 @@
 // language: Java, file: UiRender.java, target: Minecraft 1.21.4 Fabric, JDK 21
 package com.loadercode.tabvisuals.gui;
 
+import com.loadercode.tabvisuals.gui.hud.HudRenderer;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.interfaces.QuickImports;
 import com.loadercode.tabvisuals.render.shape.ShapeProperties;
+import com.loadercode.tabvisuals.render.shape.implement.Blur;
 import net.minecraft.client.util.math.MatrixStack;
 
 /** Thin wrappers over the ported render stack for GUI drawing. All colors are ARGB ints. */
@@ -65,6 +67,125 @@ public final class UiRender implements QuickImports {
 
     public static void text(FontRenderer font, MatrixStack m, String s, double x, double y, int argb) {
         font.drawString(m, s, x, y, argb);
+    }
+
+    // ----------------------------------------------------- LoxeDLC panels
+
+    /** Filled rounded panel — the base building block for cards and windows. */
+    public static void roundedPanel(MatrixStack m, float x, float y, float w, float h, float radius, int color) {
+        rect(m, x, y, w, h, radius, color);
+    }
+
+    /**
+     * Rounded panel with a subtle 1px lighter hairline — LoxeDLC cards/windows
+     * carry a thin outline one shade above the fill (the same recipe as the
+     * Theme's outline slot: fill lifted 16% toward white).
+     */
+    public static void outlinedPanel(MatrixStack m, float x, float y, float w, float h, float radius, int color) {
+        outlinedPanel(m, x, y, w, h, radius, color, panelOutline(color));
+    }
+
+    /** Same, but the hairline colour is given explicitly (e.g. Theme.get().outline()). */
+    public static void outlinedPanel(MatrixStack m, float x, float y, float w, float h, float radius, int color, int borderColor) {
+        rect(m, x, y, w, h, radius, color);
+        outline(m, x, y, w, h, radius, borderColor, 1f);
+    }
+
+    /** Hairline colour derived from a fill: 16% toward white, alpha kept. */
+    public static int panelOutline(int fill) {
+        return withAlpha(mix(fill, 0xFFFFFFFF, 0.16f), (fill >>> 24) & 0xFF);
+    }
+
+    /**
+     * Panel with a 1px accent-gradient border (the LoxeDLC window hairline,
+     * but painted with the client accent gradient). The gradient quad is drawn
+     * first and the interior is then re-filled inset by 1px — the round shader
+     * only supports a solid outlineColor, so the ring is cut this way. Call
+     * this INSTEAD of {@link #roundedPanel}; an opaque fill hides the gradient
+     * under the panel, a translucent one picks up a slight accent tint.
+     * Corner order passed to {@link #gradient}: tl, bl, br, tr.
+     */
+    public static void gradientBorder(MatrixStack m, float x, float y, float w, float h, float radius, int fill) {
+        int[] g = Theme.accentGradient();
+        gradient(m, x, y, w, h, g[0], g[1], g[2], g[3]);
+        punchInterior(m, x, y, w, h, radius, fill);
+    }
+
+    /** Same, but with an explicit accent colour instead of the theme's. */
+    public static void gradientBorder(MatrixStack m, float x, float y, float w, float h, float radius, int fill, int accent) {
+        int a = (accent >>> 24) & 0xFF;
+        int lo = withAlpha(mix(accent, 0xFFFFFFFF, 0.18f), a);
+        int hi = withAlpha(mix(accent, 0xFFFFFFFF, 0.36f), a);
+        gradient(m, x, y, w, h, accent, lo, hi, lo);
+        punchInterior(m, x, y, w, h, radius, fill);
+    }
+
+    /** Interior of a gradientBorder: same rect inset by 1px, radius shrunk to match. */
+    private static void punchInterior(MatrixStack m, float x, float y, float w, float h, float radius, int fill) {
+        if (w > 2f && h > 2f) {
+            rect(m, x + 1f, y + 1f, w - 2f, h - 2f, Math.max(0f, radius - 1f), fill);
+        }
+    }
+
+    /**
+     * Blurred glass panel (LoxeDLC window): the shared blur pipeline samples
+     * the frame, a tint of the panel colour darkens it, then the fill goes on
+     * top. Falls back to a semi-transparent rounded fill when the blur pass is
+     * off for this frame. Draw before the panel's content.
+     */
+    public static void blurredPanel(MatrixStack m, float x, float y, float w, float h, float radius, int color) {
+        blurredPanel(m, x, y, w, h, radius, color, 0.55f);
+    }
+
+    /** @param blurTintAlpha darkening tint baked into the blur layer (the ClickGUI uses 0.55) */
+    public static void blurredPanel(MatrixStack m, float x, float y, float w, float h, float radius, int color, float blurTintAlpha) {
+        // the HUD pass copies the frame itself once per pass (Blur.hudContext);
+        // outside it — the ClickGUI-style per-call copy
+        boolean blurred = Blur.hudContext || HudRenderer.blurEnabled();
+        if (blurred) {
+            if (!Blur.hudContext) {
+                blur.setup();
+            }
+            int tint = mulAlpha(color, blurTintAlpha);
+            int samples = HudRenderer.blurSamples();
+            blur.renderSmooth(ShapeProperties.create(m, x, y, w, h)
+                    .round(radius)
+                    .quality(samples)
+                    .color(tint, tint, tint, tint)
+                    .build(), samples);
+            rect(m, x, y, w, h, radius, color);
+            return;
+        }
+        // no blur — keep the panel see-through so the backdrop still shows
+        rect(m, x, y, w, h, radius, ((color >>> 24) & 0xFF) > 210 ? withAlpha(color, 210) : color);
+    }
+
+    /**
+     * Soft drop shadow for a panel: stacked rounded rects offset downward with
+     * a quadratic alpha falloff (the same layering trick as {@link #glow}).
+     * Draw it BEFORE the panel it belongs to.
+     *
+     * @param rgb   shadow colour (alpha byte ignored) — 0x000000 for the usual black
+     * @param alpha global strength, 0..1
+     */
+    public static void shadow(MatrixStack m, float x, float y, float w, float h, float radius, float alpha) {
+        shadow(m, x, y, w, h, radius, 0x000000, alpha);
+    }
+
+    public static void shadow(MatrixStack m, float x, float y, float w, float h, float radius, int rgb, float alpha) {
+        int layers = 9;
+        float spread = 3.5f;
+        for (int i = layers; i >= 0; i--) {
+            float t = i / (float) layers;
+            float grow = spread * t;
+            float a = alpha * (1f - t) * (1f - t) * 0.45f;
+            if (a <= 0.003f) {
+                continue;
+            }
+            // grows twice as far down as up — reads as a drop, not a halo
+            rect(m, x - grow, y + 1.5f - grow * 0.5f, w + grow * 2f, h + grow * 1.5f, radius + grow,
+                    withAlpha(rgb, (int) (a * 255f)));
+        }
     }
 
     public static void textTruncated(FontRenderer font, MatrixStack m, String s, double x, double y, float maxWidth, int argb) {

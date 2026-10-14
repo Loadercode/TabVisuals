@@ -37,11 +37,6 @@ public final class Hud {
     public final com.loadercode.tabvisuals.gui.hud.compat.KeystrokesOverlay.Slider epRenderPitch =
             new com.loadercode.tabvisuals.gui.hud.compat.KeystrokesOverlay.Slider(0f);
 
-    /** Staff List module stand-in settings (LoxeDLC Hud feature). */
-    public volatile boolean staffShowOffline;
-    public volatile boolean staffShowPrivileges = true;
-    public volatile int staffMaxRows = 12;
-
     private volatile int blurQuality = 64;
     private volatile boolean drawHudBlur = true;
 
@@ -88,11 +83,6 @@ public final class Hud {
         boolean glass = HudRenderer.setting("Glass effect", false);
         drawHudBlur = blur || glass;
         blurQuality = drawHudBlur ? HudRenderer.blurSamples() : 6;
-
-        // Staff List settings (LoxeDLC Hud staff* ports)
-        staffShowOffline = HudRenderer.setting("Staff: показывать всех", false);
-        staffShowPrivileges = HudRenderer.setting("Staff: привилегии", true);
-        staffMaxRows = (int) HudRenderer.settingNum("Staff: максимум строк", 12);
 
         // Theme bridge: the full theme (dark/light/custom + accents) lives in
         // HudTheme; the LoxeDLC elements draw through ColorAssist — feed it.

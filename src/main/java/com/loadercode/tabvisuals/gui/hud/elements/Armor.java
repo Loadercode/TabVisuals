@@ -45,6 +45,7 @@ public class Armor extends AbstractDraggable {
     private static final float MENU_PAD = 4f;
     private static final int SLOT_COUNT = 4;
     private static final int EDGE_ANCHOR_TOLERANCE = 2;
+    private static final float ENTRANCE_SECONDS = 0.35f;
 
     private FontRenderer percentFont;
     private FontRenderer warnFont;
@@ -54,6 +55,16 @@ public class Armor extends AbstractDraggable {
     private float menuX, menuY;
     private final Animation menuAlpha = new Decelerate().setMs(200).setValue(1);
     private final Animation menuHeight = new Decelerate().setMs(160).setValue(0);
+
+    /** Плавно заполняющаяся полоска прочности, 0..1 */
+    private final float[] barFill = new float[SLOT_COUNT];
+    /** Вспышка слота при получении урона, 0..1 */
+    private final float[] damageFlash = new float[SLOT_COUNT];
+    private final int[] lastPercent = {-1, -1, -1, -1};
+
+    private long animLastNs;
+    private long entranceStartNs;
+    private float animDt;
 
     public Armor() {
         super("Armor", 10, 150, 100, 28, true);
@@ -152,6 +163,9 @@ public class Armor extends AbstractDraggable {
         boolean previewMode = chatOpen && allEmpty;
         boolean vertical = isVertical();
 
+        anim_update();
+        float enter = entrance_progress();
+
         float iconSize = 18f;
         float slotSize = iconSize + 2f;
         float padding = 3f;
@@ -211,7 +225,11 @@ public class Armor extends AbstractDraggable {
         float currentY = y;
 
         matrix.push();
+        matrix.translate(0f, (1f - enter) * 6f, 0f);
         int lowestPercent = 101;
+
+        int fadeBlur = ColorAssist.multAlpha(ColorAssist.getBlurColor(), enter);
+        int fadeSlotBg = ColorAssist.multAlpha(ColorAssist.getRectangleColor(), 180f / 75f * enter);
 
         for (int i = 0; i < SLOT_COUNT; i++) {
             ItemStack stack = resolveArmorStack(armorSlots, i, previewMode);
@@ -223,13 +241,13 @@ public class Armor extends AbstractDraggable {
                 blur.render(ShapeProperties.create(matrix, slotX, slotY, iconSize + 2f, iconSize + 2f)
                         .round(4f)
                         .quality(hud.getBlurQuality())
-                        .color(ColorAssist.getBlurColor())
+                        .color(fadeBlur)
                         .build());
             }
 
             rectangle.render(ShapeProperties.create(matrix, slotX, slotY, iconSize + 2f, iconSize + 2f)
                     .round(4f)
-                    .color(ColorAssist.multAlpha(ColorAssist.getRectangleColor(), 180f / 75f))
+                    .color(fadeSlotBg)
                     .build());
 
             if (!stack.isEmpty()) {
@@ -241,25 +259,47 @@ public class Armor extends AbstractDraggable {
                     lowestPercent = durabilityPercent;
                 }
 
-                float textWidth = percentFont.getStringWidth(durabilityText);
+                // Плавная полоска прочности + вспышка при уроне
+                float targetFill = stack.isDamageable() && stack.getMaxDamage() > 0
+                        ? (stack.getMaxDamage() - stack.getDamage()) / (float) stack.getMaxDamage()
+                        : 1f;
+                if (lastPercent[i] >= 0 && durabilityPercent < lastPercent[i]) damageFlash[i] = 1f;
+                lastPercent[i] = durabilityPercent;
+                barFill[i] = approach_smooth(barFill[i], targetFill, 12f, animDt);
+                damageFlash[i] = approach_smooth(damageFlash[i], 0f, 5f, animDt);
+                drawDurabilityBar(matrix, slotX, slotY, slotSize, durabilityColor, i, enter);
+
+                // Горизонтально — центр по фиксированной точке:
+                // getStringWidth переоценивает короткие строки в этом шрифте
                 if (vertical) {
                     float textX = durabilityOnRight
                             ? slotX + iconSize + textGap
-                            : slotX - textGap - textWidth;
+                            : slotX - textGap - maxTextWidth;
                     float textY = slotY + (iconSize + 2f) / 2f - 2f;
-                    percentFont.drawString(matrix, durabilityText, textX + 0.5f, textY + 0.5f, SHADOW_TEXT);
-                    percentFont.drawString(matrix, durabilityText, textX, textY, durabilityColor);
+                    percentFont.drawString(matrix, durabilityText, textX + 0.5f, textY + 0.5f, ColorAssist.multAlpha(SHADOW_TEXT, enter));
+                    percentFont.drawString(matrix, durabilityText, textX, textY, ColorAssist.multAlpha(durabilityColor, enter));
                 } else {
-                    float textX = slotX + (iconSize + 2f) / 2f - textWidth / 2f;
+                    float textX = slotX + (slotSize - 13f) / 2f;
                     float textY = slotY - 6f;
-                    percentFont.drawString(matrix, durabilityText, textX + 0.5f, textY + 0.5f, SHADOW_TEXT);
-                    percentFont.drawString(matrix, durabilityText, textX, textY, durabilityColor);
+                    percentFont.drawString(matrix, durabilityText, textX + 0.5f, textY + 0.5f, ColorAssist.multAlpha(SHADOW_TEXT, enter));
+                    percentFont.drawString(matrix, durabilityText, textX, textY, ColorAssist.multAlpha(durabilityColor, enter));
                 }
 
                 int itemX = (int) (slotX + 2f);
                 int itemY = (int) (slotY + 2f);
                 context.drawItem(stack, itemX, itemY);
                 context.drawStackOverlay(mc.textRenderer, stack, itemX, itemY);
+
+                // Вспышка слота поверх предмета при уроне
+                if (damageFlash[i] > 0.02f) {
+                    int flashAlpha = (int) (110f * damageFlash[i] * enter);
+                    rectangle.render(ShapeProperties.create(matrix, slotX, slotY, slotSize, slotSize)
+                            .round(4f)
+                            .color(ColorAssist.pack(255, 70, 70, flashAlpha))
+                            .build());
+                }
+            } else {
+                lastPercent[i] = -1;
             }
 
             if (vertical) {
@@ -301,6 +341,51 @@ public class Armor extends AbstractDraggable {
             warnFont.drawString(matrix, warnText, sx + 1.5f, sy + 1.5f, WARN_SHADOW);
             warnFont.drawString(matrix, warnText, sx, sy, WARN_RED);
         }
+    }
+
+    private void drawDurabilityBar(MatrixStack matrix, float slotX, float slotY, float slotSize,
+                                   int durabilityColor, int index, float fade) {
+        float barW = slotSize - 6f;
+        float barX = slotX + 3f;
+        float barY = slotY + slotSize - 3.4f;
+
+        rectangle.render(ShapeProperties.create(matrix, barX, barY, barW, 1.6f)
+                .round(1f)
+                .color(ColorAssist.getText(0.12f * fade))
+                .build());
+
+        float fillW = Math.max(barFill[index] * barW, barFill[index] > 0f ? 0.5f : 0f);
+        if (fillW <= 0f) return;
+        rectangle.render(ShapeProperties.create(matrix, barX, barY, fillW, 1.6f)
+                .round(1f)
+                .color(ColorAssist.multAlpha(durabilityColor, fade))
+                .build());
+    }
+
+    /** FPS-независимый шаг кадра: dt в секундах с защитой от фризов/alt-tab. */
+    private void anim_update() {
+        long now = System.nanoTime();
+        if (animLastNs == 0L) {
+            animDt = 1f / 60f;
+            entranceStartNs = now;
+        } else {
+            animDt = Math.min((now - animLastNs) / 1_000_000_000f, 0.1f);
+            // Долгая пауза без отрисовки = элемент скрыт — вход заново
+            if (now - animLastNs > 250_000_000L) entranceStartNs = now;
+        }
+        animLastNs = now;
+    }
+
+    /** Вход появления: ease-out cubic 0..1 за ENTRANCE_SECONDS. */
+    private float entrance_progress() {
+        float t = Math.min((System.nanoTime() - entranceStartNs) / 1_000_000_000f / ENTRANCE_SECONDS, 1f);
+        float inv = 1f - t;
+        return 1f - inv * inv * inv;
+    }
+
+    /** Экспоненциальное сглаживание к цели; speed — множитель затухания в секунду. */
+    private static float approach_smooth(float current, float target, float speed, float dt) {
+        return target + (current - target) * (float) Math.exp(-speed * dt);
     }
 
     private void renderOrientationMenu(MatrixStack matrix) {

@@ -36,7 +36,12 @@ public final class MusicManager {
     /** Registered cover texture + its width (square) once the file decodes. */
     private static volatile Identifier coverTex;
     private static volatile int coverSize;
+    /** Read from the worker thread too — must be volatile for the stale-guard. */
     private static volatile long coverForTrack;
+    /** One fetch round per track; stays false until a late cover event arrives. */
+    private static boolean coverFetchDone;
+    /** Last registered GL texture, closed on replacement (client thread only). */
+    private static NativeImageBackedTexture prevCoverTex;
 
     static {
         MediaBridge.start();
@@ -159,17 +164,20 @@ public final class MusicManager {
     /** Decodes the captured cover file once per track, off-thread, registers it on the client thread. */
     private static void syncCover() {
         MediaBridge.Snapshot s = track();
-        if (s.trackId() == 0 || coverForTrack == s.trackId()) {
-            return;
+        if (s.trackId() == 0) return;
+        if (coverForTrack != s.trackId()) {
+            coverForTrack = s.trackId();
+            coverFetchDone = false;
+            if (!s.active() || !s.cover()) {
+                // a new track without artwork — drop the previous cover instead of
+                // showing the last track's picture
+                dropCover();
+            }
         }
-        coverForTrack = s.trackId();
-        if (!s.active() || !s.cover()) {
-            // a new track without artwork — drop the previous cover instead of
-            // showing the last track's picture
-            coverTex = null;
-            coverSize = 0;
-            return;
-        }
+        // no artwork flagged yet: wait for the bridge's late "cover" event
+        if (coverFetchDone || !s.active() || !s.cover()) return;
+        coverFetchDone = true;
+        long id = s.trackId();
         Thread t = new Thread(() -> {
             // the bridge writes the file right when the session appears — retry a
             // few times and accept JPEG thumbnails too (NativeImage is PNG-only)
@@ -178,7 +186,14 @@ public final class MusicManager {
                     NativeImage img = readCover();
                     MinecraftClient mc = MinecraftClient.getInstance();
                     mc.execute(() -> {
-                        mc.getTextureManager().registerTexture(COVER_ID, new NativeImageBackedTexture(img));
+                        if (coverForTrack != id) {
+                            // track rolled over while this one was decoding
+                            img.close();
+                            return;
+                        }
+                        if (prevCoverTex != null) prevCoverTex.close();
+                        prevCoverTex = new NativeImageBackedTexture(img);
+                        mc.getTextureManager().registerTexture(COVER_ID, prevCoverTex);
                         coverTex = COVER_ID;
                         coverSize = img.getWidth();
                     });
@@ -192,11 +207,23 @@ public final class MusicManager {
                     }
                 }
             }
-            coverTex = null;
-            coverSize = 0;
+            if (coverForTrack == id) {
+                coverTex = null;
+                coverSize = 0;
+            }
         }, "tabvisuals-cover");
         t.setDaemon(true);
         t.start();
+    }
+
+    /** Client thread: frees the registered cover texture when nothing draws it. */
+    private static void dropCover() {
+        if (prevCoverTex != null) {
+            prevCoverTex.close();
+            prevCoverTex = null;
+        }
+        coverTex = null;
+        coverSize = 0;
     }
 
     /**

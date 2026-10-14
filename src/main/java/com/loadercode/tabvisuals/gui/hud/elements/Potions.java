@@ -50,6 +50,8 @@ public class Potions extends AbstractDraggable {
     /** Ids we already have rows for (the LoxeDLC packet flow, via polling). */
     private final Set<RegistryEntry<StatusEffect>> known = new HashSet<>();
     private Object lastPlayer;
+    /** Время появления превью-строки (0 — превью не показывается). */
+    private long preview_born_ms;
 
     public Potions() {
         super("Potions", 200, 40, 80, 23, true);
@@ -82,7 +84,8 @@ public class Potions extends AbstractDraggable {
             activeNow.add(id);
             if (known.add(id)) {
                 markEffectForRemoval(id);
-                list.add(new Potion(new StatusEffectInstance(inst), new Decelerate().setMs(150).setValue(1.0F)));
+                list.add(new Potion(new StatusEffectInstance(inst), new Decelerate().setMs(150).setValue(1.0F),
+                        System.currentTimeMillis()));
             }
         }
         for (RegistryEntry<StatusEffect> id : known) {
@@ -115,6 +118,7 @@ public class Potions extends AbstractDraggable {
     @Override
     public void drawDraggable(DrawContext context) {
         MatrixStack matrix = context.getMatrices();
+        final long now = System.currentTimeMillis();
         if(fontCached == null){
             fontCached = Fonts.getSize(13,Fonts.Type.DEFAULT);
             fontPotionCache = Fonts.getSize(13,Fonts.Type.DEFAULT);
@@ -167,28 +171,38 @@ public class Potions extends AbstractDraggable {
         int maxWidth = 95;
 
         if (list.isEmpty() && HudHelper.isChat(mc.currentScreen)) {
+            if (preview_born_ms == 0) preview_born_ms = now;
+            final float rowStagger = stagger_progress(now, preview_born_ms, 0);
+            final float rowSlide = (1f - rowStagger) * -12f;
             float centerY = getY() + offset;
             String name = "Example effect";
             String duration = "**:**";
             int textColor = ColorAssist.getText();
-            int textAlpha = 255;
+            int textAlpha = (int) (255 * rowStagger);
             int colorWithAlpha = ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
-            int color = ColorAssist.getText();
+            int color = ColorAssist.multAlpha(ColorAssist.getText(), rowStagger);
             int colorWithAlphaRectangle = ColorAssist.rgba((textColor >> 16) & 205, (textColor >> 8) & 205, textColor & 205, textAlpha - 125);
             float durationWidth = fontPotionCache.getStringWidth(duration);
+            matrix.push();
+            matrix.translate(rowSlide, 0f, 0f);
             Calculate.scale(matrix, centerX, centerY, 1, 1, () -> {
                 Render2D.drawSprite(matrix, mc.getStatusEffectSpriteManager().getSprite(currentRandomEffect), getX() + 3.5F, (int) centerY - 2, 8, 8, colorWithAlpha);
                 rectangle.render(ShapeProperties.create(matrix, getX() + 14, centerY - 1, 0.5F, 7).color(colorWithAlphaRectangle).build());
                 fontPotionCache.drawString(matrix, name, getX() + 18, centerY + 1, colorWithAlpha);
                 fontPotionCache.drawString(matrix, duration, getX() + getWidth() - durationWidth - 8, centerY + 1, color);
             });
+            matrix.pop();
             int width = (int) fontPotionCache.getStringWidth(name + duration) + 30;
             maxWidth = Math.max(width, maxWidth);
-            offset += 11;
+            offset += (int) (11 * rowStagger);
         } else {
-            for (Potion potion : list) {
+            preview_born_ms = 0;
+            for (int rowIndex = 0; rowIndex < list.size(); rowIndex++) {
+                Potion potion = list.get(rowIndex);
                 StatusEffectInstance effect = potion.effect;
-                float animation = potion.anim.getOutput().floatValue();
+                final float animation = potion.anim.getOutput().floatValue();
+                final float rowStagger = stagger_progress(now, potion.bornMs(), rowIndex);
+                final float rowSlide = (1f - rowStagger) * -12f;
                 float centerY = getY() + offset;
                 int amplifier = effect.getAmplifier();
                 String name = com.loadercode.tabvisuals.gui.hud.HudRenderer.effectName(com.loadercode.tabvisuals.gui.hud.HudRenderer.effectKey(effect.getTranslationKey()));
@@ -203,10 +217,13 @@ public class Potions extends AbstractDraggable {
                 } else if (effect.getDuration() == 0) {
                     textAlpha = 0;
                 }
+                textAlpha = (int) (textAlpha * rowStagger);
                 int colorWithAlpha = isBadEffect ? ColorAssist.rgba(255, 85, 75, textAlpha) : ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
-                int color = ColorAssist.getText();
+                int color = ColorAssist.multAlpha(ColorAssist.getText(), rowStagger);
                 int colorWithAlphaRectangle = isBadEffect ? ColorAssist.rgba(255, 85, 75, textAlpha - 125) : ColorAssist.rgba((textColor >> 16) & 205, (textColor >> 8) & 205, textColor & 205, textAlpha - 125);
                 float durationWidth = fontPotionCache.getStringWidth(duration);
+                matrix.push();
+                matrix.translate(rowSlide, 0f, 0f);
                 Calculate.scale(matrix, centerX, centerY, 1, animation, () -> {
                     Render2D.drawSprite(matrix, mc.getStatusEffectSpriteManager().getSprite(effect.getEffectType()), getX() + 3.5F, (int) centerY - 2, 8, 8, colorWithAlpha);
                     rectangle.render(ShapeProperties.create(matrix, getX() + 14, centerY - 1, 0.5F, 7).color(colorWithAlphaRectangle).build());
@@ -217,13 +234,32 @@ public class Potions extends AbstractDraggable {
                     }
                     fontPotionCache.drawString(matrix, duration, getX() + getWidth() - durationWidth - 8, centerY + 1, color);
                 });
+                matrix.pop();
                 int width = (int) fontPotionCache.getStringWidth(name + lvl + duration) + 30;
                 maxWidth = Math.max(width, maxWidth);
-                offset += (int) (11 * animation);
+                offset += (int) (11 * animation * rowStagger);
             }
         }
         setWidth(maxWidth);
         setHeight(offset);
+    }
+
+    private static float clamp01(float value) {
+        return value < 0f ? 0f : Math.min(1f, value);
+    }
+
+    private static float ease_out_cubic(float t) {
+        float u = 1f - t;
+        return 1f - u * u * u;
+    }
+
+    /**
+     * Прогресс въезда строки: задержка по индексу + сдвиг слева направо.
+     * Считается от wall clock, поэтому не зависит от FPS.
+     */
+    private static float stagger_progress(long now, long bornMs, int index) {
+        long delay = Math.min(index, 5) * 45L;
+        return ease_out_cubic(clamp01((now - bornMs - delay) / 220f));
     }
 
     private String getDuration(StatusEffectInstance pe) {
@@ -266,5 +302,5 @@ public class Potions extends AbstractDraggable {
         return previewEffects;
     }
 
-    private record Potion(StatusEffectInstance effect, Animation anim) {}
+    private record Potion(StatusEffectInstance effect, Animation anim, long bornMs) {}
 }

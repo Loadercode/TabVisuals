@@ -23,14 +23,22 @@ public class HotBar extends AbstractDraggable {
     private static final int SLOT_OUTLINE = 0xFF000000;
     private static final int SLOT_NUMBER = 0xFFFFFFFF;
     private static final int GRID_COLOR = 0x99000000;
+    private static final float ENTRANCE_SECONDS = 0.35f;
     private static final String[] SLOT_LABELS = {"1", "2", "3", "4", "5", "6", "7", "8", "9"};
     private static final float[] SLOT_NUM_X = new float[9];
     private static final float[] SLOT_NUM_Y = new float[9];
 
     private float selectItemX;
+    /** Импульс подсветки при смене слота, 0..1 */
+    private float selectPulse;
+    private int lastSelectedSlot = -1;
     private FontRenderer experienceFont;
     private FontRenderer overlayFont;
     private FontRenderer slotFont;
+
+    private long animLastNs;
+    private long entranceStartNs;
+    private float animDt;
 
     public HotBar() {
         super("HotBar", 0, 50, 182, 22, false);
@@ -54,12 +62,21 @@ public class HotBar extends AbstractDraggable {
             slotFont = Fonts.getSize(11, Fonts.Type.BOLD);
         }
 
-        // Плавная анимация выделенного слота
-        selectItemX = Calculate.interpolateSmooth(1, selectItemX, inventory.selectedSlot * 20);
+        anim_update();
+        float enter = entrance_progress();
+
+        // Плавное (FPS-независимое) движение выделенного слота + импульс при смене
+        if (lastSelectedSlot >= 0 && lastSelectedSlot != inventory.selectedSlot) selectPulse = 1f;
+        lastSelectedSlot = inventory.selectedSlot;
+        selectItemX = approach_smooth(selectItemX, inventory.selectedSlot * 20, 16f, animDt);
+        selectPulse = approach_smooth(selectPulse, 0f, 7f, animDt);
 
         // Центруем хотбар по низу экрана
         setX((mc.getWindow().getScaledWidth() - getWidth()) / 2);
         setY(mc.getWindow().getScaledHeight() - 27);
+
+        matrix.push();
+        matrix.translate(0f, (1f - enter) * 8f, 0f);
 
         // Фон хотбара
         blur.render(ShapeProperties.create(matrix, getX() - 0.5F, getY() - 0.5F, getWidth() + 1, 23F)
@@ -67,20 +84,25 @@ public class HotBar extends AbstractDraggable {
                     .round(4f)
                     .softness(1f)
                     .thickness(2f)
-                    .outlineColor(0xFFE0E0E0)
-                    .color(0xE8FFFFFF)
+                    .outlineColor(ColorAssist.multAlpha(0xFFE0E0E0, enter))
+                    .color(ColorAssist.multAlpha(0xE8FFFFFF, enter))
                     .build());
-            blur.render(ShapeProperties.create(matrix, getX() + selectItemX + 1, getY() + 1, 20, 20)
+
+        // Подсветка выбранного слота: растёт и ярчает на мгновение при смене слота
+        float pulseGrow = 2.5f * selectPulse;
+        int hlAlpha = (int) ((0x50 + 0x70 * selectPulse) * enter);
+        int hlOutline = (int) ((0x40 + 0x50 * selectPulse) * enter);
+            blur.render(ShapeProperties.create(matrix, getX() + selectItemX + 1 - pulseGrow / 2f, getY() + 1 - pulseGrow / 2f, 20 + pulseGrow, 20 + pulseGrow)
                     .quality(Hud.getInstance().getBlurQuality())
                     .round(4.5F)
                     .softness(1f)
                     .thickness(2f)
-                    .outlineColor(0x40000000)
-                    .color(0x50000000)
+                    .outlineColor(ColorAssist.pack(0, 0, 0, hlOutline))
+                    .color(ColorAssist.pack(0, 0, 0, hlAlpha))
                     .build());
 
         // Сетка слотов (вертикальные разделители)
-        drawHotbarGrid(matrix);
+        drawHotbarGrid(matrix, enter);
 
         // Основные 9 слотов хотбара; номера — одним glyph-batch (раньше 9×9 drawString)
         for (int i = 0; i < 9; i++) {
@@ -90,7 +112,7 @@ public class HotBar extends AbstractDraggable {
             SLOT_NUM_X[i] = slotX + 1f;
             SLOT_NUM_Y[i] = slotY + 2.5f;
         }
-        drawSlotNumbers(matrix);
+        drawSlotNumbers(matrix, enter);
 
         // Оффхенд — отдельный квадратик слева/справа
         if (!offHand.isEmpty()) {
@@ -99,30 +121,37 @@ public class HotBar extends AbstractDraggable {
         }
 
         if (!mc.player.isSpectator() && !mc.player.isCreative()) {
-            drawExperienceBar(matrix);
+            drawExperienceBar(matrix, enter);
         }
+
+        matrix.pop();
+
         drawOverlayInfo(matrix);
     }
 
-    private void drawHotbarGrid(MatrixStack matrix) {
+    private void drawHotbarGrid(MatrixStack matrix, float fade) {
         float x = getX();
         float y = getY() + 1.5f;
         float h = 20f;
+        int gridColor = ColorAssist.multAlpha(GRID_COLOR, fade);
         // Вертикальные линии между 9 ячейками
         for (int i = 1; i < 9; i++) {
-            Render2D.drawQuad(x + i * 20f, y, 0.75f, h, GRID_COLOR);
+            Render2D.drawQuad(x + i * 20f, y, 0.75f, h, gridColor);
         }
         // Горизонтальные линии сверху/снизу внутри бара — лёгкая сетка
-        Render2D.drawQuad(x + 1f, y, getWidth() - 2f, 0.5f, GRID_COLOR);
-        Render2D.drawQuad(x + 1f, y + h - 0.5f, getWidth() - 2f, 0.5f, GRID_COLOR);
+        Render2D.drawQuad(x + 1f, y, getWidth() - 2f, 0.5f, gridColor);
+        Render2D.drawQuad(x + 1f, y + h - 0.5f, getWidth() - 2f, 0.5f, gridColor);
     }
 
-    private void drawSlotNumbers(MatrixStack matrix) {
+    private void drawSlotNumbers(MatrixStack matrix, float fade) {
         // 4-side outline + fill for all digits → 1 flush (was 81 separate drawString/drawGlyphs)
-        slotFont.drawOutlinedBatch(matrix, SLOT_NUMBER, SLOT_OUTLINE, 0.75f, SLOT_LABELS, SLOT_NUM_X, SLOT_NUM_Y, 9);
+        slotFont.drawOutlinedBatch(matrix,
+                ColorAssist.multAlpha(SLOT_NUMBER, fade),
+                ColorAssist.multAlpha(SLOT_OUTLINE, fade),
+                0.75f, SLOT_LABELS, SLOT_NUM_X, SLOT_NUM_Y, 9);
     }
 
-    private void drawExperienceBar(MatrixStack matrix) {
+    private void drawExperienceBar(MatrixStack matrix, float fade) {
         if (experienceFont == null) {
             experienceFont = Fonts.getSize(16);
         }
@@ -130,7 +159,7 @@ public class HotBar extends AbstractDraggable {
         // игрока ещё нет или он уже выгружен — тогда experienceLevel не из чего взять.
         if (mc.player == null) return;
         experienceFont.drawCenteredString(matrix, String.valueOf(mc.player.experienceLevel),
-                mc.getWindow().getScaledWidth() / 2F, getY() - 9.5F, ColorAssist.GREEN);
+                mc.getWindow().getScaledWidth() / 2F, getY() - 9.5F, ColorAssist.multAlpha(ColorAssist.GREEN, fade));
     }
 
     private void drawOverlayInfo(MatrixStack matrix) {
@@ -197,5 +226,30 @@ public class HotBar extends AbstractDraggable {
 
         Render2D.defaultDrawStack(context, stack, x, y, false, true, 1f);
     }
-}
 
+    /** FPS-независимый шаг кадра: dt в секундах с защитой от фризов/alt-tab. */
+    private void anim_update() {
+        long now = System.nanoTime();
+        if (animLastNs == 0L) {
+            animDt = 1f / 60f;
+            entranceStartNs = now;
+        } else {
+            animDt = Math.min((now - animLastNs) / 1_000_000_000f, 0.1f);
+            // Долгая пауза без отрисовки = элемент скрыт — вход заново
+            if (now - animLastNs > 250_000_000L) entranceStartNs = now;
+        }
+        animLastNs = now;
+    }
+
+    /** Вход появления: ease-out cubic 0..1 за ENTRANCE_SECONDS. */
+    private float entrance_progress() {
+        float t = Math.min((System.nanoTime() - entranceStartNs) / 1_000_000_000f / ENTRANCE_SECONDS, 1f);
+        float inv = 1f - t;
+        return 1f - inv * inv * inv;
+    }
+
+    /** Экспоненциальное сглаживание к цели; speed — множитель затухания в секунду. */
+    private static float approach_smooth(float current, float target, float speed, float dt) {
+        return target + (current - target) * (float) Math.exp(-speed * dt);
+    }
+}

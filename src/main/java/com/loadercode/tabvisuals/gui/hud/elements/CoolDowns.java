@@ -48,6 +48,11 @@ public class CoolDowns extends AbstractDraggable {
     private FontRenderer iconCached;
     private FontRenderer itemsCached;
     private int activeCooldownCount = 0;
+    /** Кадровая развязка для въезда панели и пульса счётчика. */
+    private long last_frame_ms;
+    private float entrance_t = 1f;
+    private int shown_count = -1;
+    private long count_pulse_ms;
     private static final Item[] EXAMPLE_ITEMS = {
             Items.ENDER_EYE, Items.ENDER_PEARL, Items.SUGAR, Items.MACE, Items.ENCHANTED_GOLDEN_APPLE,
             Items.TRIDENT, Items.CROSSBOW, Items.DRIED_KELP, Items.NETHERITE_SCRAP
@@ -181,10 +186,36 @@ public class CoolDowns extends AbstractDraggable {
         float textWidth = itemsCached.getStringWidth(cooldownCountText);
         float boxWidth = textWidth + 6;
 
+        // wall-clock развязка: по разрыву кадров понимаем, что элемент только что вернулся
+        long now = System.currentTimeMillis();
+        long prevFrame = last_frame_ms;
+        last_frame_ms = now;
+        float dt = prevFrame == 0 ? 0f : Math.min(0.25f, (now - prevFrame) / 1000f);
+        if (prevFrame == 0 || dt > 0.15f) entrance_t = 0f;
+        entrance_t = Math.min(1f, entrance_t + dt / 0.25f);
+        final float enter = ease_out_cubic(entrance_t);
+
+        if (shown_count < 0) {
+            shown_count = activeCooldownCount;
+            count_pulse_ms = now - 1000L;
+        } else if (shown_count != activeCooldownCount) {
+            shown_count = activeCooldownCount;
+            count_pulse_ms = now;
+        }
+        final float countPulse = pulse_env(now - count_pulse_ms, 260L);
+
+        final float countX = getX() + getWidth() - boxWidth - 2.5f;
+        final float bump = 1f + 0.35f * countPulse;
+        final int countColor = ColorAssist.interpolate(ColorAssist.getText(), ColorAssist.getClientColor(), countPulse);
+        final float slideY = (1f - enter) * -6f;
+
         int[] gc = ColorAssist.getRectangleGradientColors();
         int blurQuality = com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality();
         float totalH = getHeight();
 
+        matrix.push();
+        matrix.translate(0f, slideY, 0f);
+        Calculate.setAlpha(enter, () -> {
         blur.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), totalH)
                 .round(4f)
                 .quality(blurQuality)
@@ -208,7 +239,9 @@ public class CoolDowns extends AbstractDraggable {
                 .build());
 
         itemsCached.drawString(matrix, "Active:", getX() + getWidth() - boxWidth - 22, getY() + 7, ColorAssist.getText());
-        itemsCached.drawString(matrix, cooldownCountText, getX() + getWidth() - boxWidth - 2.5f, getY() + 7, ColorAssist.getText());
+        // счётчик короткий — центр берём от измерения того же шрифта, выравнивание x фиксированное
+        Calculate.scale(matrix, countX + textWidth / 2f, getY() + 10f, bump, bump, () ->
+                itemsCached.drawString(matrix, cooldownCountText, countX, getY() + 7, countColor));
 
         rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 0.5f, 6)
                 .color(ColorAssist.getText(0.5F)).round(0F).build());
@@ -220,8 +253,21 @@ public class CoolDowns extends AbstractDraggable {
         if (HudHelper.isChat(mc.currentScreen)) {
             itemsCached.drawString(matrix, "Каждый CD можно двигать!", getX() + 5, getY() + 20, ColorAssist.getText());
         }
-        
+        });
+        matrix.pop();
+
         setHeight(35);
+    }
+
+    private static float ease_out_cubic(float t) {
+        float u = 1f - t;
+        return 1f - u * u * u;
+    }
+
+    /** Огибающая «удара»: синус на отрезке [0, duration), иначе 0. */
+    private static float pulse_env(long elapsedMs, long durationMs) {
+        if (elapsedMs < 0 || elapsedMs >= durationMs) return 0f;
+        return (float) Math.sin(Math.PI * (elapsedMs / (double) durationMs));
     }
 
     public record CoolDown(Item item, StopWatch time, Animation anim) {}

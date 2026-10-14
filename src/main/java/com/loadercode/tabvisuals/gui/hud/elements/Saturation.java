@@ -16,7 +16,7 @@ import com.loadercode.tabvisuals.render.shape.ShapeProperties;
  */
 public class Saturation extends AbstractDraggable {
 
-    // Иконки насыщения — лежат в assets/loxedlc/fonts/icons_fud_*.png
+    // Иконки насыщения — лежат в assets/tabvisuals/fonts/icons_fud_*.png
     private static final Identifier SATURATION_ICON_1 = Identifier.of("tabvisuals", "fonts/icons_fud_1.png");
     private static final Identifier SATURATION_ICON_2 = Identifier.of("tabvisuals", "fonts/icons_fud_2.png");
     private static final Identifier SATURATION_ICON_3 = Identifier.of("tabvisuals", "fonts/icons_fud_3.png");
@@ -26,6 +26,20 @@ public class Saturation extends AbstractDraggable {
     private static final float ICON_SIZE = 9f;
     private static final int FOOD_CELLS = 10;
     private static final float CELL_SPACING = -1f;
+    private static final float ENTRANCE_SECONDS = 0.35f;
+
+    /** Плавно заполняемая сытость каждой ячейки, 0..2 */
+    private final float[] cellFill = new float[FOOD_CELLS];
+    /** Отскок ячейки при появлении, 0..1 */
+    private final float[] cellPop = new float[FOOD_CELLS];
+    private final float[] lastCellTarget = new float[FOOD_CELLS];
+    private float lastTotal = -1f;
+    /** Красная вспышка всех иконок при потере сытости, 0..1 */
+    private float dropFlash;
+
+    private long animLastNs;
+    private long entranceStartNs;
+    private float animDt;
 
     public Saturation() {
         // Имя "Saturation" используется в настройках HUD
@@ -75,36 +89,73 @@ public class Saturation extends AbstractDraggable {
             setY((int) baseY);
         }
 
+        anim_update();
+        float enter = entrance_progress();
+
+        // Вспышка при падении сытости (сравниваем общий уровень с прошлым кадром)
+        float totalNow = 0f;
+        for (int i = 0; i < FOOD_CELLS; i++) {
+            totalNow += MathHelper.clamp(saturation - i * 2f, 0f, 2f);
+        }
+        if (lastTotal >= 0f && totalNow < lastTotal - 0.05f) dropFlash = 1f;
+        lastTotal = totalNow;
+        dropFlash = approach_smooth(dropFlash, 0f, 5f, animDt);
+
         Hud hud = Hud.getInstance();
+        matrices.push();
+        matrices.translate(0f, (1f - enter) * 6f, 0f);
+
         if (hud != null && hud.shouldDrawHudBlur()) {
             blur.render(ShapeProperties.create(matrices, baseX - 2f, baseY - 2f, totalWidth + 4f, iconSize + 4f)
                     .round(3f)
                     .quality(hud.getBlurQuality())
-                    .color(ColorAssist.getBlurColor())
+                    .color(ColorAssist.multAlpha(ColorAssist.getBlurColor(), enter))
                     .build());
         }
 
-        matrices.push();
+        int flashColor = ColorAssist.interpolateColor(ColorAssist.WHITE,
+                ColorAssist.pack(255, 90, 90, 255), dropFlash);
 
         // Рисуем ячейки слева направо
         for (int i = 0; i < FOOD_CELLS; i++) {
             // Сколько "сытости" приходится на ячейку (по 2 единицы на ячейку)
             float saturationForCell = MathHelper.clamp(saturation - i * 2f, 0f, 2f);
 
-            Identifier iconTexture = null;
-            if (saturationForCell >= 2.0f) {
+            // Плавная заливка: иконка переключается по анимированному значению
+            cellFill[i] = approach_smooth(cellFill[i], saturationForCell, 14f, animDt);
+            if (saturationForCell > 0f && lastCellTarget[i] <= 0f) cellPop[i] = 1f;
+            lastCellTarget[i] = saturationForCell;
+            cellPop[i] = approach_smooth(cellPop[i], 0f, 8f, animDt);
+
+            float fill = cellFill[i];
+            Identifier iconTexture;
+            if (fill >= 1.98f) {
                 iconTexture = SATURATION_ICON_1;
-            } else if (saturationForCell >= 1.5f) {
+            } else if (fill >= 1.48f) {
                 iconTexture = SATURATION_ICON_2;
-            } else if (saturationForCell >= 1.0f) {
+            } else if (fill >= 0.98f) {
                 iconTexture = SATURATION_ICON_3;
-            } else if (saturationForCell > 0.0f) {
+            } else if (fill > 0.02f) {
                 iconTexture = SATURATION_ICON_4;
             } else {
                 continue;
             }
 
             float cellX = baseX + i * (iconSize + CELL_SPACING);
+            // Яркость ячейки растёт вместе с её заливкой
+            float cellAlpha = enter * MathHelper.clamp(0.45f + 0.55f * (fill / 2f), 0f, 1f);
+            int cellColor = ColorAssist.multAlpha(flashColor, cellAlpha);
+
+            // Отскок: слегка вырастает из центра ячейки
+            float pop = cellPop[i];
+            float scale = 1f + 0.18f * pop;
+            float pivotX = cellX + iconSize / 2f;
+            float pivotY = baseY + iconSize;
+
+            matrices.push();
+            matrices.translate(pivotX, pivotY, 0f);
+            matrices.scale(scale, scale, 1f);
+            matrices.translate(-pivotX, -pivotY, 0f);
 
             try {
                 Render2D.drawTexture(
@@ -120,10 +171,12 @@ public class Saturation extends AbstractDraggable {
                         (int) iconSize,
                         (int) iconSize,
                         (int) iconSize,
-                        ColorAssist.WHITE
+                        cellColor
                 );
             } catch (Exception ignored) {
             }
+
+            matrices.pop();
         }
 
         matrices.pop();
@@ -131,5 +184,30 @@ public class Saturation extends AbstractDraggable {
         setWidth((int) totalWidth);
         setHeight((int) ICON_SIZE);
     }
-}
 
+    /** FPS-независимый шаг кадра: dt в секундах с защитой от фризов/alt-tab. */
+    private void anim_update() {
+        long now = System.nanoTime();
+        if (animLastNs == 0L) {
+            animDt = 1f / 60f;
+            entranceStartNs = now;
+        } else {
+            animDt = Math.min((now - animLastNs) / 1_000_000_000f, 0.1f);
+            // Долгая пауза без отрисовки = элемент скрыт — вход заново
+            if (now - animLastNs > 250_000_000L) entranceStartNs = now;
+        }
+        animLastNs = now;
+    }
+
+    /** Вход появления: ease-out cubic 0..1 за ENTRANCE_SECONDS. */
+    private float entrance_progress() {
+        float t = Math.min((System.nanoTime() - entranceStartNs) / 1_000_000_000f / ENTRANCE_SECONDS, 1f);
+        float inv = 1f - t;
+        return 1f - inv * inv * inv;
+    }
+
+    /** Экспоненциальное сглаживание к цели; speed — множитель затухания в секунду. */
+    private static float approach_smooth(float current, float target, float speed, float dt) {
+        return target + (current - target) * (float) Math.exp(-speed * dt);
+    }
+}

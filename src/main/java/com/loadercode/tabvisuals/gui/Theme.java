@@ -231,6 +231,31 @@ public record Theme(String id, String name,
         return rgb | (42 << 24); // hairline outline @ ~16%
     }
 
+    // ------------------------------------------------------ accent gradient
+
+    /**
+     * 4-corner gradient of the active accent, in the corner order of
+     * {@link UiRender#gradient}: tl, bl, br, tr. Shades are the accent lifted
+     * toward white (same derivation as the outline slot) — no new palette
+     * entries, alpha 255.
+     */
+    public static int[] accentGradient() {
+        return accentGradient(255);
+    }
+
+    /** Same with an explicit alpha for every corner (0..255). */
+    public static int[] accentGradient(int alpha) {
+        int a = get().accent();
+        int lo = mixRgb(a, 0xFFFFFF, 0.18f);
+        int hi = mixRgb(a, 0xFFFFFF, 0.36f);
+        return new int[]{withAlphaRgb(a, alpha), withAlphaRgb(lo, alpha),
+                withAlphaRgb(hi, alpha), withAlphaRgb(lo, alpha)};
+    }
+
+    private static int withAlphaRgb(int rgb, int alpha) {
+        return (rgb & 0x00FFFFFF) | ((alpha & 0xFF) << 24);
+    }
+
     // ------------------------------------------------------------- lerping
 
     private static Theme lerp(Theme a, Theme b, float k, String id) {

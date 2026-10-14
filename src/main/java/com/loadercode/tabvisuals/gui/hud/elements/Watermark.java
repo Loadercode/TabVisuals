@@ -30,6 +30,15 @@ public class Watermark extends AbstractDraggable {
     private String cachedServerIp = "";
     private long lastServerIpUpdate;
 
+    /** Длительность въезда: альфа набирается быстрее, сдвиг догоняет. */
+    private static final float ENTRANCE_MS = 420f;
+    /** Пауза отрисовки, после которой въезд проигрывается заново (скрытие/показ HUD). */
+    private static final float ENTRANCE_GAP_MS = 350f;
+    /** Сдвиг въезда по X — плашка выезжает слева. */
+    private static final float ENTRANCE_SLIDE_X = -18f;
+
+    private long entranceStartNanos;
+    private long lastDrawNanos;
 
     public Watermark() {
         super("Watermark", 10, 10, 92, 16, true);
@@ -43,6 +52,20 @@ public class Watermark extends AbstractDraggable {
     @Override
     public void drawDraggable(DrawContext e) {
         MatrixStack matrix = e.getMatrices();
+
+        // Въезд при первом показе и после паузы отрисовки: альфа + сдвиг слева.
+        long now = System.nanoTime();
+        if (lastDrawNanos == 0L || entranceStartNanos == 0L
+                || (now - lastDrawNanos) / 1_000_000f > ENTRANCE_GAP_MS) {
+            entranceStartNanos = now;
+        }
+        lastDrawNanos = now;
+        float enterT = clamp01((now - entranceStartNanos) / 1_000_000f / ENTRANCE_MS);
+        float alpha = 1f - (float) Math.pow(1f - enterT, 3);   // альфа: быстрый набор
+        float slideX = (float) Math.pow(1f - enterT, 5) * ENTRANCE_SLIDE_X; // сдвиг: длинный хвост
+
+        matrix.push();
+        matrix.translate((double) slideX, 0.0, 0.0);
         Matrix4f matrix4f = matrix.peek().getPositionMatrix();
         String fps = String.valueOf(fpsCount);
         String serverIp = getServerIpCached();
@@ -74,15 +97,20 @@ public class Watermark extends AbstractDraggable {
 
         blur.render(ShapeProperties.create(matrix, getX(), getY(), finalWidth, finalHeight)
                 .round(5f).quality(com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality())
-                .color(ColorAssist.getBlurColor())
+                .color(ColorAssist.multAlpha(ColorAssist.getBlurColor(), alpha))
                 .build());
 
+        // градиент приходит общим кэшем темы — копируем в локальные, сам массив не трогаем
         int[] gc = ColorAssist.getRectangleGradientColors();
+        int gc0 = ColorAssist.multAlpha(gc[0], alpha);
+        int gc1 = ColorAssist.multAlpha(gc[1], alpha);
+        int gc2 = ColorAssist.multAlpha(gc[2], alpha);
+        int gc3 = ColorAssist.multAlpha(gc[3], alpha);
         rectangle.render(ShapeProperties.create(matrix, getX(), getY(), finalWidth, finalHeight)
                 .round(5f)
                 .thickness(0.1f)
-                .outlineColor(ColorAssist.getRectangleOutlineColor())
-                .color(gc[0], gc[1], gc[2], gc[3])
+                .outlineColor(ColorAssist.multAlpha(ColorAssist.getRectangleOutlineColor(), alpha))
+                .color(gc0, gc1, gc2, gc3)
                 .build());
 
         // Отрисовка логотипа по центру по высоте бара
@@ -103,7 +131,7 @@ public class Watermark extends AbstractDraggable {
                     iconWidth, 11f,
                     0, 0, logoTexW, logoTexH,
                     logoTexW, logoTexH,
-                    0xFFFFFFFF);
+                    ColorAssist.multAlpha(0xFFFFFFFF, alpha));
             RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
             RenderSystem.disableBlend();
         }
@@ -112,40 +140,43 @@ public class Watermark extends AbstractDraggable {
 
         rectangle.render(ShapeProperties.create(matrix, currentX, getY() + 6.5f, 0.5F, getHeight() - 8)
                 .round(0)
-                .color(ColorAssist.getText(0.5F))
+                .color(ColorAssist.getText(0.5F * alpha))
                 .build());
 
         currentX += 4;
 
-        default13.drawString(matrix, title, currentX + 2.5f, getY() + 9f, ColorAssist.getText());
+        default13.drawString(matrix, title, currentX + 2.5f, getY() + 9f,
+                ColorAssist.multAlpha(ColorAssist.getText(), alpha));
 
         currentX += titleWidth + 9;
 
         rectangle.render(ShapeProperties.create(matrix, currentX, getY() + 6.5f, 0.5F, getHeight() - 8)
                 .round(0f)
-                .color(ColorAssist.getText(0.5F))
+                .color(ColorAssist.getText(0.5F * alpha))
                 .build());
 
         currentX += 5;
 
-        default13.drawString(matrix, fps, currentX, getY() + 9f, ColorAssist.getText());
+        default13.drawString(matrix, fps, currentX, getY() + 9f,
+                ColorAssist.multAlpha(ColorAssist.getText(), alpha));
 
         currentX += fpsWidth + 2;
 
         // icon2 'n' = clock badge; 'w' was the chart glyph and rendered as an
         // odd blob at 17px (dj's photo)
-        iconNew17.drawString(matrix, "n", currentX, getY() + 9f, 0xFFFFFFFF);
+        iconNew17.drawString(matrix, "n", currentX, getY() + 9f, ColorAssist.multAlpha(0xFFFFFFFF, alpha));
 
         currentX += 10;
 
         rectangle.render(ShapeProperties.create(matrix, currentX, getY() + 6.5f, 0.5F, getHeight() - 8)
                 .round(0)
-                .color(ColorAssist.getText(0.5F))
+                .color(ColorAssist.getText(0.5F * alpha))
                 .build());
 
         currentX += 5;
 
-        default13.drawString(matrix, serverIp, currentX, getY() + 9f, ColorAssist.getText());
+        default13.drawString(matrix, serverIp, currentX, getY() + 9f,
+                ColorAssist.multAlpha(ColorAssist.getText(), alpha));
 
         currentX += serverIpWidth;
 
@@ -153,9 +184,10 @@ public class Watermark extends AbstractDraggable {
                 .font(ICONS_FONT_1.get())
                 .text("D")
                 .size(11)
-                .color(ColorAssist.getText())
+                .color(ColorAssist.multAlpha(ColorAssist.getText(), alpha))
                 .build()
                 .render(matrix4f, currentX + 2.5f, getY() + 2f);
+
 //
 //        currentX += 5;
 //        assert mc.player != null;
@@ -163,9 +195,12 @@ public class Watermark extends AbstractDraggable {
 //
 //        default13.drawString(matrix, String.valueOf(ping), currentX, getY(), ColorAssist.getText());
 //
-//
 
+        matrix.pop();
+    }
 
+    private static float clamp01(float v) {
+        return v < 0f ? 0f : Math.min(1f, v);
     }
 
     private String getServerIpCached() {

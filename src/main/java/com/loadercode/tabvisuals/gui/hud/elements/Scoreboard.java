@@ -21,6 +21,15 @@ import java.util.List;
 
 public class Scoreboard extends AbstractDraggable {
     private static final long CACHE_TICKS = 5L;
+    private static final int SCORE_COLOR = 0xFFFF5555;
+
+    // Вход панели: строки выезжают слева со стаггером; прогресс считается от
+    // времени (мс), поэтому скорость не зависит от FPS.
+    private static final long REVEAL_GAP_MS = 250L;
+    private static final long REVEAL_TITLE_MS = 200L;
+    private static final long REVEAL_ROW_DELAY_MS = 40L;
+    private static final long REVEAL_ROW_MS = 260L;
+    private static final float REVEAL_SLIDE_PX = 6f;
 
     private final List<CachedLine> cachedLines = new ArrayList<>();
     private ScoreboardObjective cachedObjective;
@@ -30,6 +39,8 @@ public class Scoreboard extends AbstractDraggable {
     private float cachedWidth = 150;
     private float cachedHeight = 20;
     private FontRenderer font;
+    private long revealStartMs;
+    private long lastDrawMs;
 
     public Scoreboard() {
         super("Scoreboard", 10, 100, 150, 200, true);
@@ -79,14 +90,43 @@ public class Scoreboard extends AbstractDraggable {
                 .build());
 
         float titleX = getX() + (cachedWidth - cachedTitleWidth) / 2;
-        font.drawString(context.getMatrices(), cachedTitle, titleX, getY() + 4, -1);
+
+        // пауза в отрисовке (выключение/смена мира) перезапускает вход;
+        // обновление счётов при видимой панели анимацию не трогает
+        long nowMs = System.currentTimeMillis();
+        if (lastDrawMs <= 0L || nowMs - lastDrawMs > REVEAL_GAP_MS) {
+            revealStartMs = nowMs;
+        }
+        lastDrawMs = nowMs;
+
+        float titleP = ease_out_cubic(clamp01((nowMs - revealStartMs) / (float) REVEAL_TITLE_MS));
+        float titleSlide = (1f - titleP) * REVEAL_SLIDE_PX;
+        font.drawString(context.getMatrices(), cachedTitle, titleX - titleSlide, getY() + 4,
+                ColorAssist.multAlpha(-1, titleP));
 
         int yOffset = 13;
+        int rowIndex = 0;
         for (CachedLine line : cachedLines) {
-            font.drawString(context.getMatrices(), line.name, getX() + 4, getY() + yOffset, -1);
-            font.drawString(context.getMatrices(), line.score, getX() + cachedWidth - line.scoreWidth - 4, getY() + yOffset, 0xFFFF5555);
+            float rowP = ease_out_cubic(clamp01(
+                    (nowMs - revealStartMs - rowIndex * REVEAL_ROW_DELAY_MS) / (float) REVEAL_ROW_MS));
+            float slide = (1f - rowP) * REVEAL_SLIDE_PX;
+            font.drawString(context.getMatrices(), line.name, getX() + 4 - slide, getY() + yOffset,
+                    ColorAssist.multAlpha(-1, rowP));
+            font.drawString(context.getMatrices(), line.score, getX() + cachedWidth - line.scoreWidth - 4 - slide,
+                    getY() + yOffset, ColorAssist.multAlpha(SCORE_COLOR, rowP));
             yOffset += 9;
+            rowIndex++;
         }
+    }
+
+    private static float clamp01(float value) {
+        return value < 0f ? 0f : Math.min(value, 1f);
+    }
+
+    /** easeOutCubic: 0→1 за REVEAL_ROW_MS, чисто временная (не кадровая) шкала. */
+    private static float ease_out_cubic(float p) {
+        float q = 1f - p;
+        return 1f - q * q * q;
     }
 
     private void rebuildCache(net.minecraft.scoreboard.Scoreboard scoreboard, ScoreboardObjective objective, long worldTime) {

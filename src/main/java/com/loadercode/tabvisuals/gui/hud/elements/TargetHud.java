@@ -36,15 +36,35 @@ public class TargetHud extends AbstractDraggable {
     private final Animation animation = new Decelerate().setMs(650).setValue(1);
     private final Animation faceAlphaAnimation = new Decelerate().setMs(125).setValue(1);
     private final StopWatch stopWatch = new StopWatch();
-    private final StopWatch distanceUpdateTimer = new StopWatch();
     private final StopWatch lastAttackTimer = new StopWatch().setMs(4000);
     private static final long HOLYWORLD_ATTACK_HOLD_MS = 4000L;
+
+    // Появление/исчезновение и «хвост» убытия здоровья — временные шкалы (мс),
+    // прогресс пересчитывается каждый кадр от currentTimeMillis, не от FPS.
+    private static final long LOCK_IN_MS = 280L;
+    private static final long HIT_FLASH_MS = 350L;
+    private static final float HEALTH_TAU = 0.12f;
+    private static final float DRAIN_TAU = 0.35f;
+    private static final float ABSORPTION_TAU = 0.20f;
+    private static final float DISTANCE_TAU = 0.25f;
+    private static final float FADE_TAU = 0.08f;
+
     private LivingEntity lastTarget;
     private LivingEntity lastAttackedTarget;
     private Item lastItem = Items.AIR;
     private float health;
     private float absorption;
     private float displayedDistance;
+    private LivingEntity lockInTarget;
+    private long lockInStartMs;
+    private long lastFrameMs;
+    private float frameDt = 0.05f;
+    private float fadeProgress = 1f;
+    private float laggedHealth;
+    private float lastHealth = -1f;
+    private int lastHurtTime;
+    private long hitFlashStartMs;
+    private float hitFlash;
 
     public TargetHud() {
         super("Target Hud", 10, 80, 100, 36, true);
@@ -108,18 +128,73 @@ public class TargetHud extends AbstractDraggable {
 
     @Override
     public void drawDraggable(DrawContext context) {
-        if (Hud.getInstance().interfaceSettings.isSelected("Target Hud") && Hud.getInstance().state) {
-            if (lastTarget != null) {
-                if (shouldHideTarget(lastTarget)) {
-                    return;
-                }
-                MatrixStack matrix = context.getMatrices();
+        if (!(Hud.getInstance().interfaceSettings.isSelected("Target Hud") && Hud.getInstance().state)) {
+            return;
+        }
+        if (lastTarget == null || shouldHideTarget(lastTarget)) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        frameDt = frame_delta_seconds(now);
+
+        // затухание при потере цели: гаснет плавно, пока драйвер ещё рисует хвост закрытия
+        fadeProgress += (1f - fadeProgress) * (1f - (float) Math.exp(-frameDt / FADE_TAU));
+
+        // scale-in при захвате новой цели (или первом показе)
+        if (lastTarget != lockInTarget) {
+            lockInTarget = lastTarget;
+            lockInStartMs = now;
+        }
+        float lock = ease_out_back(clamp01((now - lockInStartMs) / (float) LOCK_IN_MS));
+        float scale = (0.92f + 0.08f * lock) * (0.85f + 0.15f * fadeProgress);
+
+        setWidth(110);
+        setHeight(41);
+
+        MatrixStack matrix = context.getMatrices();
+        float centerX = getX() + getWidth() / 2f;
+        float centerY = getY() + (getHeight() - 10) / 2f;
+        matrix.push();
+        try {
+            if (Math.abs(scale - 1f) > 0.001f) {
+                matrix.translate(centerX, centerY, 0f);
+                matrix.scale(scale, scale, 1f);
+                matrix.translate(-centerX, -centerY, 0f);
+            }
+            Calculate.setAlpha(fadeProgress, () -> {
                 com.loadercode.tabvisuals.render.geometry.Render2D.renderElementShadow(matrix, getX(), getY(), getWidth(), getHeight());
                 drawMain(context, matrix);
                 drawArmor(context, matrix);
                 drawFace(context);
-            }
+            });
+        } finally {
+            matrix.pop();
         }
+    }
+
+    /** Дельта кадра в секундах, ограничена сверху — защита от фризов. */
+    private float frame_delta_seconds(long now) {
+        float dt = lastFrameMs <= 0L ? 0.05f : (now - lastFrameMs) / 1000f;
+        lastFrameMs = now;
+        return MathHelper.clamp(dt, 0.001f, 0.1f);
+    }
+
+    private static float clamp01(float value) {
+        return value < 0f ? 0f : Math.min(value, 1f);
+    }
+
+    /** Плавное притяжение к цели по экспоненте — одинаково на любом FPS. */
+    private static float smooth_exp(float current, float target, float tau, float dt) {
+        return current + (target - current) * (1f - (float) Math.exp(-dt / Math.max(0.001f, tau)));
+    }
+
+    /** easeOutBack: пружинный scale-in с лёгким перелётом. */
+    private static float ease_out_back(float p) {
+        float c1 = 1.70158f;
+        float c3 = c1 + 1f;
+        float q = p - 1f;
+        return 1f + c3 * q * q * q + c1 * q * q;
     }
 
     private boolean shouldHideTarget(LivingEntity entity) {
@@ -146,9 +221,25 @@ public class TargetHud extends AbstractDraggable {
         FontRenderer distancefont = Fonts.getSize(12, Fonts.Type.SEMI);
         float hp = HudHelper.getHealth(lastTarget);
         String stringHp = (lastTarget.isInvisible() && !HolyWorldModuleGuard.isHolyWorldServer()) ? " ??" : HudHelper.getHealthString(hp);
-        health = MathHelper.clamp(Calculate.interpolateSmooth(1, health, hp / lastTarget.getMaxHealth() * 360), 0, 360);
+        long nowMs = System.currentTimeMillis();
+        float hpTarget = MathHelper.clamp(hp / lastTarget.getMaxHealth() * 360f, 0f, 360f);
+        health = MathHelper.clamp(smooth_exp(health, hpTarget, HEALTH_TAU, frameDt), 0f, 360f);
+        // «хвост» убытия: догоняет основную дугу медленнее — видно при падении HP
+        laggedHealth = MathHelper.clamp(smooth_exp(laggedHealth, hpTarget, DRAIN_TAU, frameDt), 0f, 360f);
+
+        // вспышка при уроне: падение здоровья или rising edge hurtTime
+        if (lastHealth >= 0f && hp < lastHealth - 0.05f) {
+            hitFlashStartMs = nowMs;
+        }
+        lastHealth = hp;
+        if (lastTarget.hurtTime > lastHurtTime) {
+            hitFlashStartMs = nowMs;
+        }
+        lastHurtTime = lastTarget.hurtTime;
+        hitFlash = 1f - clamp01((nowMs - hitFlashStartMs) / (float) HIT_FLASH_MS);
+
         float absorptionAmount = HudHelper.getAbsorption(lastTarget);
-        absorption = MathHelper.clamp(Calculate.interpolateSmooth(1, absorption, absorptionAmount / 20.0F * 360), 0, 360);
+        absorption = MathHelper.clamp(smooth_exp(absorption, absorptionAmount / 20.0F * 360f, ABSORPTION_TAU, frameDt), 0f, 360f);
         // Не assert: в продакшене он выключен, а HUD рисуется и в момент
         // выгрузки мира, когда игрока уже нет.
         if (mc.player == null) return;
@@ -157,16 +248,10 @@ public class TargetHud extends AbstractDraggable {
         int poppedTotems = lastTarget instanceof PlayerEntity player && TotemStats.getInstance() != null && TotemStats.getInstance().isState()
                 ? TotemStats.getInstance().getPopCount(player)
                 : 0;
-        if (distanceUpdateTimer.finished(10)) {
-            displayedDistance = MathHelper.clamp(Calculate.interpolateSmooth(0.5f, displayedDistance, roundedDistance), 0, 100);
-            distanceUpdateTimer.reset();
-        }
+        displayedDistance = MathHelper.clamp(smooth_exp(displayedDistance, roundedDistance, DISTANCE_TAU, frameDt), 0f, 100f);
         String distanceText = String.format("%.1f", displayedDistance);
 
         float nameWidth = font.getStringWidth(lastTarget.getName().getString());
-        float baseWidth = Math.max(34 + 36 + 10, 100);
-        setWidth((int) baseWidth + 10);
-        setHeight((int) 41);
 
         int[] gradientColors = ColorAssist.getRectangleGradientColors();
         blur.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), getHeight() - 10)
@@ -180,8 +265,23 @@ public class TargetHud extends AbstractDraggable {
                 .color(gradientColors[0], gradientColors[1], gradientColors[2], gradientColors[3])
                 .build());
 
+        // красная вспышка поверх панели при получении урона
+        if (hitFlash > 0.01f) {
+            rectangle.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), getHeight() - 10)
+                    .round(6)
+                    .color(ColorAssist.pack(255, 70, 70, Math.round(95 * hitFlash)))
+                    .build());
+        }
+
         arc.render(ShapeProperties.create(matrix, getX() + getWidth() - 28.5f, getY() + 2.5f, 26, 26).round(0.26F).thickness(0.30f).end(361)
                 .color(new Color(255,255,255,25).getRGB()).build());
+        // медленный «хвост» убытия под основной дугой здоровья
+        if (laggedHealth > health + 1f) {
+            arc.render(ShapeProperties.create(matrix, getX() + getWidth() - 28.5f, getY() + 2.5f, 26, 26).round(0.26F).thickness(0.30f).end(laggedHealth)
+                    .color(ColorAssist.multAlpha(ColorAssist.fade(0), 0.55f), ColorAssist.multAlpha(ColorAssist.fade(200), 0.55f),
+                            ColorAssist.multAlpha(ColorAssist.fade(0), 0.55f), ColorAssist.multAlpha(ColorAssist.fade(200), 0.55f))
+                    .build());
+        }
         arc.render(ShapeProperties.create(matrix, getX() + getWidth() - 28.5f, getY() + 2.5f, 26, 26).round(0.26F).thickness(0.30f).end(health)
                 .color(ColorAssist.fade(0), ColorAssist.fade(200), ColorAssist.fade(0), ColorAssist.fade(200)).build());
         // Золотые сердечки (поглощение от золотых и зачарованных яблок) показываем
@@ -318,7 +418,7 @@ public class TargetHud extends AbstractDraggable {
         LivingEntityRenderer<LivingEntity, LivingEntityRenderState, ?> renderer = (LivingEntityRenderer<LivingEntity, LivingEntityRenderState, ?>) baseRenderer;
         LivingEntityRenderState state = renderer.getAndUpdateRenderState(lastTarget, tickCounter.getTickDelta(false));
         Identifier textureLocation = renderer.getTexture(state);
-        float alpha = faceAlphaAnimation.getOutput().floatValue();
+        float alpha = faceAlphaAnimation.getOutput().floatValue() * fadeProgress;
         Calculate.setAlpha(alpha, () -> {
             Render2D.drawTexture(context, textureLocation, getX() + 5, getY() + 5.5F, 20, 4, 8, 8, 64, ColorAssist.getRect(1), ColorAssist.multRed(-1, 1 + lastTarget.hurtTime / 4F));
         });

@@ -17,12 +17,32 @@ import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.Map;
 
 public class KeystrokesOverlayHud extends AbstractDraggable {
     private final Deque<Long> leftClicks = new ArrayDeque<>();
     private final Deque<Long> rightClicks = new ArrayDeque<>();
     private boolean leftDown;
     private boolean rightDown;
+
+    /** Сглаженное состояние нажатия клавиши (0..1) по её подписи. */
+    private final Map<String, KeyPressState> press_states = new HashMap<>();
+
+    /** Амплитуда «ухода вниз» крышки при полном нажатии. */
+    private static final float PRESS_SHIFT = 1.4f;
+    /** Экспоненциальное сглаживание: нажатие резкое, отпускание мягкое. */
+    private static final float PRESS_RISE_TAU = 0.045f;
+    private static final float PRESS_FALL_TAU = 0.085f;
+
+    private static final class KeyPressState {
+        float press;
+        long last_nanos;
+
+        KeyPressState(long now_nanos) {
+            last_nanos = now_nanos;
+        }
+    }
 
     public KeystrokesOverlayHud() {
         super("Keystrokes", 10, 160, 84, 96, true);
@@ -137,18 +157,41 @@ public class KeystrokesOverlayHud extends AbstractDraggable {
 
     private void drawMouseKey(MatrixStack matrix, FontRenderer font, FontRenderer small, String label, float x, float y,
                               float width, float height, boolean pressed, int cps, KeystrokesOverlay overlay) {
-        drawKey(matrix, font, label, x, y, width, height, pressed, overlay);
+        float press = drawKey(matrix, font, label, x, y, width, height, pressed, overlay);
         if (overlay.getShowCps().isValue()) {
-            small.drawCenteredString(matrix, cps + " CPS", x + width / 2.0f, y + height - 8.0f, getTextColor(overlay));
+            // CPS-счётчик едет вместе с крышкой при нажатии
+            small.drawCenteredString(matrix, cps + " CPS", x + width / 2.0f, y + height - 8.0f + press * PRESS_SHIFT, getTextColor(overlay));
         }
     }
 
-    private void drawKey(MatrixStack matrix, FontRenderer font, String label, float x, float y, float width, float height,
+    /**
+     * Ставит цель 0/1 и двигает сглаженное значение экспоненциально от прошедшего
+     * времени (dt из nanoTime), поэтому скорость не зависит от FPS. Возвращает press 0..1.
+     */
+    private float smooth_press(String label, boolean pressed) {
+        long now = System.nanoTime();
+        KeyPressState state = press_states.computeIfAbsent(label, k -> new KeyPressState(now));
+        float target = pressed ? 1f : 0f;
+        float dt = Math.min(0.1f, (now - state.last_nanos) / 1_000_000_000f);
+        state.last_nanos = now;
+        float tau = pressed ? PRESS_RISE_TAU : PRESS_FALL_TAU;
+        state.press += (target - state.press) * (1f - (float) Math.exp(-dt / tau));
+        if (Math.abs(target - state.press) < 0.002f) {
+            state.press = target;
+        }
+        return state.press;
+    }
+
+    private float drawKey(MatrixStack matrix, FontRenderer font, String label, float x, float y, float width, float height,
                          boolean pressed, KeystrokesOverlay overlay) {
+        float press = smooth_press(label, pressed);
         float round = getRound(overlay);
         float opacity = overlay.getOpacity().getValue();
-        int background = ColorAssist.multAlpha(pressed ? overlay.getPressedColor().getColor() : overlay.getBackgroundColor().getColor(), opacity);
-        int outline = ColorAssist.multAlpha(overlay.getBorderColor().getColor(), opacity);
+        // Фон плавно перетекает из обычного в «нажатый», рамка — приглушается
+        int background = ColorAssist.multAlpha(ColorAssist.lerp(press,
+                overlay.getBackgroundColor().getColor(), overlay.getPressedColor().getColor()), opacity);
+        int outline = ColorAssist.multAlpha(ColorAssist.lerp(press,
+                overlay.getBorderColor().getColor(), overlay.getPressedColor().getColor()), opacity * 0.75f);
         float border = overlay.getBorderThickness().getValue();
 
         Hud hud = Hud.getInstance();
@@ -159,18 +202,34 @@ public class KeystrokesOverlayHud extends AbstractDraggable {
                     .color(ColorAssist.getBlurColor())
                     .build());
         }
+
+        // Крышка press-down: уходит вниз на PRESS_SHIFT и слегка сжимается к центру
+        float pressShift = press * PRESS_SHIFT;
+        float pressScale = 1f - press * 0.05f;
+        float centerX = x + width / 2.0f;
+        float centerY = y + height / 2.0f + pressShift;
+
+        matrix.push();
+        matrix.translate(centerX, centerY, 0);
+        matrix.scale(pressScale, pressScale, 1);
+        matrix.translate(-centerX, -centerY, 0);
+
         if (border > 0.0f) {
-            rectangle.render(ShapeProperties.create(matrix, x - border, y - border, width + border * 2.0f, height + border * 2.0f)
+            rectangle.render(ShapeProperties.create(matrix, x - border, y - border + pressShift, width + border * 2.0f, height + border * 2.0f)
                     .round(round + border)
                     .color(outline)
                     .build());
         }
-        rectangle.render(ShapeProperties.create(matrix, x, y, width, height)
+        rectangle.render(ShapeProperties.create(matrix, x, y + pressShift, width, height)
                 .round(round)
                 .color(background)
                 .build());
 
-        font.drawCenteredString(matrix, label, x + width / 2.0f, y + height / 2.0f - 1f, getTextColor(overlay));
+        // Текст рисуется внутри того же matrix, что и крышка, — сам «едет» с ней
+        font.drawCenteredString(matrix, label, centerX, y + height / 2.0f - 1f + pressShift, getTextColor(overlay));
+
+        matrix.pop();
+        return press;
     }
 
     private float getRound(KeystrokesOverlay overlay) {

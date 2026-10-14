@@ -8,9 +8,9 @@ import java.util.Locale;
 
 /**
  * HolyWorld guard stand-in (LoxeDLC port): server-flag detection for the HUD
- * elements that only make sense on that anarchy (the Staff List shows there
- * and in the chat editor). Detection = the Network server name or the raw
- * address host, cached per tick so the HUD hot path never re-parses.
+ * elements that only make sense on that anarchy. Detection = the Network
+ * server name or the raw address host, cached per tick so the HUD hot path
+ * never re-parses.
  */
 public final class HolyWorldModuleGuard {
 
