@@ -7,29 +7,43 @@ import lombok.SneakyThrows;
 
 import java.awt.*;
 import java.io.InputStream;
-import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class Fonts {
 
     // Cache base Font objects (one per font file) to avoid repeated Font.createFont() calls.
     // Font.createFont() creates a temp file in %TEMP% each time — caching the base font
     // reduces ~522 temp files per launch down to ~18 (one per font type).
-    private static final Map<String, Font> baseFontCache = new HashMap<>();
+    private static final Map<String, Font> baseFontCache = new ConcurrentHashMap<>();
+
+    /**
+     * Поток init/рендера: шрифты создаются только в нём. Ловится при первой
+     * загрузке класса и переназначается в {@link #init()} (его как раз зовёт
+     * клиентский поток Fabric), остальным потокам — см. {@link #awaitInit()}.
+     */
+    private static volatile Thread ownerThread = Thread.currentThread();
+
+    /** init() завершился — даже со сбоем: TabVisualsClient переходит на ленивую загрузку. */
+    private static final CountDownLatch INIT_DONE = new CountDownLatch(1);
 
     @SneakyThrows
     private static Font loadBaseFont(String name) {
         Font cached = baseFontCache.get(name);
         if (cached != null) return cached;
 
-        for (String fontName : new String[]{name, name.toLowerCase(), name.toUpperCase()}) {
+        // Locale.ROOT: в турецкой локали toLowerCase("I") даёт «ı», ресурс не находится и старт падает
+        for (String fontName : new String[]{name, name.toLowerCase(Locale.ROOT), name.toUpperCase(Locale.ROOT)}) {
             for (String ext : new String[]{".ttf", ".otf"}) {
                 String path = "assets/minecraft/fonts/" + fontName + ext;
                 try (InputStream inputStream = Fonts.class.getClassLoader().getResourceAsStream(path)) {
                     if (inputStream != null) {
                         Font baseFont = Font.createFont(Font.TRUETYPE_FONT, inputStream);
-                        baseFontCache.put(name, baseFont);
-                        return baseFont;
+                        Font published = baseFontCache.putIfAbsent(name, baseFont);
+                        return published != null ? published : baseFont;
                     }
                 }
             }
@@ -43,7 +57,8 @@ public class Fonts {
         return new FontRenderer(derived, size / 2f);
     }
 
-    private static final Map<FontKey, FontRenderer> fontCache = new HashMap<>();
+    /** Размеры вне 4..32 (например логотип 46): конкурентная map + {@link #awaitInit()} перед созданием. */
+    private static final Map<FontKey, FontRenderer> fontCache = new ConcurrentHashMap<>();
 
     /**
      * Индексированный доступ по размеру. Размеры 4..32 предзаполнены в
@@ -54,10 +69,16 @@ public class Fonts {
     private static final FontRenderer[][] SIZED_FONTS = new FontRenderer[Type.values().length][33];
 
     public static void init() {
-        for (Type type : Type.values()) {
-            for (int size = 4; size <= 32; size++) {
-                SIZED_FONTS[type.ordinal()][size] = create(size, type.getType());
+        ownerThread = Thread.currentThread();
+        try {
+            for (Type type : Type.values()) {
+                for (int size = 4; size <= 32; size++) {
+                    SIZED_FONTS[type.ordinal()][size] = create(size, type.getType());
+                }
             }
+        } finally {
+            // finally: сбой предзаполнения не должен оставлять чужие потоки в вечном ожидании
+            INIT_DONE.countDown();
         }
     }
 
@@ -69,13 +90,46 @@ public class Fonts {
         FontRenderer[] row = SIZED_FONTS[type.ordinal()];
         if (size >= 0 && size < row.length) {
             FontRenderer cached = row[size];
-            if (cached == null) {
-                cached = create(size, type.getType());
-                row[size] = cached;
-            }
-            return cached;
+            if (cached != null) return cached;
+            return getOrCreateSized(size, type, row);
         }
-        return fontCache.computeIfAbsent(new FontKey(size, type), k -> create(size, type.getType()));
+        FontKey key = new FontKey(size, type);
+        FontRenderer cached = fontCache.get(key);
+        if (cached != null) return cached;
+        awaitInit();
+        return fontCache.computeIfAbsent(key, k -> create(size, type.getType()));
+    }
+
+    /**
+     * Ленивый слот: чужой поток сначала ждёт конца init() — тот заполняет весь
+     * диапазон 4..32, так что создавать обычно уже не нужно; если всё же нужно
+     * (init упал), создание идёт под монитором — запись в слот без гонок.
+     */
+    private static FontRenderer getOrCreateSized(int size, Type type, FontRenderer[] row) {
+        awaitInit();
+        synchronized (SIZED_FONTS) {
+            FontRenderer cached = row[size];
+            if (cached != null) return cached;
+            FontRenderer created = create(size, type.getType());
+            row[size] = created;
+            return created;
+        }
+    }
+
+    /**
+     * Ждать может только чужой поток: владельцу (он же запускает init)
+     * ожидание — это deadlock с самим init(). Таймаут, чтобы не повиснуть
+     * навсегда, если init() вдруг не вызовут. Для редких размеров вне 4..32
+     * остаточное создание вне render-потока безопасно: FontRenderer собирается
+     * только из AWT (deriveFont), без GL.
+     */
+    private static void awaitInit() {
+        if (Thread.currentThread() == ownerThread) return;
+        try {
+            INIT_DONE.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Getter

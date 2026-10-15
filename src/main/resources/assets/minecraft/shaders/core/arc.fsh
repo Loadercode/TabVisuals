@@ -18,8 +18,9 @@ void main() {
     float startAngle = start * RAD;
     float endAngle = startAngle + min(end * RAD, PI * 2);
 
-    float smoothThresh = 6.0 * (1.0 / length(size));
-    vec2 centerPos = ((gl_FragCoord.xy - location) / size.xy) * 2.0 - 1.0;
+    // 0-размер (length == 0) давал 1/0 = Inf в smoothstep — деградация в NaN.
+    float smoothThresh = 6.0 * (1.0 / max(length(size), 0.0001));
+    vec2 centerPos = ((gl_FragCoord.xy - location) / max(size.xy, vec2(0.0001))) * 2.0 - 1.0;
 
     float dist = length(centerPos);
     float bandAlpha = smoothstep(radius, radius + smoothThresh, dist) * smoothstep(radius + thickness, (radius + thickness) - smoothThresh, dist);

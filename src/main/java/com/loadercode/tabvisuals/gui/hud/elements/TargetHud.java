@@ -51,6 +51,8 @@ public class TargetHud extends AbstractDraggable {
 
     private LivingEntity lastTarget;
     private LivingEntity lastAttackedTarget;
+    /** Смена игрока (респавн/другой мир) сбрасывает цель прошлого мира. */
+    private Object lastPlayer;
     private Item lastItem = Items.AIR;
     private float health;
     private float absorption;
@@ -77,6 +79,21 @@ public class TargetHud extends AbstractDraggable {
 
     @Override
     public void tick() {
+        // Респавн/смена мира подменяют игрока: старая цель мертва и ссылается
+        // на выгруженный мир — держать её дальше нельзя (stale-кадр + утечка).
+        if (lastPlayer != mc.player) {
+            lastPlayer = mc.player;
+            lastTarget = null;
+            lastAttackedTarget = null;
+            lockInTarget = null;
+            health = 0f;
+            laggedHealth = 0f;
+            absorption = 0f;
+            displayedDistance = 0f;
+            lastHealth = -1f;
+            lastHurtTime = 0;
+            hitFlash = 0f;
+        }
         Entity targetedEntity = mc.targetedEntity;
         if (targetedEntity instanceof LivingEntity livingEntity) {
             if (shouldHideTarget(livingEntity)) {
@@ -222,7 +239,8 @@ public class TargetHud extends AbstractDraggable {
         float hp = HudHelper.getHealth(lastTarget);
         String stringHp = (lastTarget.isInvisible() && !HolyWorldModuleGuard.isHolyWorldServer()) ? " ??" : HudHelper.getHealthString(hp);
         long nowMs = System.currentTimeMillis();
-        float hpTarget = MathHelper.clamp(hp / lastTarget.getMaxHealth() * 360f, 0f, 360f);
+        // maxHealth из атрибута может быть 0 (datapack/мод) — иначе NaN уходил в дугу
+        float hpTarget = MathHelper.clamp(hp / Math.max(1f, lastTarget.getMaxHealth()) * 360f, 0f, 360f);
         health = MathHelper.clamp(smooth_exp(health, hpTarget, HEALTH_TAU, frameDt), 0f, 360f);
         // «хвост» убытия: догоняет основную дугу медленнее — видно при падении HP
         laggedHealth = MathHelper.clamp(smooth_exp(laggedHealth, hpTarget, DRAIN_TAU, frameDt), 0f, 360f);

@@ -2,6 +2,7 @@
 package com.loadercode.tabvisuals.gui.hud.elements;
 
 import lombok.Getter;
+import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.gui.Theme;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.hud.Hud;
@@ -28,8 +29,10 @@ import net.minecraft.util.math.MathHelper;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 public class MediaPlayer extends AbstractDraggable {
     /** Daemon workers: a leaked pool must never keep the JVM alive on exit. */
@@ -42,6 +45,8 @@ public class MediaPlayer extends AbstractDraggable {
     private static final MediaBridge.Snapshot EMPTY = new MediaBridge.Snapshot(false, "", "", "", "", false, 0, 0, false, 0);
     /** Последний опрос моста: позиция уже экстраполирована по wall-clock внутри MediaBridge. */
     private volatile MediaBridge.Snapshot media = EMPTY;
+    /** Мьютекс файлового канала: MusicStatus и этот класс пишут из разных пулов. */
+    private static final Object CMD_LOCK = new Object();
     private final StopWatch lastMedia = new StopWatch();
     private float widthDuration;
     private FontRenderer bigFont;
@@ -64,6 +69,8 @@ public class MediaPlayer extends AbstractDraggable {
 
     private final float[] hover_t = new float[ZONE_COUNT];
     private final float[] press_t = new float[ZONE_COUNT];
+    /** Переиспользуемый буфер хитбоксов — на кадр не должно быть аллокаций. */
+    private final float[] zone_buf = new float[ZONE_COUNT * 4];
     /** Зона, зажатая в данный момент; -1 — ничего не нажато. */
     private int pressed_zone = -1;
     private long pressed_ns;
@@ -78,9 +85,9 @@ public class MediaPlayer extends AbstractDraggable {
         return Instance.getDraggable(MediaPlayer.class);
     }
 
-    /** Последний снапшот моста (обновляется в tick()); позиция уже экстраполирована. */
+    /** Живой снапшот моста: позиция экстраполируется по wall-clock внутри MediaBridge. */
     public MediaBridge.Snapshot snapshot() {
-        return media;
+        return MediaBridge.current();
     }
 
     public void shutdown() {
@@ -111,7 +118,7 @@ public class MediaPlayer extends AbstractDraggable {
 
     private static boolean isSpotify(MediaBridge.Snapshot s) {
         String app = s.app();
-        return app != null && !app.isEmpty() && app.toLowerCase().startsWith("spotify");
+        return app != null && !app.isEmpty() && app.toLowerCase(Locale.ROOT).startsWith("spotify");
     }
 
     private void ensureFonts() {
@@ -124,19 +131,39 @@ public class MediaPlayer extends AbstractDraggable {
 
     /**
      * Команда плееру уходит через файл — внешний скрипт-мост читает его вместо
-     * прямого control-канала. Вызывать внутри controlExecutor.
+     * прямого control-канала. Потокобезопасно, вызывается из controlExecutor.
      */
     public static void sendCommand(String command) {
-        try {
+        String cmd = command == null ? "" : command.trim();
+        if (cmd.isEmpty() || cmd.indexOf('\n') >= 0 || cmd.indexOf('\r') >= 0) return;
+        synchronized (CMD_LOCK) {
             Path dir = FabricLoader.getInstance().getConfigDir().resolve("tabvisuals");
-            Files.createDirectories(dir);
-            // tmp + rename: скрипт-мост читает файл по таймеру и не должен
-            // увидеть недописанную команду
+            Path target = dir.resolve("media_cmd.txt");
             Path tmp = dir.resolve("media_cmd.txt.tmp");
-            Files.writeString(tmp, command + "\n" + System.currentTimeMillis());
-            Files.move(tmp, dir.resolve("media_cmd.txt"),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        } catch (Throwable ignored) {
+            for (int attempt = 0; attempt < 4; attempt++) {
+                try {
+                    Files.createDirectories(dir);
+                    // tmp + rename: скрипт-мост читает файл по таймеру и не должен
+                    // увидеть недописанную команду
+                    Files.writeString(tmp, cmd + "\n" + System.currentTimeMillis());
+                    Files.move(tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    return;
+                } catch (Throwable t) {
+                    // цель может быть открыта мостом (FileShare.Read) — rename
+                    // падает с access denied; короткие ретраи вместо потери клика
+                    try {
+                        Thread.sleep(25L);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+            try {
+                // иначе недописанный tmp останется в папке навсегда
+                Files.deleteIfExists(tmp);
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -152,6 +179,17 @@ public class MediaPlayer extends AbstractDraggable {
      * false и обрабатываются как обычно — меню и геймплей не страдают.
      */
     public static boolean on_global_mouse_button(long window, int button, int action) {
+        // mixin-хук на рендере: любое падение внутри должен гасить здесь,
+        // а не ронять игру
+        try {
+            return route_mouse_button(window, button, action);
+        } catch (Throwable t) {
+            TabVisualsClient.LOGGER.debug("media click routing failed", t);
+            return false;
+        }
+    }
+
+    private static boolean route_mouse_button(long window, int button, int action) {
         if (action == 0) {
             // отпускание мыши: просто убираем нажатие, ничего не поглощаем
             MediaPlayer mp = getInstance();
@@ -171,6 +209,7 @@ public class MediaPlayer extends AbstractDraggable {
         MediaPlayer mp = getInstance();
         if (mp == null || !mp.media.active()) return false;
         Hud hud = Hud.getInstance();
+        // canDraw включает visible() — невидимый элемент не должен ловить клики
         if (hud == null || !mp.canDraw(hud, mp)) return false;
 
         float[] zones = mp.zone_rects();
@@ -195,7 +234,11 @@ public class MediaPlayer extends AbstractDraggable {
             case ZONE_NEXT -> "next";
             default -> "playPause";
         };
-        controlExecutor.execute(() -> sendCommand(command));
+        try {
+            controlExecutor.execute(() -> sendCommand(command));
+        } catch (RejectedExecutionException e) {
+            // пул уже остановлен (shutdown) — клик не должен падать
+        }
     }
 
     /** Центр полосы иконок — та же целочисленная формула, что и в отрисовке. */
@@ -212,6 +255,7 @@ public class MediaPlayer extends AbstractDraggable {
      */
     private float[] zone_rects() {
         ensureFonts();
+        float[] out = zone_buf;
         float baseX = base_x();
         float prevW = iconFont.getStringWidth("O");
         float playW = Math.max(iconFont.getStringWidth("I"), iconFont.getStringWidth("H"));
@@ -229,11 +273,10 @@ public class MediaPlayer extends AbstractDraggable {
         float top = getY() + ZONE_TOP;
         float bottom = Math.max(top + 6f, getY() + getHeight() - 8f);
         float h = bottom - top;
-        return new float[]{
-                left, top, b1 - left, h,
-                b1, top, b2 - b1, h,
-                b2, top, right - b2, h,
-        };
+        out[0] = left; out[1] = top; out[2] = b1 - left; out[3] = h;
+        out[4] = b1; out[5] = top; out[6] = b2 - b1; out[7] = h;
+        out[8] = b2; out[9] = top; out[10] = right - b2; out[11] = h;
+        return out;
     }
 
     /**
@@ -285,13 +328,19 @@ public class MediaPlayer extends AbstractDraggable {
         }
     }
 
+    private static final String GLYPH_PREV = "O", GLYPH_PLAY = "I", GLYPH_PAUSE = "H", GLYPH_NEXT = "P";
+
     /** Иконки транспорта поверх плашек: те же якоря, что и в zone_rects(). */
-    private void draw_transport(MatrixStack m, float[] zones) {
-        String[] glyphs = {"O", media.playing() ? "I" : "H", "P"};
+    private void draw_transport(MatrixStack m, float[] zones, MediaBridge.Snapshot snap) {
         float baseX = base_x();
-        float[] anchors = {baseX - 4f, baseX + 4.5f, baseX + 14f};
+        float a0 = baseX - 4f, a1 = baseX + 4.5f, a2 = baseX + 14f;
         float y = getY() + 25.5f;
         for (int i = 0; i < ZONE_COUNT; i++) {
+            // без аллокации массива строк/координат на каждый кадр
+            String glyph = i == ZONE_PREV ? GLYPH_PREV
+                    : i == ZONE_NEXT ? GLYPH_NEXT
+                    : (snap.playing() ? GLYPH_PLAY : GLYPH_PAUSE);
+            float anchor = i == ZONE_PREV ? a0 : i == ZONE_NEXT ? a2 : a1;
             float scale = UiRender.pressScale(press_t[i]);
             float cx = zones[4 * i] + zones[4 * i + 2] / 2f;
             float cy = zones[4 * i + 1] + zones[4 * i + 3] / 2f;
@@ -300,7 +349,7 @@ public class MediaPlayer extends AbstractDraggable {
             m.translate(cx, cy, 0f);
             m.scale(scale, scale, 1f);
             m.translate(-cx, -cy, 0f);
-            iconFont.drawString(m, glyphs[i], anchors[i], y, color);
+            iconFont.drawString(m, glyph, anchor, y, color);
             m.pop();
         }
     }
@@ -330,7 +379,7 @@ public class MediaPlayer extends AbstractDraggable {
      * мягкое радиальное свечение и буква трека. Рисуется только скруглёнными
      * фигурами, поэтому углы остаются аккуратными.
      */
-    private void draw_cover_placeholder(MatrixStack m, float x, float y, float size) {
+    private void draw_cover_placeholder(MatrixStack m, float x, float y, float size, MediaBridge.Snapshot snap) {
         int accent = Theme.get().accent();
         int cTL = accent;
         int cBL = UiRender.lighten(accent, 0.18f);
@@ -343,7 +392,7 @@ public class MediaPlayer extends AbstractDraggable {
                 .build());
         UiRender.glow(m, x + size / 2f, y + size / 2f, size * 0.55f, 0xFFFFFF, 0.30f, 1f);
 
-        String letter = cover_letter();
+        String letter = cover_letter(snap);
         if (!letter.isEmpty()) {
             float glyphH = 0.5f * bigFont.getStringHeight(letter);
             bigFont.drawString(m, letter,
@@ -354,8 +403,8 @@ public class MediaPlayer extends AbstractDraggable {
     }
 
     /** Первая буква названия трека (или приложения), если она есть. */
-    private String cover_letter() {
-        String source = media.title() != null && !media.title().isBlank() ? media.title() : media.app();
+    private String cover_letter(MediaBridge.Snapshot snap) {
+        String source = snap.title() != null && !snap.title().isBlank() ? snap.title() : snap.app();
         if (source == null) return "";
         for (int i = 0; i < source.length(); i++) {
             char c = source.charAt(i);
@@ -380,9 +429,11 @@ public class MediaPlayer extends AbstractDraggable {
         int sizeArtwork = Math.max(24, getHeight() - 8);
         int maxDurationWidth = getWidth() - (sizeArtwork + 12) + 15;
 
-        long rawDuration = media.endMs();
+        // один снапшот на кадр: время/прогресс/заголовок всегда из одной точки
+        MediaBridge.Snapshot snap = MediaBridge.current();
+        long rawDuration = snap.endMs();
         // Позицию мост уже экстраполирует по wall-clock — берём как есть.
-        long rawPosition = media.posMs();
+        long rawPosition = snap.posMs();
         // Снапшот всегда хранит миллисекунды — делим всегда. Раньше делили только
         // при > 10000, из-за чего треки короче 10 с показывали время вроде «139:50».
         rawDuration /= 1000L;
@@ -407,8 +458,8 @@ public class MediaPlayer extends AbstractDraggable {
                 .build());
 
         scissor.push(matrix.peek().getPositionMatrix(), getX() + sizeArtwork + 8, getY(), getWidth() - sizeArtwork - 10 + 15, getHeight());
-        bigFont.drawStringWithScroll(matrix, media.title(), getX() + sizeArtwork + 8, getY() + 7, 56, ColorAssist.getText());
-        miniFont.drawStringWithScroll(matrix, media.artist(), getX() + sizeArtwork + 8, getY() + 15.5F, 56, ColorAssist.getText(0.75F));
+        bigFont.drawStringWithScroll(matrix, snap.title(), getX() + sizeArtwork + 8, getY() + 7, 56, ColorAssist.getText());
+        miniFont.drawStringWithScroll(matrix, snap.artist(), getX() + sizeArtwork + 8, getY() + 15.5F, 56, ColorAssist.getText(0.75F));
         scissor.pop();
 
         float ax = getX() + 4;
@@ -422,7 +473,7 @@ public class MediaPlayer extends AbstractDraggable {
             rectangle.render(ShapeProperties.create(matrix, ax, ay, (float) sizeArtwork, (float) sizeArtwork).round(3).color(ColorAssist.getRect(1)).build());
             draw_cover(matrix, artTex, artW, artH, ax, ay, sizeArtwork);
         } else {
-            draw_cover_placeholder(matrix, ax, ay, sizeArtwork);
+            draw_cover_placeholder(matrix, ax, ay, sizeArtwork, snap);
         }
 
         // кнопки рисуем ДО подписей времени, чтобы текст оставался читаемым
@@ -438,6 +489,6 @@ public class MediaPlayer extends AbstractDraggable {
         rectangle.render(ShapeProperties.create(matrix, getX() + 8 + sizeArtwork, getY() + getHeight() - 8f, widthDuration, 3.5f).round(0.85F).color(ColorAssist.roundClientColor(1)).build());
 
         // иконки последними — они интерактивные и всегда сверху
-        draw_transport(matrix, zones);
+        draw_transport(matrix, zones, snap);
     }
 }

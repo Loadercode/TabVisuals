@@ -101,8 +101,14 @@ public final class ModuleRegistry {
     }
 
     public static ModuleStub byId(String id) {
+        if (id == null) {
+            return null;
+        }
+        String t = id.trim();
         for (ModuleStub m : ALL) {
-            if (m.id().equals(id)) {
+            // регистронезависимо: конфиги прошлых версий писали id по-другому;
+            // null → вызывающий код пропускает запись, ничего не падает
+            if (m.id().equalsIgnoreCase(t)) {
                 return m;
             }
         }

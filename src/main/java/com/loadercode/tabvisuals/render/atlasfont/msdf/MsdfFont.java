@@ -56,6 +56,15 @@ public final class MsdfFont {
 	}
 	
 	public float getWidth(String text, float size) {
+		return getWidth(text, size, 0.0f, 0.0f);
+	}
+
+	/**
+	 * Ширина, совпадающая с реальным пером {@link #applyGlyphs}: тот добавляет
+	 * на каждый глиф {@code thickness + spacing} сверх advance — без этих
+	 * параметров измерение было уже нарисованного текста (центрирование «плыло»).
+	 */
+	public float getWidth(String text, float size, float thickness, float spacing) {
 		int prevChar = -1;
 		float width = 0.0f;
 		for (int i = 0; i < text.length(); i++) {
@@ -70,7 +79,7 @@ public final class MsdfFont {
 				width += kerning.getOrDefault(_char, 0.0f) * size;
 			}
 			
-			width += glyph.getWidth(size);
+			width += glyph.getWidth(size) + thickness + spacing;
 			prevChar = _char;
 		}
 		

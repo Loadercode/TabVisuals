@@ -4,6 +4,7 @@ package com.loadercode.tabvisuals.gui.hud.elements.island.impl;
 import com.loadercode.tabvisuals.gui.Theme;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
+import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 import com.loadercode.tabvisuals.gui.music.MusicManager;
 import com.loadercode.tabvisuals.media.MediaBridge;
 import net.minecraft.client.gui.DrawContext;
@@ -493,9 +494,7 @@ public class MusicStatus extends IslandStatus implements QuickImports {
     private String formatTime(long ms) {
         if (ms <= 0) return "0:00";
         long totalSeconds = ms / 1000;
-        long minutes = totalSeconds / 60;
-        long seconds = totalSeconds % 60;
-        return String.format("%d:%02d", minutes, seconds);
+        return StringHelper.format_clock(totalSeconds / 60, totalSeconds % 60);
     }
 
     @Override

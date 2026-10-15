@@ -27,7 +27,8 @@ public final class ColorSetting extends Setting {
     }
 
     public void set(int argb) {
-        this.value = argb;
+        // alpha 0 = полностью невидимый HUD-элемент; трактуем как legacy RGB
+        this.value = (argb & 0xFF000000) == 0 ? argb | 0xFF000000 : argb;
     }
 
     public void reset() {

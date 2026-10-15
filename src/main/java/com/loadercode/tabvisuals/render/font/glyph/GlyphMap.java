@@ -92,9 +92,6 @@ public class GlyphMap {
             float advance = Math.max(0f, (float) exactBounds.getWidth());
             generatedChars++;
 
-            maxX = Math.max(maxX, currentX + width);
-            maxY = Math.max(maxY, currentY + height);
-
             if (charNX >= charsVert) {
                 currentX = 0;
                 currentY += currentRowMaxY + pixelPadding;
@@ -104,6 +101,13 @@ public class GlyphMap {
 
             currentRowMaxY = Math.max(currentRowMaxY, height);
             glyphs1.add(new Glyph(currentX, currentY, width, height, advance, currentChar, this));
+
+            // Габариты атласа считаем по ФАКТИЧЕСКОМУ месту укладки (после
+            // возможного переноса строки): раньше обновление шло до переноса,
+            // и высота текстуры недобирала высоту последнего ряда — нижние
+            // пиксели глифов последней строки обрезались при загрузке.
+            maxX = Math.max(maxX, currentX + width);
+            maxY = Math.max(maxY, currentY + height);
 
             currentX += width + pixelPadding;
             charNX++;

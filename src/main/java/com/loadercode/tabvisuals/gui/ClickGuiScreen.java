@@ -1,7 +1,6 @@
 // language: Java, file: ClickGuiScreen.java, target: Minecraft 1.21.4 Fabric, JDK 21
 package com.loadercode.tabvisuals.gui;
 
-import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.gui.config.ConfigManager;
 import com.loadercode.tabvisuals.gui.hud.HudRenderer;
 import com.loadercode.tabvisuals.gui.hud.NotificationManager;
@@ -164,6 +163,10 @@ public final class ClickGuiScreen extends Screen {
     // --- layout cache (from the last render pass) ---
     private final List<TabRect> tabs = new ArrayList<>();
     private final List<CardBounds> layout = new ArrayList<>();
+    /** Wrapped card descriptions per module id — descriptions never change at runtime. */
+    private final Map<String, List<String>> descCache = new HashMap<>();
+    /** Card height per module id, derived from the cached wrap. */
+    private final Map<String, Float> cardHeightCache = new HashMap<>();
     private final List<ThemeRow> themeRows = new ArrayList<>();
     private final List<CfgRow> cfgRows = new ArrayList<>();
     private final ScissorAssist scissor = new ScissorAssist();
@@ -187,8 +190,6 @@ public final class ClickGuiScreen extends Screen {
     private final Map<String, Boolean> sectionOpen = new HashMap<>();
     /** Eased slider read-out — the number counts up/down with the fill. */
     private final Map<String, Float> valueAnim = new HashMap<>();
-    /** Eased row hover tint, keyed by setting id. */
-    private final Map<String, Float> rowHover = new HashMap<>();
     /** Swatch pop pulse: 1 right after its colour changed, decays back to 0. */
     private final Map<String, Float> swatchPulse = new HashMap<>();
     /** Seconds since the screen opened — drives pulses (bind capture, swatches). */
@@ -200,6 +201,8 @@ public final class ClickGuiScreen extends Screen {
     private float cfgFieldX, cfgFieldY, cfgFieldW = 176, cfgFieldH = 15;
     private float cfgScroll, cfgSmooth, cfgListH;
     private int cfgTotal;
+    /** Config file names cached in-tab — the disk is read on switch/save/delete, not per frame. */
+    private final List<String> cfgNames = new ArrayList<>();
 
     // --- interaction state ---
     private DoubleSetting dragging2;
@@ -326,6 +329,7 @@ public final class ClickGuiScreen extends Screen {
             // the entrance carries the motion — don't also slide the whole grid
             smoothScroll = scrollByCat.getOrDefault(activeCategory, 0f);
             cfgSmooth = cfgScroll;
+            refreshConfigList(); // re-read the disk once per tab switch, not per frame
         }
         gridT += frameDt;
         animTime += frameDt;
@@ -365,8 +369,8 @@ public final class ClickGuiScreen extends Screen {
 
         openFade = clamp01(openT);
         float sc = openScale();
-        tmx = (mouseX - (winX + WIN_W / 2f)) / sc + (winX + WIN_W / 2f);
-        tmy = (mouseY - (winY + WIN_H / 2f)) / sc + (winY + WIN_H / 2f);
+        // same transform the input handlers apply — one source of truth for draw + hit-test
+        updateTransformedMouse(mouseX, mouseY);
 
         // full-frame dim grows in with the window (LoxeDLC: alpha 100 of 255)
         UiRender.rect(m, 0, 0, width, height, 0, UiRender.mulAlpha(0xFF000000, 0.39f * openFade));
@@ -545,6 +549,7 @@ public final class ClickGuiScreen extends Screen {
                     UiRender.mulAlpha(empty ? t.textSecondary() : t.text(), sa));
         } else {
             search = "";
+            searchFocused = false; // no field on this tab — don't keep capturing keys
         }
 
         // filtered modules: by category, or by name across all when searching
@@ -573,8 +578,20 @@ public final class ClickGuiScreen extends Screen {
             layout.add(new CardBounds(s, x, y, CARD_W, h));
             colY[col] += h + CARD_GAP;
         }
-        contentHeight = Math.max(colY[0], colY[1]) - CARD_GAP;
+        contentHeight = Math.max(0f, Math.max(colY[0], colY[1]) - CARD_GAP);
         viewportH = WIN_H - GRID_TOP - 6;
+        if (capturingMod != null) {
+            boolean stillVisible = false;
+            for (CardBounds cb : layout) {
+                if (cb.module == capturingMod) {
+                    stillVisible = true;
+                    break;
+                }
+            }
+            if (!stillVisible) {
+                capturingMod = null; // its card left the grid (tab switch / filter) — stop capturing invisibly
+            }
+        }
 
         float maxScroll = Math.max(0, contentHeight - viewportH);
         float scroll = Math.min(scrollByCat.getOrDefault(activeCategory, 0f), maxScroll);
@@ -587,16 +604,19 @@ public final class ClickGuiScreen extends Screen {
         for (int ci = 0; ci < layout.size(); ci++) {
             CardBounds cb = layout.get(ci);
             // staggered entrance after a category switch / on open: each card
-            // trails the previous one, sliding up and fading in
-            float p = clamp01((gridT - ci * 0.035f) / 0.26f);
-            float ce = 1f - (1f - p) * (1f - p) * (1f - p);
-            float enter = (1f - ce) * 10f;
+            // trails the previous one, sliding up and fading in. hitCard()
+            // applies the same offset, so clicks land on what is on screen.
             m.push();
-            m.translate(0, enter, 0);
-            drawCard(m, cb, smoothScroll, ce);
+            m.translate(0, entranceOffset(ci), 0);
+            drawCard(m, cb, smoothScroll, entranceProgress(ci));
             m.pop();
         }
         scissor.pop();
+
+        if (mods.isEmpty()) {
+            String hint = search.isEmpty() ? "Нет модулей в этой категории" : "Ничего не найдено";
+            F_BODY.drawString(m, hint, winX + GRID_X, winY + GRID_TOP + 8, t.textSecondary());
+        }
 
         // scrollbar on the right edge
         if (contentHeight > viewportH && viewportH > 10f) {
@@ -632,8 +652,24 @@ public final class ClickGuiScreen extends Screen {
 
     /** LoxeDLC module card: name, wrapped description, separator, glyphs, pill, bind. */
     private float cardHeight(ModuleStub mod) {
+        Float cached = cardHeightCache.get(mod.id());
+        if (cached != null) {
+            return cached;
+        }
         int lines = Math.max(1, wrapDesc(mod.description(), CARD_W - 30).size());
-        return 47 + (lines - 1) * 8;
+        float h = 47 + (lines - 1) * 8;
+        cardHeightCache.put(mod.id(), h);
+        return h;
+    }
+
+    /** Wrapped description of a card; cached because the text is immutable. */
+    private List<String> descLines(ModuleStub mod) {
+        List<String> cached = descCache.get(mod.id());
+        if (cached == null) {
+            cached = List.copyOf(wrapDesc(mod.description(), CARD_W - 30));
+            descCache.put(mod.id(), cached);
+        }
+        return cached;
     }
 
     private void drawCard(MatrixStack m, CardBounds cb, float scroll, float alpha) {
@@ -676,7 +712,7 @@ public final class ClickGuiScreen extends Screen {
 
         // description: first line tagged with the info glyph, continuations aligned
         // to the same text column so the block reads straight
-        List<String> lines = wrapDesc(mod.description(), w - 30);
+        List<String> lines = descLines(mod);
         int descCol = UiRender.mulAlpha(UiRender.withAlpha(t.textSecondary(), 186), alpha);
         int glyphCol = UiRender.mulAlpha(t.textSecondary(), alpha);
         float dy = y + 19;
@@ -712,7 +748,7 @@ public final class ClickGuiScreen extends Screen {
 
         // bind chip: key label, or the chain glyph when unbound
         String bindName = capturingMod == mod ? "..." : keyLabel(mod.bind());
-        float chipW = Math.max(12f, F_BODY.getStringWidth(bindName)) + 8;
+        float chipW = chipWidth(bindName);
         float chipX = x + w - 32 - chipW;
         UiRender.rect(m, chipX, rowY + 1, chipW, 10, 3, UiRender.mulAlpha(UiRender.withAlpha(t.text(), 80), alpha));
         if (mod.bind() < 0 && capturingMod != mod) {
@@ -1176,8 +1212,9 @@ public final class ClickGuiScreen extends Screen {
         F_ICON_B.drawString(m, "M", saveX + 5, centerBoxY(F_ICON_B, "M", cfgFieldY, cfgFieldH), 0xFFFFFFFF);
         m.pop();
 
-        // config cards, two per row
-        List<String> names = ConfigManager.listConfigs();
+        // config cards, two per row — the list is the cached snapshot
+        // (refreshed on tab switch and after every save/load/delete)
+        List<String> names = cfgNames;
         cfgTotal = names.size();
         float listTop = winY + 58;
         float listH = Math.max(0, WIN_H - 58 - 6);
@@ -1389,6 +1426,11 @@ public final class ClickGuiScreen extends Screen {
         renameBuf = customName;
         renameActive = true;
         renameBlink = 0f;
+        // the rename owns the keyboard — drop any other input owner
+        capturing = null;
+        capturingMod = null;
+        searchFocused = false;
+        configNameFocused = false;
     }
 
     private void commitRename() {
@@ -1398,6 +1440,10 @@ public final class ClickGuiScreen extends Screen {
         String clean = renameBuf.trim();
         if (!clean.isEmpty()) {
             customName = clean.length() > 18 ? clean.substring(0, 18) : clean;
+        } else {
+            // a cleared field rejects the rename — the old name stays, but the
+            // commit must not look like it was swallowed
+            NotificationManager.push("Theme ", customName, " rename ", "failed", 0xFFFF6B81);
         }
         renameActive = false;
         renameBuf = "";
@@ -1696,6 +1742,64 @@ public final class ClickGuiScreen extends Screen {
         return Math.abs(target - next) < 0.001f ? target : next;
     }
 
+    /**
+     * Transforms a raw screen mouse into the window's open-scale space.
+     * Called from render AND from every input handler, so a click that lands
+     * between two frames is hit-tested against exactly what was drawn.
+     */
+    private void updateTransformedMouse(double mouseX, double mouseY) {
+        float sc = openScale();
+        float cx = winX + WIN_W / 2f, cy = winY + WIN_H / 2f;
+        tmx = (mouseX - cx) / sc + cx;
+        tmy = (mouseY - cy) / sc + cy;
+    }
+
+    /** Keeps a grabbable slice of the window on screen while MMB-dragging. */
+    private void clampWindowPos() {
+        float minVisible = 60f;
+        winX = Math.max(-(WIN_W - minVisible), Math.min(width - minVisible, winX));
+        winY = Math.max(-(WIN_H - minVisible), Math.min(height - minVisible, winY));
+    }
+
+    /** 0..1 entrance progress of the card at index (staggered after a tab switch). */
+    private float entranceProgress(int index) {
+        float p = clamp01((gridT - index * 0.035f) / 0.26f);
+        return 1f - (1f - p) * (1f - p) * (1f - p);
+    }
+
+    /** Slide-up offset (px) paired with the entrance progress. */
+    private float entranceOffset(int index) {
+        return (1f - entranceProgress(index)) * 10f;
+    }
+
+    /** Width of a card's bind chip — shared by the draw and the hit test. */
+    private float chipWidth(String bindName) {
+        return Math.max(12f, F_BODY.getStringWidth(bindName)) + 8;
+    }
+
+    /** Re-reads the config list from disk and drops anims of buttons that vanished with it. */
+    private void refreshConfigList() {
+        cfgNames.clear();
+        cfgNames.addAll(ConfigManager.listConfigs());
+        pruneButtonAnims();
+    }
+
+    /**
+     * Config buttons are keyed by config name — deleting configs would grow
+     * btnHoverAnim/btnPressAnim forever, so stale keys are dropped on refresh.
+     */
+    private void pruneButtonAnims() {
+        btnHoverAnim.keySet().removeIf(this::staleCfgAnim);
+        btnPressAnim.keySet().removeIf(this::staleCfgAnim);
+    }
+
+    private boolean staleCfgAnim(String key) {
+        if (key.startsWith(CFG_LOAD)) {
+            return !cfgNames.contains(key.substring(CFG_LOAD.length()));
+        }
+        return key.startsWith(CFG_DEL) && !cfgNames.contains(key.substring(CFG_DEL.length()));
+    }
+
     // ------------------------------------------------- shared control easing
 
     /** Eased hover 0..1 of a control (k≈14 — a soft lift, not a snap). */
@@ -1830,6 +1934,11 @@ public final class ClickGuiScreen extends Screen {
     }
 
     private static float clamp01(float v) {
+        // NaN-safe like UiRender.clamp01: NaN slips both comparisons and would
+        // poison the alpha/scale/transform it feeds
+        if (Float.isNaN(v)) {
+            return 0f;
+        }
         return v < 0f ? 0f : v > 1f ? 1f : v;
     }
 
@@ -1898,8 +2007,10 @@ public final class ClickGuiScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // hit-test against the geometry of THIS event, not of the last frame
+        updateTransformedMouse(mouseX, mouseY);
         // MMB drag of the window, LoxeDLC-style
-        if (button == 2 && openT > 0.6f
+        if (button == 2 && !closing && openT > 0.6f
                 && tmx >= winX - 20 && tmx <= winX + WIN_W + 20 && tmy >= winY && tmy <= winY + WIN_H) {
             dragging = true;
             dragOffX = tmx - winX;
@@ -1908,7 +2019,8 @@ public final class ClickGuiScreen extends Screen {
         }
         // right-click on a card opens its settings popup (LoxeDLC ModuleSettingsWindow)
         if (button == 1) {
-            if (closing || openT < 0.9f || settingsView) {
+            // the picker is a modal — right-clicks must not leak to the cards behind it
+            if (closing || openT < 0.9f || settingsView || pickerOpen || pickerAnim > 0.01f) {
                 return true;
             }
             if (dropdown != null) {
@@ -1977,13 +2089,17 @@ public final class ClickGuiScreen extends Screen {
             return true;
         }
 
-        if (settingsView) {
+        // gate on the ease-out too: clicks must not fall through to the grid
+        // while the overlay is still fading over it
+        if (settingsView || settingsAnim > 0.01f) {
             if (UiRender.inside(tmx, tmy, gearX, gearY, gearSize, gearSize)) {
+                commitRename(); // closing via the gear must not lose the typed name
                 settingsView = false;
                 return true;
             }
             for (SwatchHit s : swatchHits) {
                 if (s.slot() != null && UiRender.inside(mouseX, mouseY, s.x(), s.y(), s.w(), s.h())) {
+                    commitRename(); // otherwise the rename keeps eating key input under the picker
                     openPicker(s.slot());
                     return true;
                 }
@@ -2020,7 +2136,10 @@ public final class ClickGuiScreen extends Screen {
 
         if (dropdown != null && dropRow != null) {
             String[] opts = dropRow.options();
-            if (UiRender.inside(tmx, tmy, dropX, dropY, dropW, Math.max(4f, dropPushH))) {
+            // the list is drawn inside the popup's clip — a click on the part
+            // clipped away by the viewport must not pick an invisible option
+            boolean inViewport = tmy >= popViewTop && tmy <= popViewTop + popViewH;
+            if (inViewport && UiRender.inside(tmx, tmy, dropX, dropY, dropW, Math.max(4f, dropPushH))) {
                 int idx = (int) ((tmy - dropY - 3) / DROP_ROW_H);
                 if (idx >= 0 && idx < opts.length
                         && dropY + 3 + (idx + 1) * DROP_ROW_H <= dropY + dropPushH) {
@@ -2039,6 +2158,9 @@ public final class ClickGuiScreen extends Screen {
                     searchFocused = false;
                     configNameFocused = false;
                     dropdown = null;
+                    capturing = null;
+                    capturingMod = null;
+                    closePopup(); // the popup was anchored to the previous tab's grid
                 }
                 return true;
             }
@@ -2058,6 +2180,10 @@ public final class ClickGuiScreen extends Screen {
         if (activeCategory == Category.RENDER || activeCategory == Category.MISC) {
             if (UiRender.inside(tmx, tmy, searchX, searchY, searchW, searchH)) {
                 searchFocused = true;
+                configNameFocused = false;
+                // one key event must not feed both a capture and a text field
+                capturing = null;
+                capturingMod = null;
                 return true;
             }
             searchFocused = false;
@@ -2114,6 +2240,8 @@ public final class ClickGuiScreen extends Screen {
                     if (UiRender.inside(tmx, tmy, fx, fy, FIELD_W, 14)) {
                         pressedBtn = r.key;
                         capturing = k2;
+                        searchFocused = false; // the captured key must not also type into a field
+                        configNameFocused = false;
                         return true;
                     }
                 }
@@ -2124,11 +2252,12 @@ public final class ClickGuiScreen extends Screen {
                 }
                 return true; // clicked a row body with no control on it
             }
-            // click outside the popup closes it
+            // click outside the popup closes it; a click inside its body but
+            // not on a control is swallowed — it must never reach the grid behind
             if (!UiRender.inside(tmx, tmy, popX, popY, popW, popPanelH)) {
                 closePopup();
-                return true;
             }
+            return true;
         }
 
         // module cards — pill / bind chip / toggle
@@ -2137,19 +2266,22 @@ public final class ClickGuiScreen extends Screen {
             ModuleStub mod = hit.module;
             pressedId = mod.id(); // press sink animation, cleared on release
             lastPressedId = pressedId;
-            float y = hit.y - smoothScroll;
+            // same Y the card is drawn at this frame (scroll + entrance slide)
+            float y = hit.y - smoothScroll + entranceOffset(layout.indexOf(hit));
             // toggle pill on the right of the bottom row
             if (UiRender.inside(tmx, tmy, hit.x + hit.w - 26, y + hit.h - 16, 20, 12)) {
                 mod.toggle();
                 NotificationManager.moduleToggle(mod.name(), mod.enabled());
                 return true;
             }
-            // bind chip → capture a key
-            String bindName = keyLabel(mod.bind());
-            float chipW = Math.max(12f, F_BODY.getStringWidth(bindName)) + 8;
+            // bind chip → capture a key (same label/width the card draws right now)
+            String bindName = capturingMod == mod ? "..." : keyLabel(mod.bind());
+            float chipW = chipWidth(bindName);
             float chipX = hit.x + hit.w - 32 - chipW;
             if (UiRender.inside(tmx, tmy, chipX, y + hit.h - 16, chipW, 12)) {
                 capturingMod = mod;
+                searchFocused = false; // the captured key must not also type into a field
+                configNameFocused = false;
                 return true;
             }
             // anywhere else on the card toggles the module
@@ -2170,8 +2302,10 @@ public final class ClickGuiScreen extends Screen {
         float scroll = smoothScroll;
         float top = winY + GRID_TOP;
         float bottom = top + viewportH;
-        for (CardBounds cb : layout) {
-            float y = cb.y - scroll;
+        for (int ci = 0; ci < layout.size(); ci++) {
+            CardBounds cb = layout.get(ci);
+            // the drawn card carries the entrance slide — hit-test the same rect
+            float y = cb.y - scroll + entranceOffset(ci);
             if (y + cb.h <= top || y >= bottom) {
                 continue;
             }
@@ -2242,9 +2376,11 @@ public final class ClickGuiScreen extends Screen {
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double deltaX, double deltaY) {
+        updateTransformedMouse(mouseX, mouseY);
         if (dragging && button == 2) {
             winX = (float) (tmx - dragOffX);
             winY = (float) (tmy - dragOffY);
+            clampWindowPos();
             return true;
         }
         if (pickerDrag != 0) {
@@ -2260,12 +2396,17 @@ public final class ClickGuiScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
-        if (settingsView || pickerOpen) {
-            return false;
+        if (closing) {
+            return true;
         }
-        float osc = openScale();
-        double tx = (mouseX - (winX + WIN_W / 2f)) / osc + (winX + WIN_W / 2f);
-        double ty = (mouseY - (winY + WIN_H / 2f)) / osc + (winY + WIN_H / 2f);
+        // gate on the fade-outs too — the wheel must not scroll the grid
+        // underneath a still-visible overlay or picker
+        if (settingsView || settingsAnim > 0.01f || pickerOpen || pickerAnim > 0.01f) {
+            return true;
+        }
+        updateTransformedMouse(mouseX, mouseY);
+        double tx = tmx;
+        double ty = tmy;
         dropdown = null;
         // the settings popup clips its rows — the wheel scrolls that viewport
         if (popupModule != null && !popupClosing
@@ -2288,9 +2429,36 @@ public final class ClickGuiScreen extends Screen {
         return true;
     }
 
+    /**
+     * One toast per config action, keyed to the real result: a failed
+     * save/load/delete must not look like a dead click. The caller passes the
+     * config the click actually touched (captured before any buffer or list is
+     * cleared), so a toast can never describe a different config than the one
+     * the action ran on.
+     */
+    private static void notifyConfig(String name, String okVerb, boolean ok) {
+        String label = name == null ? "" : name.trim();
+        if (label.isEmpty()) {
+            label = "..."; // a rejected empty name still owes the user an answer
+        }
+        if (ok) {
+            NotificationManager.configEvent(label, okVerb);
+            return;
+        }
+        String action = switch (okVerb) {
+            case "saved" -> "save";
+            case "loaded" -> "load";
+            default -> "delete";
+        };
+        NotificationManager.push("Config ", label, " failed to ", action, 0xFFFF6B81);
+    }
+
     private boolean clickConfigs(double mouseX, double mouseY) {
         if (UiRender.inside(tmx, tmy, cfgFieldX, cfgFieldY, cfgFieldW, cfgFieldH)) {
             configNameFocused = true;
+            searchFocused = false;
+            capturing = null;
+            capturingMod = null;
             return true;
         }
         configNameFocused = false;
@@ -2298,25 +2466,28 @@ public final class ClickGuiScreen extends Screen {
         float saveX = winX + WIN_W - 16 - saveW;
         if (UiRender.inside(tmx, tmy, saveX, cfgFieldY, saveW, cfgFieldH)) {
             pressedBtn = CFG_SAVE;
-            if (ConfigManager.saveConfig(configName)) {
-                NotificationManager.configEvent(configName, "saved");
-            }
+            String name = configName; // the toast names the config this click saved
+            notifyConfig(name, "saved", ConfigManager.saveConfig(name));
             configName = "";
+            refreshConfigList(); // a new file may have appeared on disk
             return true;
         }
+        // buttons of rows clipped by the list viewport are not clickable
+        float listTop = winY + 58;
         for (CfgRow r : cfgRows) {
+            boolean inView = r.btnY >= listTop && r.btnY + 12 <= listTop + cfgListH;
+            if (!inView) {
+                continue;
+            }
             if (UiRender.inside(tmx, tmy, r.loadX, r.btnY, 16, 12)) {
                 pressedBtn = CFG_LOAD + r.name;
-                if (ConfigManager.loadConfig(r.name)) {
-                    NotificationManager.configEvent(r.name, "loaded");
-                }
+                notifyConfig(r.name, "loaded", ConfigManager.loadConfig(r.name));
                 return true;
             }
             if (UiRender.inside(tmx, tmy, r.delX, r.btnY, 16, 12)) {
                 pressedBtn = CFG_DEL + r.name;
-                if (ConfigManager.deleteConfig(r.name)) {
-                    NotificationManager.configEvent(r.name, "deleted");
-                }
+                notifyConfig(r.name, "deleted", ConfigManager.deleteConfig(r.name));
+                refreshConfigList(); // the row is gone — refresh before the next frame's hit list
                 return true;
             }
         }
@@ -2344,6 +2515,9 @@ public final class ClickGuiScreen extends Screen {
                 renameBlink = 0f;
             }
             return true;
+        }
+        if (capturing != null || capturingMod != null) {
+            return true; // the key belongs to the bind capture, not to a text field
         }
         if (Character.isISOControl(chr)) {
             return false;
@@ -2420,11 +2594,11 @@ public final class ClickGuiScreen extends Screen {
             }
             if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
                 if (configNameFocused) {
-                    if (ConfigManager.saveConfig(configName)) {
-                        NotificationManager.configEvent(configName, "saved");
-                    }
+                    String name = configName;
+                    notifyConfig(name, "saved", ConfigManager.saveConfig(name));
                     configName = "";
                     configNameFocused = false;
+                    refreshConfigList(); // the new file must appear in the list
                 }
                 return true;
             }
@@ -2439,6 +2613,10 @@ public final class ClickGuiScreen extends Screen {
                 settingsView = false;
                 return true;
             }
+            if (dropdown != null) {
+                dropdown = null; // first Esc closes the list, second closes the popup
+                return true;
+            }
             if (popupModule != null) {
                 closePopup();
                 return true;
@@ -2449,6 +2627,13 @@ public final class ClickGuiScreen extends Screen {
 
     @Override
     public void removed() {
+        // the screen can be swapped mid-interaction (disconnect, F11…) —
+        // release every held input state before the autosave
+        dragging = false;
+        dragging2 = null;
+        pickerDrag = 0;
+        pressedId = null;
+        pressedBtn = null;
         ConfigManager.autosave();
     }
 
@@ -2470,6 +2655,14 @@ public final class ClickGuiScreen extends Screen {
             dropPushH = 0f;
             popupModule = null; // no point animating the popup out with the panel
             popupClosing = false;
+            // no held input may outlive the screen (stuck press / drag / capture)
+            dragging = false;
+            dragging2 = null;
+            pickerDrag = 0;
+            pressedId = null;
+            pressedBtn = null;
+            searchFocused = false;
+            configNameFocused = false;
         }
     }
 

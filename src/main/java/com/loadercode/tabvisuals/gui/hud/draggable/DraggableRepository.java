@@ -47,6 +47,19 @@ public class DraggableRepository {
         return draggable;
     }
 
+    /** Есть ли элемент с таким именем (регистронезависимо) — для prune в HudEditor. */
+    public boolean has_name(String name) {
+        if (name == null) {
+            return false;
+        }
+        for (AbstractDraggable d : draggable) {
+            if (d.getName().equalsIgnoreCase(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public <T extends AbstractDraggable> T get(String name) {
         return draggable.stream()
                 .filter(module -> module.getName().equalsIgnoreCase(name))

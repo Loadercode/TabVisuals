@@ -7,6 +7,7 @@ import com.loadercode.tabvisuals.render.atlasfont.providers.ColorProvider;
 import com.loadercode.tabvisuals.render.atlasfont.providers.ResourceProvider;
 import com.loadercode.tabvisuals.render.systemrender.renderers.IRenderer;
 import net.minecraft.client.gl.Defines;
+import net.minecraft.client.gl.GlUniform;
 import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.gl.ShaderProgramKey;
 import net.minecraft.client.render.BufferBuilder;
@@ -15,8 +16,6 @@ import net.minecraft.client.render.Tessellator;
 import net.minecraft.client.render.VertexFormat.DrawMode;
 import net.minecraft.client.render.VertexFormats;
 import org.joml.Matrix4f;
-
-import java.util.Objects;
 
 
 public record BuiltText(
@@ -36,26 +35,36 @@ public record BuiltText(
 	
 	@Override
     public void render(Matrix4f matrix, float x, float y, float z) {
+		boolean outlineEnabled = (this.outlineThickness > 0.0f);
+		ShaderProgram shader = RenderSystem.setShader(MSDF_FONT_SHADER_KEY);
+		GlUniform rangeUniform = ShaderUniforms.get(shader, "msdf_font", "Range");
+		GlUniform thicknessUniform = ShaderUniforms.get(shader, "msdf_font", "Thickness");
+		GlUniform smoothnessUniform = ShaderUniforms.get(shader, "msdf_font", "Smoothness");
+		GlUniform outlineUniform = ShaderUniforms.get(shader, "msdf_font", "Outline");
+		GlUniform outlineThicknessUniform = outlineEnabled ? ShaderUniforms.get(shader, "msdf_font", "OutlineThickness") : null;
+		GlUniform outlineColorUniform = outlineEnabled ? ShaderUniforms.get(shader, "msdf_font", "OutlineColor") : null;
+		if (!ShaderUniforms.allPresent(rangeUniform, thicknessUniform, smoothnessUniform, outlineUniform)
+				|| (outlineEnabled && !ShaderUniforms.allPresent(outlineThicknessUniform, outlineColorUniform))) {
+			// uniform'ов нет — пропускаем draw-call, GL-состояние ещё не тронуто
+			return;
+		}
+		rangeUniform.set(this.font.getAtlas().range());
+		thicknessUniform.set(this.thickness);
+		smoothnessUniform.set(this.smoothness);
+		outlineUniform.set(outlineEnabled ? 1 : 0);
+
+		if (outlineEnabled) {
+			outlineThicknessUniform.set(this.outlineThickness);
+			float[] outlineComponents = ColorProvider.normalize(this.outlineColor);
+			outlineColorUniform.set(outlineComponents[0], outlineComponents[1],
+				outlineComponents[2], outlineComponents[3]);
+		}
+
 		RenderSystem.enableBlend();
 		RenderSystem.defaultBlendFunc();
 		RenderSystem.disableCull();
 
 		RenderSystem.setShaderTexture(0, this.font.getTextureId());
-		
-		boolean outlineEnabled = (this.outlineThickness > 0.0f);
-		ShaderProgram shader = RenderSystem.setShader(MSDF_FONT_SHADER_KEY);
-        assert shader != null;
-        Objects.requireNonNull(shader.getUniform("Range")).set(this.font.getAtlas().range());
-		Objects.requireNonNull(shader.getUniform("Thickness")).set(this.thickness);
-		Objects.requireNonNull(shader.getUniform("Smoothness")).set(this.smoothness);
-		Objects.requireNonNull(shader.getUniform("Outline")).set(outlineEnabled ? 1 : 0);
-
-		if (outlineEnabled) {
-			Objects.requireNonNull(shader.getUniform("OutlineThickness")).set(this.outlineThickness);
-			float[] outlineComponents = ColorProvider.normalize(this.outlineColor);
-			Objects.requireNonNull(shader.getUniform("OutlineColor")).set(outlineComponents[0], outlineComponents[1],
-				outlineComponents[2], outlineComponents[3]);
-		}
 		
 		BufferBuilder builder = Tessellator.getInstance().begin(DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR);
 		this.font.applyGlyphs(matrix, builder, this.text, this.size,

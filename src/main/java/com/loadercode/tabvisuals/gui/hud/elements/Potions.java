@@ -83,7 +83,10 @@ public class Potions extends AbstractDraggable {
             RegistryEntry<StatusEffect> id = inst.getEffectType();
             activeNow.add(id);
             if (known.add(id)) {
-                markEffectForRemoval(id);
+                // Выцветшая строка того же эффекта заменяется новой — без
+                // двух строк одного зелья в списке (known очищается при
+                // неактивности, пока анимация убытия ещё идёт).
+                list.removeIf(p -> p.effect.getEffectType().equals(id));
                 list.add(new Potion(new StatusEffectInstance(inst), new Decelerate().setMs(150).setValue(1.0F),
                         System.currentTimeMillis()));
             }
@@ -98,7 +101,10 @@ public class Potions extends AbstractDraggable {
         list.removeIf(p -> p.anim.isFinished(Direction.BACKWARDS));
         activeEffectCount = 0;
         for (Potion potion : list) {
-            potion.effect.update(mc.player, null);
+            // Runnable, а не null: по истечении копии эффекта vanilla зовёт
+            // overwriteCallback.run() — с null это NPE каждый раз, когда
+            // эффект заканчивается (Yarn 1.21.4: update(LivingEntity, Runnable)).
+            potion.effect.update(mc.player, () -> {});
             if (!potion.anim.isFinished(Direction.BACKWARDS)) {
                 activeEffectCount++;
             }
@@ -183,7 +189,9 @@ public class Potions extends AbstractDraggable {
             int textAlpha = (int) (255 * rowStagger);
             int colorWithAlpha = ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
             int color = ColorAssist.multAlpha(ColorAssist.getText(), rowStagger);
-            int colorWithAlphaRectangle = ColorAssist.rgba((textColor >> 16) & 205, (textColor >> 8) & 205, textColor & 205, textAlpha - 125);
+            // textAlpha-125 уходил в отрицательный диапазон, а rgba делает a<<24:
+            // отрицательная альфа оборачивалась в почти непрозрачную (мерцание разделителя)
+            int colorWithAlphaRectangle = ColorAssist.rgba((textColor >> 16) & 205, (textColor >> 8) & 205, textColor & 205, Math.max(0, textAlpha - 125));
             matrix.push();
             matrix.translate(rowSlide, 0f, 0f);
             Calculate.scale(matrix, centerX, centerY, 1, 1, () -> {
@@ -221,7 +229,9 @@ public class Potions extends AbstractDraggable {
                 textAlpha = (int) (textAlpha * rowStagger);
                 int colorWithAlpha = isBadEffect ? ColorAssist.rgba(255, 85, 75, textAlpha) : ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
                 int color = ColorAssist.multAlpha(ColorAssist.getText(), rowStagger);
-                int colorWithAlphaRectangle = isBadEffect ? ColorAssist.rgba(255, 85, 75, textAlpha - 125) : ColorAssist.rgba((textColor >> 16) & 205, (textColor >> 8) & 205, textColor & 205, textAlpha - 125);
+                int colorWithAlphaRectangle = isBadEffect
+                        ? ColorAssist.rgba(255, 85, 75, Math.max(0, textAlpha - 125))
+                        : ColorAssist.rgba((textColor >> 16) & 205, (textColor >> 8) & 205, textColor & 205, Math.max(0, textAlpha - 125));
                 matrix.push();
                 matrix.translate(rowSlide, 0f, 0f);
                 Calculate.scale(matrix, centerX, centerY, 1, animation, () -> {

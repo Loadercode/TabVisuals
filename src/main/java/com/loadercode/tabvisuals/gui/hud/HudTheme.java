@@ -115,6 +115,9 @@ public final class HudTheme {
 
     public static void flushFrameCache() {
         valid = false;
+        // кадровая согласованность палитры GUI: Theme пересчитывает интерполяцию
+        // один раз за кадр, все вызовы get() внутри кадра отдают один инстанс
+        com.loadercode.tabvisuals.gui.Theme.flush_frame_cache();
     }
 
     private static void ensure() {
@@ -269,8 +272,13 @@ public final class HudTheme {
         return ((a & 0xFF) << 24) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
     }
 
+    /**
+     * Alpha 0..255: вне диапазона зажимается, а не берётся по модулю —
+     * то же правило, что {@code UiRender.withAlpha} (256 давал невидимость).
+     */
     public static int withAlpha(int rgb, int a) {
-        return (rgb & 0x00FFFFFF) | ((a & 0xFF) << 24);
+        int clamped = a < 0 ? 0 : (a > 255 ? 255 : a);
+        return (rgb & 0x00FFFFFF) | (clamped << 24);
     }
 
     private static int mix(int a, int b, float k) {
@@ -282,6 +290,7 @@ public final class HudTheme {
     }
 
     private static float clamp(float v, float min, float max) {
-        return v < min ? min : v > max ? max : v;
+        // NaN из старого конфига (битый слайдер) уходит в min, а не пропускается
+        return Float.isNaN(v) || v < min ? min : v > max ? max : v;
     }
 }

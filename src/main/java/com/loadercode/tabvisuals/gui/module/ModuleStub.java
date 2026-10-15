@@ -80,7 +80,10 @@ public final class ModuleStub {
     }
 
     public ModuleStub bind(int glfwKey) {
-        this.bind = glfwKey;
+        // значение вне диапазона GLFW из старого конфига → unbound, а не мусор
+        this.bind = (glfwKey == GLFW.GLFW_KEY_UNKNOWN
+                || (glfwKey >= GLFW.GLFW_MOUSE_BUTTON_1 && glfwKey <= GLFW.GLFW_KEY_LAST))
+                ? glfwKey : GLFW.GLFW_KEY_UNKNOWN;
         return this;
     }
 

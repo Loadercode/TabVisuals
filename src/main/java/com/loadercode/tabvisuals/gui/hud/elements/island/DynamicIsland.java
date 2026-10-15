@@ -5,6 +5,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.Identifier;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
+import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.island.impl.*;
 import com.loadercode.tabvisuals.gui.hud.Hud;
 import com.loadercode.tabvisuals.gui.hud.compat.Instance;
@@ -98,6 +99,10 @@ public class DynamicIsland extends AbstractDraggable {
         x = screenW / 2f - currentWidth / 2f;
         setX((int) x);
         setY((int) y);
+        // Хитбокс редактора/клика — по СГЛАЖЕННЫМ размерам этого кадра, иначе
+        // он отставал на кадр и не совпадал с нарисованным островком
+        setWidth((int) currentWidth);
+        setHeight((int) currentHeight);
 
         if (prevStatus != activeStatus) {
             prevStatus = activeStatus;
@@ -212,7 +217,7 @@ public class DynamicIsland extends AbstractDraggable {
             // Один вызов: два отдельных LocalTime.now() могли разделиться
             // границей суток и дать «23:00» вместо «0:00».
             java.time.LocalTime localTime = java.time.LocalTime.now();
-            cachedTime = String.format("%d:%02d", localTime.getHour(), localTime.getMinute());
+            cachedTime = StringHelper.format_clock(localTime.getHour(), localTime.getMinute());
             lastTimeUpdate = now;
         }
         return cachedTime;

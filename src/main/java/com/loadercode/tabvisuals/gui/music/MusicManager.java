@@ -1,6 +1,7 @@
 // language: Java, file: MusicManager.java, target: Minecraft 1.21.4 Fabric, JDK 21
 package com.loadercode.tabvisuals.gui.music;
 
+import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.media.DiscordBridge;
 import com.loadercode.tabvisuals.media.LrcClient;
 import com.loadercode.tabvisuals.media.MediaBridge;
@@ -49,9 +50,13 @@ public final class MusicManager {
         MediaBridge.start();
         DiscordBridge.start();
         MediaBridge.addListener(s -> {
+            long id = s.trackId();
             if (s.active() && s.endMs() > 0) {
-                LrcClient.request(s.title(), s.artist(), s.endMs(), result -> lyrics = result);
-            } else {
+                // результат применяем только если трек не сменился — иначе
+                // ответ на старый запрос затёр бы текст нового трека
+                LrcClient.request(s.title(), s.artist(), s.endMs(),
+                        result -> { if (MediaBridge.current().trackId() == id) lyrics = result; });
+            } else if (!s.active()) {
                 lyrics = LrcClient.Lyrics.EMPTY;
             }
         });
@@ -127,10 +132,14 @@ public final class MusicManager {
             if (lyrics != LrcClient.Lyrics.EMPTY) lyrics = LrcClient.Lyrics.EMPTY;
             return;
         }
+        // без длительности lrclib не найдёт совпадение, а ключ зафиксировался бы
+        // навсегда — ждём тика, на котором endMs станет известен
+        if (s.endMs() <= 0) return;
         long id = s.trackId();
         if (lyricsForTrack == id) return;
         lyricsForTrack = id;
-        LrcClient.request(s.title(), s.artist(), s.endMs(), result -> lyrics = result);
+        LrcClient.request(s.title(), s.artist(), s.endMs(),
+                result -> { if (MediaBridge.current().trackId() == id) lyrics = result; });
     }
 
     // --- Discord profile row -------------------------------------------------
@@ -171,7 +180,11 @@ public final class MusicManager {
     /** Decodes the captured cover file once per track, off-thread, registers it on the client thread. */
     private static void syncCover() {
         MediaBridge.Snapshot s = track();
-        if (s.trackId() == 0) return;
+        if (s.trackId() == 0) {
+            // сессия закончилась — старая обложка не должна висеть в памяти
+            if (coverTex != null || prevCoverTex != null) dropCover();
+            return;
+        }
         if (coverForTrack != s.trackId()) {
             coverForTrack = s.trackId();
             coverFetchDone = false;
@@ -198,9 +211,24 @@ public final class MusicManager {
                             img.close();
                             return;
                         }
-                        if (prevCoverTex != null) prevCoverTex.close();
-                        prevCoverTex = new NativeImageBackedTexture(img);
-                        mc.getTextureManager().registerTexture(COVER_ID, prevCoverTex);
+                        NativeImageBackedTexture tex = null;
+                        try {
+                            tex = new NativeImageBackedTexture(img);
+                            // TextureManager не закрывает вытесненную текстуру —
+                            // снимаем старую сами, иначе NativeImage течёт по трекам
+                            if (prevCoverTex != null) {
+                                mc.getTextureManager().destroyTexture(COVER_ID);
+                                prevCoverTex.close();
+                            }
+                            prevCoverTex = tex;
+                            mc.getTextureManager().registerTexture(COVER_ID, tex);
+                        } catch (Throwable t2) {
+                            // upload упал — картинка не должна утекать
+                            if (tex != null) tex.close(); else img.close();
+                            if (prevCoverTex == tex) prevCoverTex = null;
+                            TabVisualsClient.LOGGER.debug("cover register failed", t2);
+                            return;
+                        }
                         // размеры — до публикации id: читатель не увидит новую
                         // текстуру со старыми/нулевыми габаритами
                         coverSize = img.getWidth();
@@ -230,6 +258,9 @@ public final class MusicManager {
     /** Client thread: frees the registered cover texture when nothing draws it. */
     private static void dropCover() {
         if (prevCoverTex != null) {
+            // destroyTexture убирает запись из карты TextureManager, close —
+            // освобождает NativeImage (двойной glDeleteTextures GL игнорирует)
+            MinecraftClient.getInstance().getTextureManager().destroyTexture(COVER_ID);
             prevCoverTex.close();
             prevCoverTex = null;
         }
@@ -252,10 +283,15 @@ public final class MusicManager {
                 throw new IOException("unsupported cover format");
             }
             NativeImage img = new NativeImage(bi.getWidth(), bi.getHeight(), false);
-            for (int y = 0; y < bi.getHeight(); y++) {
-                for (int x = 0; x < bi.getWidth(); x++) {
-                    img.setColorArgb(x, y, bi.getRGB(x, y));
+            try {
+                for (int y = 0; y < bi.getHeight(); y++) {
+                    for (int x = 0; x < bi.getWidth(); x++) {
+                        img.setColorArgb(x, y, bi.getRGB(x, y));
+                    }
                 }
+            } catch (RuntimeException e) {
+                img.close(); // нативная память не утекает при сбое конверсии
+                throw e;
             }
             return img;
         }

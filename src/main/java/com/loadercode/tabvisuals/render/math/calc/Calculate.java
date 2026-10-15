@@ -80,6 +80,8 @@ public class Calculate implements QuickImports {
     }
     public float textScrolling(float textWidth) {
         int speed = (int) (textWidth * 75);
+        // speed <= 1 (пустой/критически узкий текст) → % 0 ронял рендер-поток ArithmeticException.
+        if (speed <= 1) return 0f;
         return (float) MathHelper.clamp((System.currentTimeMillis() % speed * Math.PI / speed), 0, 1) * textWidth;
     }
 

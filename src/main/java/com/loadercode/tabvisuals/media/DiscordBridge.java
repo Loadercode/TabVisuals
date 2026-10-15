@@ -37,12 +37,18 @@ public final class DiscordBridge {
     private static final int OP_CLOSE = 4;
     private static final int OP_HELLO = 5;
 
+    /** Sanity cap for the avatar download — the CDN sends a ~64 KB png. */
+    private static final int MAX_AVATAR_BYTES = 8 << 20;
+
     private static final AtomicBoolean STARTED = new AtomicBoolean();
     private static volatile boolean ready;
     private static volatile String nick = "";
     private static volatile String globalName = "";
     private static volatile Identifier avatar;
-    private static volatile String avatarUrl = "";
+    /** URL whose texture is currently registered — skips pointless re-downloads. */
+    private static volatile String loadedAvatarUrl = "";
+    /** Client thread only: previous avatar texture, closed on replacement. */
+    private static NativeImageBackedTexture prevAvatarTex;
 
     private DiscordBridge() {
     }
@@ -71,17 +77,26 @@ public final class DiscordBridge {
     private static void run() {
         while (!Thread.currentThread().isInterrupted()) {
             boolean connected = false;
-            for (int i = 0; i < 10 && !connected; i++) {
-                try (RandomAccessFile pipe = openPipe(i)) {
-                    connected = session(pipe);
-                } catch (IOException e) {
-                    // pipe not present / Discord gone — try next slot
+            try {
+                for (int i = 0; i < 10 && !connected; i++) {
+                    try (RandomAccessFile pipe = openPipe(i)) {
+                        connected = session(pipe);
+                    } catch (IOException e) {
+                        // pipe not present / Discord gone — try next slot
+                    }
                 }
+            } catch (Throwable t) {
+                // STARTED blocks a restart — the loop must survive anything,
+                // otherwise one bad frame kills the bridge for the session
+                TabVisualsClient.LOGGER.debug("Discord IPC loop failed: {}", t.toString());
             }
+            boolean wasReady = ready; // сессия дошла до READY — Discord жив, переподключаемся быстро
             if (ready) TabVisualsClient.LOGGER.info("Discord IPC disconnected");
             ready = false;
             try {
-                Thread.sleep(connected ? 3000 : 15000);
+                // a working session that dropped → 3s (Discord is restarting);
+                // pipes never found → 15s: no tight reconnect hammering
+                Thread.sleep(connected || wasReady ? 3000 : 15000);
             } catch (InterruptedException e) {
                 break;
             }
@@ -131,6 +146,7 @@ public final class DiscordBridge {
 
     private static void handleReady(JsonObject msg) {
         try {
+            if (ready) return; // повторный READY на том же коннекте — уже готовы
             // READY is a DISPATCH event: {"cmd":"DISPATCH","data":{...,"user":{...}},"evt":"READY"}
             JsonObject data = msg.has("payload") ? msg.getAsJsonObject("payload").getAsJsonObject("data")
                                                  : msg.getAsJsonObject("data");
@@ -141,7 +157,6 @@ public final class DiscordBridge {
             String id = str(user, "id");
             String url = hash.isEmpty() ? ""
                     : "https://cdn.discordapp.com/avatars/" + id + "/" + hash + ".png?size=128";
-            avatarUrl = url;
             ready = true;
             TabVisualsClient.LOGGER.info("Discord IPC ready: {} ({})", nick(), id);
             if (!url.isBlank()) downloadAvatar(url);
@@ -151,6 +166,7 @@ public final class DiscordBridge {
     }
 
     private static void downloadAvatar(String url) {
+        if (url.equals(loadedAvatarUrl) && avatar != null) return; // уже загружено
         Thread t = new Thread(() -> {
             try {
                 byte[] png = httpGet(url);
@@ -159,9 +175,26 @@ public final class DiscordBridge {
                 roundMask(img);
                 Identifier id = Identifier.of("tabvisuals", "discord_avatar");
                 MinecraftClient.getInstance().execute(() -> {
-                    MinecraftClient.getInstance().getTextureManager()
-                            .registerTexture(id, new NativeImageBackedTexture(img));
-                    avatar = id;
+                    NativeImageBackedTexture tex = null;
+                    try {
+                        tex = new NativeImageBackedTexture(img);
+                        MinecraftClient mc = MinecraftClient.getInstance();
+                        // TextureManager не закрывает вытесненную текстуру —
+                        // снимаем старую сами, иначе NativeImage течёт на каждый
+                        // реконнект
+                        if (prevAvatarTex != null) {
+                            mc.getTextureManager().destroyTexture(id);
+                            prevAvatarTex.close();
+                        }
+                        mc.getTextureManager().registerTexture(id, tex);
+                        prevAvatarTex = tex;
+                        loadedAvatarUrl = url;
+                        avatar = id;
+                    } catch (Throwable t2) {
+                        // картинка не должна утекать, если upload упал
+                        if (tex != null) tex.close(); else img.close();
+                        TabVisualsClient.LOGGER.debug("avatar register failed: {}", t2.toString());
+                    }
                 });
             } catch (Exception e) {
                 TabVisualsClient.LOGGER.debug("avatar download failed: {}", e.toString());
@@ -197,7 +230,14 @@ public final class DiscordBridge {
             if (conn.getResponseCode() != 200) return null;
             try (InputStream in = conn.getInputStream();
                  ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
-                in.transferTo(bos);
+                byte[] buf = new byte[8192];
+                long total = 0;
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    total += n;
+                    if (total > MAX_AVATAR_BYTES) return null; // не душим OOM на мусорном ответе
+                    bos.write(buf, 0, n);
+                }
                 return bos.toByteArray();
             }
         } finally {

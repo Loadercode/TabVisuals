@@ -36,6 +36,8 @@ public class TotemCounterHud extends AbstractDraggable {
     private long roll_start_ns;       // прокрутка числа между значениями
     private int last_count = -1;
     private int roll_from;
+    /** Счётчик тотемов, обновляемый в tick() (см. countTotems). */
+    private int cachedTotemCount;
 
     public TotemCounterHud() {
         super("Totem Counter", 970, 532, 44, 20, true);
@@ -51,10 +53,17 @@ public class TotemCounterHud extends AbstractDraggable {
     }
 
     @Override
+    public void tick() {
+        // Считаем раз в тик, а не каждый кадр: обход инвентаря (41 слот) на
+        // каждый кадр избыточен, латентность в один тик незаметна на анимациях
+        cachedTotemCount = countTotems();
+    }
+
+    @Override
     public void drawDraggable(DrawContext context) {
         if (mc.player == null) return;
 
-        int totemCount = countTotems();
+        int totemCount = cachedTotemCount;
         long now_ns = System.nanoTime();
         track_animations(totemCount, now_ns);
 

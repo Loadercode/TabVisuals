@@ -3,13 +3,13 @@ package com.loadercode.tabvisuals.gui.account;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
+import com.mojang.authlib.yggdrasil.ProfileResult;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
@@ -18,6 +18,8 @@ import net.minecraft.client.network.ClientConnectionState;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.OtherClientPlayerEntity;
 import net.minecraft.client.network.PlayerListEntry;
+import net.minecraft.client.render.entity.EntityRenderDispatcher;
+import net.minecraft.client.session.Session;
 import net.minecraft.client.session.telemetry.TelemetrySender;
 import net.minecraft.client.session.telemetry.WorldSession;
 import net.minecraft.client.util.math.MatrixStack;
@@ -43,6 +45,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.lang.reflect.Field;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -53,6 +58,7 @@ import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -81,16 +87,30 @@ public final class AccountRenderer {
     private static final Map<String, GameProfile> PROFILE_CACHE = new ConcurrentHashMap<>();
     /** Nicks a fetch is already running for (no duplicate threads). */
     private static final Set<String> RESOLVING = ConcurrentHashMap.newKeySet();
+    /** Epoch ms of the last failed fetch per nick — drives the retry backoff. */
+    private static final Map<String, Long> RESOLVE_FAILED = new ConcurrentHashMap<>();
+    /** One shared client — a new HttpClient per fetch leaks selector threads. */
+    private static final HttpClient HTTP =
+            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    /** Retry a failed nick resolve after this long (the nick stays selected). */
+    private static final long RESOLVE_RETRY_MS = 15_000L;
     /** Disk cache, lazily loaded once: lowercase nick → json entry. */
     private static volatile JsonObject diskCache;
 
     // ------------------------------------------------------ runtime state
 
-    private String nick = "";
+    /** Volatile: resolve worker threads read it to decide the pending swap. */
+    private volatile String nick = "";
     private GameProfile profile;
     /** Freshly resolved profile waiting for the render thread to swap it in. */
     private volatile GameProfile pendingProfile;
     private final Map<String, OtherClientPlayerEntity> entities = new HashMap<>();
+    /** Profiles whose entity creation threw once — never retried (no log spam). */
+    private final Set<String> entityFailed = ConcurrentHashMap.newKeySet();
+    /** Sticky: the fake world failed to build — the preview stays off. */
+    private static volatile boolean previewWorldFailed;
+    /** Log the preview render failure once, not once per frame. */
+    private boolean renderErrorLogged;
 
     // rotation / animation state
     private float yaw = NEUTRAL_YAW;
@@ -129,10 +149,10 @@ public final class AccountRenderer {
             return;
         }
         MinecraftClient mc = MinecraftClient.getInstance();
-        GameProfile session = mc.getGameProfile();
-        if (session != null && session.getName() != null && session.getName().equalsIgnoreCase(n)) {
+        Session session = mc.getSession();
+        if (session != null && session.getUsername().equalsIgnoreCase(n)) {
             // the real session account — its profile already carries the textures
-            profile = session;
+            profile = sessionProfile(mc);
             pendingProfile = null;
             return;
         }
@@ -155,10 +175,42 @@ public final class AccountRenderer {
         // resolve the Mojang profile in the background
         profile = offlineProfile(n);
         pendingProfile = null;
-        if (RESOLVING.add(key)) {
-            Thread t = new Thread(() -> resolveRemote(n), "tabvisuals-skin");
-            t.setDaemon(true);
-            t.start();
+        Long failedAt = RESOLVE_FAILED.get(key);
+        // no attempt yet, or the last one failed long enough ago to retry
+        if (failedAt == null || System.currentTimeMillis() - failedAt >= RESOLVE_RETRY_MS) {
+            startResolve(n, key);
+        }
+    }
+
+    /** Spawns one background resolve for the nick (deduped via RESOLVING). */
+    private void startResolve(String name, String key) {
+        if (!RESOLVING.add(key)) {
+            return;
+        }
+        Thread t = new Thread(() -> resolveRemote(name), "tabvisuals-skin");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * Re-requests a nick whose fetch failed (offline launch, rate limit): the
+     * offline model stays until a retry succeeds. Called per frame; the backoff
+     * + RESOLVING gate keep it to at most one request per RESOLVE_RETRY_MS.
+     */
+    private void retryResolve() {
+        String n = nick;
+        if (n.isEmpty() || PROFILE_CACHE.containsKey(n.toLowerCase(Locale.ROOT))) {
+            return;
+        }
+        Session s = MinecraftClient.getInstance().getSession();
+        if (s != null && s.getUsername().equalsIgnoreCase(n)) {
+            return;   // the session account renders from its own profile
+        }
+        String key = n.toLowerCase(Locale.ROOT);
+        Long failedAt = RESOLVE_FAILED.get(key);
+        if (failedAt != null && System.currentTimeMillis() - failedAt >= RESOLVE_RETRY_MS) {
+            RESOLVE_FAILED.remove(key, failedAt);
+            startResolve(n, key);
         }
     }
 
@@ -168,24 +220,81 @@ public final class AccountRenderer {
         return new GameProfile(uuid, name);
     }
 
+    /** MinecraftClient.gameProfileFuture, located once by its generic type. */
+    private static Field profileFutureField;
+    private static boolean profileFutureFieldFailed;
+
+    /**
+     * Non-blocking stand-in for MinecraftClient.getGameProfile(): that one
+     * joins gameProfileFuture, which runs an uncached sessionserver fetch —
+     * on a dead network the render thread freezes, and a failed fetch makes
+     * join() throw. Uses the resolved value only when it is already done and
+     * still belongs to the current session (AccountManager.apply swaps the
+     * session, the stale future keeps the old account); otherwise builds a
+     * plain uuid+name profile from the session — same fallback as vanilla.
+     */
+    private static GameProfile sessionProfile(MinecraftClient mc) {
+        Session s = mc.getSession();
+        if (s == null) {
+            return null;
+        }
+        UUID uuid = s.getUuidOrNull();
+        try {
+            Field f = profileFutureField();
+            if (f != null) {
+                Object done = ((CompletableFuture<?>) f.get(mc)).getNow(null);
+                if (done instanceof ProfileResult r && r.profile() != null
+                        && uuid != null && uuid.equals(r.profile().getId())) {
+                    return r.profile();
+                }
+            }
+        } catch (Throwable ignored) {
+            // reflection denied / future failed — session identity is enough
+        }
+        return new GameProfile(uuid, s.getUsername());
+    }
+
+    /** CompletableFuture&lt;ProfileResult&gt; field of MinecraftClient, or null. */
+    private static Field profileFutureField() {
+        Field f = profileFutureField;
+        if (f == null && !profileFutureFieldFailed) {
+            for (Field declared : MinecraftClient.class.getDeclaredFields()) {
+                if (declared.getType() != CompletableFuture.class) {
+                    continue;
+                }
+                Type generic = declared.getGenericType();
+                if (generic instanceof ParameterizedType pt
+                        && pt.getActualTypeArguments()[0] == ProfileResult.class) {
+                    declared.setAccessible(true);
+                    profileFutureField = f = declared;
+                    break;
+                }
+            }
+            if (f == null) {
+                profileFutureFieldFailed = true;
+            }
+        }
+        return f;
+    }
+
     /**
      * api.mojang.com name→uuid → sessionserver profile (textures property) →
      * memory + disk cache. Runs on a worker thread; the render thread picks
      * the result up through {@link #pendingProfile}.
      */
     private void resolveRemote(String name) {
+        String key = name.toLowerCase(Locale.ROOT);
         try {
-            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
-            String uuidHex = fetchJson(http,
+            String uuidHex = fetchJson(HTTP,
                     "https://api.mojang.com/users/profiles/minecraft/" + name, "id");
             if (uuidHex == null || uuidHex.length() != 32) {
-                markFailed(name);
+                RESOLVE_FAILED.put(key, System.currentTimeMillis());
                 return;
             }
-            JsonObject sessionJson = fetchJsonObj(http,
+            JsonObject sessionJson = fetchJsonObj(HTTP,
                     "https://sessionserver.mojang.com/session/minecraft/profile/" + uuidHex + "?unsigned=false");
             if (sessionJson == null) {
-                markFailed(name);
+                RESOLVE_FAILED.put(key, System.currentTimeMillis());
                 return;
             }
             String realName = sessionJson.has("name") && sessionJson.get("name").isJsonPrimitive()
@@ -205,14 +314,17 @@ public final class AccountRenderer {
             if (texValue != null) {
                 p.getProperties().put("textures", new Property("textures", texValue, texSignature));
             }
-            PROFILE_CACHE.put(name.toLowerCase(Locale.ROOT), p);
+            PROFILE_CACHE.put(key, p);
+            RESOLVE_FAILED.remove(key);
             storeDisk(name, uuidHex, realName, texValue, texSignature);
             if (name.equalsIgnoreCase(nick)) {
                 pendingProfile = p;
             }
         } catch (Throwable t) {
             TabVisualsClient.LOGGER.warn("Skin resolve failed for {}: {}", name, t.toString());
-            markFailed(name);
+            RESOLVE_FAILED.put(key, System.currentTimeMillis());
+        } finally {
+            RESOLVING.remove(key);   // a failed fetch must not pin the nick offline forever
         }
     }
 
@@ -263,8 +375,11 @@ public final class AccountRenderer {
                         }
                     }
                     diskCache = loaded != null ? loaded : new JsonObject();
-                    if (!diskCache.has("entries")) diskCache.add("entries", new JsonObject());
-                    if (!diskCache.has("failed")) diskCache.add("failed", new JsonArray());
+                    // a hand-edited/corrupt "entries" node must not throw on
+                    // every later read (getAsJsonObject is type-checked)
+                    if (!(diskCache.get("entries") instanceof JsonObject)) {
+                        diskCache.add("entries", new JsonObject());
+                    }
                 }
                 root = diskCache;
             }
@@ -275,18 +390,21 @@ public final class AccountRenderer {
     /** Reads a cached profile for the nick, if the session stored one. */
     static GameProfile fromDisk(String name) {
         try {
-            JsonElement entry = diskCache().getAsJsonObject("entries")
-                    .get(name.toLowerCase(Locale.ROOT));
-            if (entry == null || !entry.isJsonObject()) return null;
-            JsonObject o = entry.getAsJsonObject();
-            if (!o.has("uuid")) return null;
-            GameProfile p = new GameProfile(uuidFromHex(o.get("uuid").getAsString()),
-                    o.has("name") ? o.get("name").getAsString() : name);
-            if (o.has("textures")) {
-                p.getProperties().put("textures", new Property("textures", o.get("textures").getAsString(),
-                        o.has("signature") && o.get("signature").isJsonPrimitive() ? o.get("signature").getAsString() : null));
+            // the tree is shared with resolve workers — read under the class lock
+            synchronized (AccountRenderer.class) {
+                JsonElement entry = diskCache().getAsJsonObject("entries")
+                        .get(name.toLowerCase(Locale.ROOT));
+                if (entry == null || !entry.isJsonObject()) return null;
+                JsonObject o = entry.getAsJsonObject();
+                if (!o.has("uuid")) return null;
+                GameProfile p = new GameProfile(uuidFromHex(o.get("uuid").getAsString()),
+                        o.has("name") ? o.get("name").getAsString() : name);
+                if (o.has("textures")) {
+                    p.getProperties().put("textures", new Property("textures", o.get("textures").getAsString(),
+                            o.has("signature") && o.get("signature").isJsonPrimitive() ? o.get("signature").getAsString() : null));
+                }
+                return p;
             }
-            return p;
         } catch (Throwable t) {
             return null;
         }
@@ -294,29 +412,17 @@ public final class AccountRenderer {
 
     private static void storeDisk(String name, String uuidHex, String realName, String tex, String sig) {
         try {
-            JsonObject cache = diskCache();
-            JsonObject entry = new JsonObject();
-            entry.addProperty("uuid", uuidHex);
-            entry.addProperty("name", realName);
-            if (tex != null) entry.addProperty("textures", tex);
-            if (sig != null) entry.addProperty("signature", sig);
-            cache.getAsJsonObject("entries").add(name.toLowerCase(Locale.ROOT), entry);
-            saveDisk(cache);
-        } catch (Throwable ignored) {
-            // cache write is best-effort
-        }
-    }
-
-    private static void markFailed(String name) {
-        try {
-            JsonObject cache = diskCache();
-            JsonArray failed = cache.getAsJsonArray("failed");
-            String key = name.toLowerCase(Locale.ROOT);
-            for (JsonElement e : failed) {
-                if (key.equals(e.getAsString())) return;
+            // read-modify-write of the shared tree must stay atomic vs fromDisk
+            synchronized (AccountRenderer.class) {
+                JsonObject cache = diskCache();
+                JsonObject entry = new JsonObject();
+                entry.addProperty("uuid", uuidHex);
+                entry.addProperty("name", realName);
+                if (tex != null) entry.addProperty("textures", tex);
+                if (sig != null) entry.addProperty("signature", sig);
+                cache.getAsJsonObject("entries").add(name.toLowerCase(Locale.ROOT), entry);
+                saveDisk(cache);
             }
-            failed.add(key);
-            saveDisk(cache);
         } catch (Throwable ignored) {
             // cache write is best-effort
         }
@@ -341,33 +447,43 @@ public final class AccountRenderer {
         if (w != null) {
             return w;
         }
+        if (previewWorldFailed) {
+            return null;
+        }
         synchronized (AccountRenderer.class) {
             if (previewWorld != null) {
                 return previewWorld;
             }
             MinecraftClient mc = MinecraftClient.getInstance();
-            GameProfile session = mc.getGameProfile();
-            ClientConnection conn = new ClientConnection(NetworkSide.CLIENTBOUND);
-            ClientConnectionState state = new ClientConnectionState(
-                    session,
-                    new WorldSession(TelemetrySender.NOOP, false, Duration.ofHours(1), "TabVisuals"),
-                    DynamicRegistryManager.of(Registries.REGISTRIES),
-                    FeatureFlags.VANILLA_FEATURES,
-                    "TabVisuals",
-                    null, null, Map.of(), null, Map.of(),
-                    ServerLinks.EMPTY);
-            ClientPlayNetworkHandler handler = new ClientPlayNetworkHandler(mc, conn, state);
-            DimensionType overworld = new DimensionType(
-                    OptionalLong.empty(), true, false, false, true,
-                    1.0, true, false, -64, 384, 384,
-                    TagKey.of(RegistryKeys.BLOCK, Identifier.of("infiniburn_overworld")),
-                    Identifier.of("overworld"), 0.0f,
-                    new DimensionType.MonsterSettings(true, false, ConstantIntProvider.create(0), 0));
-            previewWorld = new ClientWorld(handler,
-                    new ClientWorld.Properties(Difficulty.NORMAL, false, false),
-                    World.OVERWORLD, RegistryEntry.of(overworld),
-                    10, 0, mc.worldRenderer, false, 0L, 16777216);
-            return previewWorld;
+            GameProfile session = sessionProfile(mc);
+            try {
+                ClientConnection conn = new ClientConnection(NetworkSide.CLIENTBOUND);
+                ClientConnectionState state = new ClientConnectionState(
+                        session,
+                        new WorldSession(TelemetrySender.NOOP, false, Duration.ofHours(1), "TabVisuals"),
+                        DynamicRegistryManager.of(Registries.REGISTRIES),
+                        FeatureFlags.VANILLA_FEATURES,
+                        "TabVisuals",
+                        null, null, Map.of(), null, Map.of(),
+                        ServerLinks.EMPTY);
+                ClientPlayNetworkHandler handler = new ClientPlayNetworkHandler(mc, conn, state);
+                DimensionType overworld = new DimensionType(
+                        OptionalLong.empty(), true, false, false, true,
+                        1.0, true, false, -64, 384, 384,
+                        TagKey.of(RegistryKeys.BLOCK, Identifier.of("infiniburn_overworld")),
+                        Identifier.of("overworld"), 0.0f,
+                        new DimensionType.MonsterSettings(true, false, ConstantIntProvider.create(0), 0));
+                previewWorld = new ClientWorld(handler,
+                        new ClientWorld.Properties(Difficulty.NORMAL, false, false),
+                        World.OVERWORLD, RegistryEntry.of(overworld),
+                        10, 0, mc.worldRenderer, false, 0L, 16777216);
+                return previewWorld;
+            } catch (Throwable t) {
+                // sticky: a retry per frame would rebuild-and-throw forever
+                previewWorldFailed = true;
+                TabVisualsClient.LOGGER.error("Preview world creation failed", t);
+                return null;
+            }
         }
     }
 
@@ -383,25 +499,39 @@ public final class AccountRenderer {
         if (p == null || p.getId() == null) {
             return null;
         }
-        return entities.computeIfAbsent(p.getId().toString(), k -> {
-            try {
-                return new OtherClientPlayerEntity(previewWorld(), p) {
-                    @Override
-                    protected PlayerListEntry getPlayerListEntry() {
-                        return null; // no tab list on the title screen
-                    }
+        String key = p.getId().toString();
+        OtherClientPlayerEntity cached = entities.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        if (entityFailed.contains(key) || previewWorldFailed) {
+            return null;
+        }
+        ClientWorld world = previewWorld();
+        if (world == null) {
+            return null;
+        }
+        try {
+            OtherClientPlayerEntity created = new OtherClientPlayerEntity(world, p) {
+                @Override
+                protected PlayerListEntry getPlayerListEntry() {
+                    return null; // no tab list on the title screen
+                }
 
-                    @Override
-                    public net.minecraft.client.util.SkinTextures getSkinTextures() {
-                        return MinecraftClient.getInstance().getSkinProvider()
-                                .getSkinTextures(this.getGameProfile());
-                    }
-                };
-            } catch (Throwable t) {
-                TabVisualsClient.LOGGER.error("Preview entity creation failed", t);
-                return null;
-            }
-        });
+                @Override
+                public net.minecraft.client.util.SkinTextures getSkinTextures() {
+                    return MinecraftClient.getInstance().getSkinProvider()
+                            .getSkinTextures(this.getGameProfile());
+                }
+            };
+            entities.put(key, created);
+            return created;
+        } catch (Throwable t) {
+            // sticky per profile: computeIfAbsent-style retry would log every frame
+            entityFailed.add(key);
+            TabVisualsClient.LOGGER.error("Preview entity creation failed", t);
+            return null;
+        }
     }
 
     // -------------------------------------------------------- rotation
@@ -418,7 +548,7 @@ public final class AccountRenderer {
 
     /** Drag deltas: horizontal spins the body, vertical tilts the model. */
     public void drag(double mouseX, double mouseY) {
-        if (!dragging) {
+        if (!dragging || !Double.isFinite(mouseX) || !Double.isFinite(mouseY)) {
             return;
         }
         float dx = (float) (mouseX - lastDragX);
@@ -431,6 +561,15 @@ public final class AccountRenderer {
 
     /** FPS-independent easing; called once per frame from the screen. */
     private void update(float dt) {
+        if (!Float.isFinite(yaw)) {
+            yaw = NEUTRAL_YAW;   // one bad drag must not poison the matrix forever
+        }
+        if (!Float.isFinite(tilt)) {
+            tilt = 0f;
+        }
+        if (!Float.isFinite(dt) || dt < 0f) {
+            dt = 0f;
+        }
         if (switchT < 1f) {
             switchT = Math.min(1f, switchT + dt * 3.2f);
         }
@@ -458,6 +597,7 @@ public final class AccountRenderer {
             profile = fresh;
             pendingProfile = null;
         }
+        retryResolve();
         OtherClientPlayerEntity entity = entityFor(profile);
         if (entity == null) {
             return;
@@ -490,11 +630,19 @@ public final class AccountRenderer {
         Quaternionf combined = new Quaternionf(rotZ).mul(rotX);
         float scale = size / entity.getScale();
         Vector3f offset = new Vector3f(0f, entity.getHeight() / 2f, 0f);
+        EntityRenderDispatcher dispatcher = MinecraftClient.getInstance().getEntityRenderDispatcher();
+        Quaternionf prevRot = new Quaternionf(dispatcher.getRotation());
         try {
             InventoryScreen.drawEntity(ctx, cx, cy, scale, offset, combined, rotX, entity);
         } catch (Throwable t) {
-            TabVisualsClient.LOGGER.error("Preview entity render failed", t);
+            // vanilla drawEntity sets the global dispatcher rotation and never
+            // restores it — keep the log quiet after the first failure
+            if (!renderErrorLogged) {
+                renderErrorLogged = true;
+                TabVisualsClient.LOGGER.error("Preview entity render failed", t);
+            }
         }
+        dispatcher.setRotation(prevRot);
         entity.bodyYaw = prevBody;
         entity.setYaw(prevYaw);
         entity.setPitch(prevPitch);

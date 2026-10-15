@@ -89,13 +89,17 @@ public record Theme(String id, String name,
     }
 
     private static final long ANIM_MS = 340L;
+    private static final long ANIM_NS = ANIM_MS * 1_000_000L;
+    /** Фолбэк-пересчёт без frame-flush (экраны, где HUD не рисуется). */
+    private static final long RECOMPUTE_NS = 100_000_000L;
 
     private static volatile Theme active = ALL[0];
     private static volatile Theme customTheme = buildCustom();
     private static Theme animFrom;
-    private static long animStart;
+    /** nanoTime — монотонные часы: системный сдвиг не даёт отрицательный прогресс. */
+    private static long animStartNs;
     private static Theme animCached;
-    private static long animCachedAt = -1L;
+    private static long animCachedAt;
 
     /** Active palette — the interpolated one while a switch is animating. */
     public static Theme get() {
@@ -103,16 +107,21 @@ public record Theme(String id, String name,
         if (from == null) {
             return active;
         }
-        long now = System.currentTimeMillis();
-        if (now == animCachedAt && animCached != null) {
+        long now = System.nanoTime();
+        // один и тот же инстанс на весь кадр: панель и её обводка не должны
+        // попасть в разные кадры интерполяции
+        if (animCached != null && now - animCachedAt < RECOMPUTE_NS) {
             return animCached;
         }
-        float p = (now - animStart) / (float) ANIM_MS;
+        float p = (now - animStartNs) / (float) ANIM_NS;
         if (p >= 1f) {
             animFrom = null;
             animCached = active;
             animCachedAt = now;
             return active;
+        }
+        if (p < 0f) {
+            p = 0f;
         }
         float e = p * p * (3f - 2f * p); // smoothstep
         Theme lerped = lerp(from, active, e, active.id());
@@ -121,17 +130,21 @@ public record Theme(String id, String name,
         return lerped;
     }
 
+    /** Frame-granular palette: recompute the lerp once per render frame. */
+    public static void flush_frame_cache() {
+        animCached = null;
+    }
+
     /** Starts a cross-fade to the given palette. */
     public static void set(Theme theme) {
         Theme next = theme != null ? theme : ALL[0];
         if (next == active) {
             return; // same palette — nothing to animate
         }
-        animFrom = get();
+        animFrom = get(); // от текущего промежуточного палитра — переход бесшовный
         active = next;
-        animStart = System.currentTimeMillis();
+        animStartNs = System.nanoTime();
         animCached = null;
-        animCachedAt = -1L;
     }
 
     public static Theme byId(String id) {
@@ -169,9 +182,12 @@ public record Theme(String id, String name,
             return;
         }
         for (Map.Entry<String, Integer> e : in.entrySet()) {
-            if (isValidSlot(e.getKey()) && e.getValue() != null) {
-                CUSTOM.put(e.getKey(), e.getValue());
+            Integer v = e.getValue();
+            if (!isValidSlot(e.getKey()) || v == null) {
+                continue;
             }
+            // alpha 0 из битого конфига сделал бы панель невидимой
+            CUSTOM.put(e.getKey(), (v & 0xFF000000) == 0 ? v | 0xFF000000 : v);
         }
         refreshCustom();
     }
@@ -206,6 +222,7 @@ public record Theme(String id, String name,
         if ("custom".equals(active.id())) {
             active = customTheme; // instant follow — the picker drags continuously
         }
+        animCached = null; // новый инстанс — старый кадровый кэш неактуален
     }
 
     /** Derives the secondary slots from the five editable ones. */

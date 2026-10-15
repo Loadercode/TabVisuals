@@ -18,8 +18,6 @@ import com.loadercode.tabvisuals.render.systemrender.builders.states.QuadColorSt
 import com.loadercode.tabvisuals.render.systemrender.builders.states.QuadRadiusState;
 import com.loadercode.tabvisuals.render.systemrender.builders.states.SizeState;
 
-import java.util.Objects;
-
 public record BuiltBlur(
         SizeState size,
         QuadRadiusState radius,
@@ -62,12 +60,22 @@ public record BuiltBlur(
         float width = this.size.width();
         float height = this.size.height();
         ShaderProgram shader = RenderSystem.setShader(BLUR_SHADER_KEY);
-        assert shader != null;
-        Objects.requireNonNull(shader.getUniform("Size")).set(width, height);
-        Objects.requireNonNull(shader.getUniform("Radius")).set(this.radius.radius1(), this.radius.radius2(),
+        GlUniform sizeUniform = ShaderUniforms.get(shader, "blur", "Size");
+        GlUniform radiusUniform = ShaderUniforms.get(shader, "blur", "Radius");
+        GlUniform smoothnessUniform = ShaderUniforms.get(shader, "blur", "Smoothness");
+        GlUniform blurRadiusUniform = ShaderUniforms.get(shader, "blur", "BlurRadius");
+        if (!ShaderUniforms.allPresent(sizeUniform, radiusUniform, smoothnessUniform, blurRadiusUniform)) {
+            // uniform'ов нет — пропускаем draw-call, но возвращаем GL-состояние
+            RenderSystem.setShaderTexture(0, 0);
+            RenderSystem.enableCull();
+            RenderSystem.disableBlend();
+            return;
+        }
+        sizeUniform.set(width, height);
+        radiusUniform.set(this.radius.radius1(), this.radius.radius2(),
                 this.radius.radius3(), this.radius.radius4());
-        Objects.requireNonNull(shader.getUniform("Smoothness")).set(this.smoothness);
-        Objects.requireNonNull(shader.getUniform("BlurRadius")).set(this.blurRadius);
+        smoothnessUniform.set(this.smoothness);
+        blurRadiusUniform.set(this.blurRadius);
 
         BufferBuilder builder = Tessellator.getInstance().begin(DrawMode.QUADS, VertexFormats.POSITION_COLOR);
         builder.vertex(matrix, x, y, z).color(this.color.color1());

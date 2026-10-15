@@ -7,7 +7,9 @@ public class OutBack extends Animation {
 
     @Override
     public double calculation(double value) {
-        double x = value / ms;
+        // x держим строго в [0..1]: при ms == 0 тут был бы Infinity/NaN,
+        // а при отрицательном/отмотанном времени куб Back взрывался до x14+
+        double x = ms <= 0 ? 1.0 : Math.min(1.0, Math.max(0.0, value / ms));
 
         double c1 = 1.70158;
         double c3 = c1 + 1;

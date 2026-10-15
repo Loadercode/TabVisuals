@@ -63,6 +63,20 @@ public class FontRenderer implements QuickImports {
     }
 
     /**
+     * Ручной setter вместо Lombok (сигнатура та же, цепочка как у @Setter):
+     * все кэши построены от font и вместе с ним устаревают — без сброса
+     * getStringWidth вернул бы ширину старого шрифта.
+     */
+    public FontRenderer setFont(Font font) {
+        this.font = font;
+        widthCache.clear();
+        glyphCache.clear();
+        maps.clear();
+        GLYPH_PAGE_CACHE.clear();
+        return this;
+    }
+
+    /**
      * No-op: deferred text batching was reverted (caused intermittent missing/laggy glyphs
      * when flushed under a different shader alpha / matrix). Call sites kept for safety.
      */
@@ -263,14 +277,20 @@ public class FontRenderer implements QuickImports {
         if (!hasPendingGlyphs()) {
             return;
         }
-        drawGlyphs(matrix, x, y);
-        // Страницы (и capacity списков) сохраняются, а записи уходят в пул: следующий
-        // кадр обойдётся без новых DrawEntry — только присваивания полей.
-        for (ObjectList<DrawEntry> list : GLYPH_PAGE_CACHE.values()) {
-            for (int i = 0, n = list.size(); i < n; i++) {
-                drawEntryPool.add(list.get(i));
+        // finally: при исключении внутри drawGlyphs записи всё равно уходят
+        // в пул и страницы очищаются — иначе следующий flush нарисовал бы
+        // те же глифы повторно (дубли) из застрявших в списках записей.
+        try {
+            drawGlyphs(matrix, x, y);
+        } finally {
+            // Страницы (и capacity списков) сохраняются, а записи уходят в пул: следующий
+            // кадр обойдётся без новых DrawEntry — только присваивания полей.
+            for (ObjectList<DrawEntry> list : GLYPH_PAGE_CACHE.values()) {
+                for (int i = 0, n = list.size(); i < n; i++) {
+                    drawEntryPool.add(list.get(i));
+                }
+                list.clear();
             }
-            list.clear();
         }
     }
 
@@ -461,7 +481,11 @@ public class FontRenderer implements QuickImports {
         boolean ignore = false;
         boolean textColor = false;
 
-        for (char c : text.toCharArray()) {
+        // charAt вместо toCharArray: горячий путь измерения ширины (десятки
+        // вызовов за кадр) не аллоцирует char[] на каждый вызов.
+        int len = text.length();
+        for (int i = 0; i < len; i++) {
+            char c = text.charAt(i);
             if (ignore) {
                 ignore = false;
                 continue;
@@ -499,7 +523,10 @@ public class FontRenderer implements QuickImports {
         float currentLine = 0;
         float previous = 0;
 
-        for (char c : (text.isEmpty() ? " " : text).toCharArray()) {
+        java.lang.String source = text.isEmpty() ? " " : text;
+        int len = source.length();
+        for (int i = 0; i < len; i++) {
+            char c = source.charAt(i);
             if (c == '\n') {
                 currentLine = (currentLine == 0 ? locateGlyph(' ').height() : currentLine);
                 previous += currentLine;
@@ -529,7 +556,9 @@ public class FontRenderer implements QuickImports {
 
     public java.lang.String trimToWidthBackwards(java.lang.String text, int maxWidth) {
         MutableFloat widthLeft = new MutableFloat(maxWidth);
-        MutableInt trimmedLength = new MutableInt(text.length());
+        // 0, а не text.length(): если весь текст влезает, цикл не прервётся,
+        // и substring(0) вернёт его целиком, а не пустую строку
+        MutableInt trimmedLength = new MutableInt(0);
 
         for (int i = text.length() - 1; i >= 0; i--) {
             char c = text.charAt(i);

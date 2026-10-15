@@ -124,6 +124,8 @@ public final class TabVisualsTitleScreen extends Screen {
     private float listScroll, scrollTarget;
     /** Invalid "Создать" submit — decays into a shake on the input field. */
     private float inputErrorT;
+    /** Failed row rename — decays into a shake on that row's edit field. */
+    private float editErrorT;
     /** Row hover dwell → the preview follows the row under the mouse. */
     private String hoverCandidate, hoverNick;
     private long hoverSince;
@@ -465,18 +467,27 @@ public final class TabVisualsTitleScreen extends Screen {
         // nickname: the Discord nick when connected, the account otherwise
         String nick = !MusicManager.discordNick().isEmpty()
                 ? MusicManager.discordNick() : AccountManager.current();
-        // nickname (dim), right of status
+        // right of the avatar; on narrow windows the left-most pieces are
+        // dropped before the text can run into the top-left mark
+        float markRight = width * 0.36f;
         float x = ax - 6;
-        x = rightText(F_TINY, m, nick, x, centerTextY(F_TINY, nick, cy),
-                mulAlpha(TEXT_2, alpha)) - 8;
+        if (x - F_TINY.getStringWidth(nick) >= markRight) {
+            // nickname (dim), right of status
+            x = rightText(F_TINY, m, nick, x, centerTextY(F_TINY, nick, cy),
+                    mulAlpha(TEXT_2, alpha)) - 8;
+        }
 
         // "Protected" — the bright one
-        x = rightText(F_TINY, m, "Protected", x, centerTextY(F_TINY, "Protected", cy),
-                mulAlpha(TEXT, alpha)) - 8;
+        if (x - F_TINY.getStringWidth("Protected") >= markRight) {
+            x = rightText(F_TINY, m, "Protected", x, centerTextY(F_TINY, "Protected", cy),
+                    mulAlpha(TEXT, alpha)) - 8;
+        }
 
         // version
-        rightText(F_TINY, m, "v1.0.0", x, centerTextY(F_TINY, "v1.0.0", cy),
-                mulAlpha(TEXT_3, alpha));
+        if (x - F_TINY.getStringWidth("v1.0.0") >= markRight) {
+            rightText(F_TINY, m, "v1.0.0", x, centerTextY(F_TINY, "v1.0.0", cy),
+                    mulAlpha(TEXT_3, alpha));
+        }
     }
 
     /** Bottom-right inline socials row (photo 1/2): badge, platform, handle — clickable. */
@@ -493,18 +504,27 @@ public final class TabVisualsTitleScreen extends Screen {
         float gap = width * 0.016f;   // between the two entries
         float badge = 12;
 
-        // measure the row, right-align it
-        float total = 0;
+        // measure the row, right-align it; on narrow windows the handles are
+        // dropped so the row never runs into the nav/lyric block
+        float full = 0, shortW = 0;
         for (int i = 0; i < 2; i++) {
-            total += badge + 5 + F_TINY.getStringWidth(labels[i]) + 5 + F_TINY.getStringWidth(handles[i]);
-            if (i == 0) total += gap;
+            full += badge + 5 + F_TINY.getStringWidth(labels[i]) + 5 + F_TINY.getStringWidth(handles[i]);
+            shortW += badge + 5 + F_TINY.getStringWidth(labels[i]);
+            if (i == 0) {
+                full += gap;
+                shortW += gap;
+            }
         }
+        boolean showHandles = full <= width * 0.55f;
+        float total = showHandles ? full : shortW;
         float x = width - width * 0.026f - total;
 
         float kH = 1f - (float) Math.exp(-frameDt * 14.0);
         R[] hits = new R[2];
         for (int i = 0; i < 2; i++) {
-            float itemW = badge + 5 + F_TINY.getStringWidth(labels[i]) + 5 + F_TINY.getStringWidth(handles[i]);
+            float itemW = showHandles
+                    ? badge + 5 + F_TINY.getStringWidth(labels[i]) + 5 + F_TINY.getStringWidth(handles[i])
+                    : badge + 5 + F_TINY.getStringWidth(labels[i]);
             boolean hover = UiRender.inside(mouseX, mouseY, x, y - 1, itemW, rowH);
             socHover[i] += ((hover ? 1f : 0f) - socHover[i]) * kH;
             float hv = socHover[i];
@@ -522,9 +542,11 @@ public final class TabVisualsTitleScreen extends Screen {
             float tx = x + badge + 5;
             F_TINY.drawString(m, labels[i], tx, y + (rowH - F_TINY.getStringHeight(labels[i])) / 2f + 1,
                     mulAlpha(UiRender.mix(TEXT_2, TEXT, hv), alpha));
-            tx += F_TINY.getStringWidth(labels[i]) + 5;
-            F_TINY.drawString(m, handles[i], tx, y + (rowH - F_TINY.getStringHeight(handles[i])) / 2f + 1,
-                    mulAlpha(UiRender.mix(TEXT_3, TEXT_2, hv), alpha));
+            if (showHandles) {
+                tx += F_TINY.getStringWidth(labels[i]) + 5;
+                F_TINY.drawString(m, handles[i], tx, y + (rowH - F_TINY.getStringHeight(handles[i])) / 2f + 1,
+                        mulAlpha(UiRender.mix(TEXT_3, TEXT_2, hv), alpha));
+            }
 
             hits[i] = new R(x, y - 1, itemW, rowH);
             x += itemW + gap;
@@ -554,7 +576,10 @@ public final class TabVisualsTitleScreen extends Screen {
             float slide = (1f - itemA) * 5f;
             float textW = F_NAV.getStringWidth(label);
             float boxW = textX + textW - iconX;
-            R box = new R(iconX, cy - step / 2f, boxW, step);
+            // hit = the full hover-pill extent (incl. padding + entry slide),
+            // so the clickable area is exactly what the glass pill can cover
+            float pad = step * 0.22f;
+            R box = new R(iconX - pad, cy - step / 2f + slide, boxW + pad * 2f, step);
             boolean hover = UiRender.inside(mx, my, box.x(), box.y(), box.w(), box.h());
 
             // eased hover (k≈14) / press (k≈24) — FPS-independent, same recipe
@@ -577,8 +602,8 @@ public final class TabVisualsTitleScreen extends Screen {
             m.translate(-ccx, -ccy, 0f);
 
             if (hv > 0.01f) {
-                // glass pill grows in from the left over ~150ms
-                float pad = step * 0.22f;
+                // glass pill grows in from the left over ~150ms (pad matches
+                // the hit box computed above)
                 float grow = 0.82f + 0.18f * hv;
                 float pillX = iconX - pad;
                 float pillW = (boxW + pad * 2f) * grow;
@@ -792,7 +817,8 @@ public final class TabVisualsTitleScreen extends Screen {
         float rowH30 = 30;
         float createW = 92;
         float inputY = headerBottom;
-        inputHit = new R(rightX, inputY, rightW - 6 - createW, rowH30);
+        // tiny windows: the input keeps a clickable minimum, never a negative box
+        inputHit = new R(rightX, inputY, Math.max(24f, rightW - 6 - createW), rowH30);
         createHit = new R(inputHit.x() + inputHit.w() + 6, inputY, createW, rowH30);
 
         // invalid submit shakes the field and fades a red ring
@@ -847,6 +873,13 @@ public final class TabVisualsTitleScreen extends Screen {
         }
 
         float listW = rightW - (maxScroll > 0f ? 8f : 0f);
+        // clip rows to the list band: scrolled-out rows must neither paint
+        // over the input row nor leave clickable ghosts. The GL scissor
+        // ignores the matrix stack, so the modal scale s is baked in by hand
+        // (rects are measured around the panel centre pcx/pcy).
+        ctx.enableScissor(Math.round(pcx + (panelX - pcx) * s), Math.round(pcy + (listY - pcy) * s),
+                Math.round(pcx + (panelX + panelW - pcx) * s), Math.round(pcy + (listY + visible - pcy) * s));
+        boolean anyRowHover = false;
         for (int i = 0; i < names.size(); i++) {
             float ry = listY + i * step - listScroll;
             if (ry > listY + visible || ry + rowH < listY) {
@@ -859,6 +892,17 @@ public final class TabVisualsTitleScreen extends Screen {
             R row = new R(rightX + rowSlide, ry, listW, rowH);
             boolean rowHover = UiRender.inside(mx, my, row.x(), row.y(), row.w(), row.h());
             boolean isActiveRow = name.equals(AccountManager.current());
+
+            // dwell hover: after 250ms the preview follows the hovered row
+            if (rowHover) {
+                anyRowHover = true;
+                if (!name.equals(hoverCandidate)) {
+                    hoverCandidate = name;
+                    hoverSince = now;
+                } else if (!name.equals(hoverNick) && now - hoverSince >= 250) {
+                    hoverNick = name;
+                }
+            }
 
             // eased row hover — the bg lifts instead of snapping
             float kH = 1f - (float) Math.exp(-frameDt * 14.0);
@@ -881,17 +925,25 @@ public final class TabVisualsTitleScreen extends Screen {
 
             boolean editing = focus == 2 && editIndex == i;
             if (editing) {
+                // a failed rename shakes THIS field (the input field is a
+                // different one — its shake would point at the wrong box)
+                if (editErrorT > 0f) {
+                    editErrorT = Math.max(0f, editErrorT - frameDt * 2.2f);
+                }
+                float eshake = editErrorT > 0f
+                        ? (float) Math.sin(now * 0.045) * 5f * editErrorT : 0f;
                 float fw = Math.max(70f, login.x() - 16 - row.x());
-                UiRender.rect(m, row.x() + 10, ry + 3, fw, 24, 6, 0x18FFFFFF);
-                UiRender.outline(m, row.x() + 10, ry + 3, fw, 24, 6, ACCENT_DEEP, 1f);
+                UiRender.rect(m, row.x() + 10 + eshake, ry + 3, fw, 24, 6, 0x18FFFFFF);
+                int ering = UiRender.mix(ACCENT_DEEP, 0xFFE05B5B, editErrorT);
+                UiRender.outline(m, row.x() + 10 + eshake, ry + 3, fw, 24, 6, ering, 1f);
                 String shownEdit = editText + (blink ? "_" : "");
-                F_ROW.drawString(m, shownEdit, row.x() + 20,
+                F_ROW.drawString(m, shownEdit, row.x() + 20 + eshake,
                         ry + 3 + (24 - F_ROW.getStringHeight(shownEdit)) / 2f + 1, TEXT);
             } else {
                 // name + optional "Активен" tag, never overlapping the buttons
                 String tag = isActiveRow ? "Активен" : null;
                 float tagW = tag == null ? 0 : F_TINY.getStringWidth(tag) + 12;
-                float nameMax = login.x() - 10 - (row.x() + 14) - tagW;
+                float nameMax = Math.max(4f, login.x() - 10 - (row.x() + 14) - tagW);
                 float nameH = F_ROW.getStringHeight(name);
                 String shownName = F_ROW.getStringWidth(name) > nameMax
                         ? F_ROW.trimToWidth(name, (int) nameMax) + "…" : name;
@@ -913,7 +965,16 @@ public final class TabVisualsTitleScreen extends Screen {
             }
             drawButton(m, "del#" + i, del, "Удалить", F_BTN, 0x6B3A45, 0xFFFF7B7B);
 
-            rowHits.add(new RowHit(i, row, login, edit, del));
+            // a partially clipped row keeps its looks but loses its buttons:
+            // otherwise clicks would land on the part scrolled out of the band
+            if (ry + 3 >= listY && ry + 27 <= listY + visible) {
+                rowHits.add(new RowHit(i, row, login, edit, del));
+            }
+        }
+        ctx.disableScissor();
+        if (!anyRowHover) {
+            hoverCandidate = null;
+            hoverNick = null;
         }
 
         // slim scrollbar pill on the list's right edge
@@ -1077,6 +1138,10 @@ public final class TabVisualsTitleScreen extends Screen {
                 if (removed.equals(pinnedNick)) {
                     pinnedNick = null;
                 }
+                if (removed.equals(hoverNick)) {
+                    hoverNick = null;
+                    hoverCandidate = null;
+                }
                 if (editIndex == rh.index()) {
                     focus = 0;
                     editIndex = -1;
@@ -1148,6 +1213,7 @@ public final class TabVisualsTitleScreen extends Screen {
         listScroll = 0;
         scrollTarget = 0;
         inputErrorT = 0f;
+        editErrorT = 0f;
         hoverCandidate = null;
         hoverNick = null;
         pinnedNick = null;
@@ -1268,10 +1334,13 @@ public final class TabVisualsTitleScreen extends Screen {
             if (pinnedNick != null && pinnedNick.equalsIgnoreCase(editOldName)) {
                 pinnedNick = editText;
             }
+            if (hoverNick != null && hoverNick.equalsIgnoreCase(editOldName)) {
+                hoverNick = editText;
+            }
             focus = 0;
             editIndex = -1;
         } else {
-            inputErrorT = 1f;
+            editErrorT = 1f;   // shake the edit field, not the input field
         }
     }
 

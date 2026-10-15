@@ -29,6 +29,7 @@ public class Blur implements Shape, QuickImports {
     public Vector2f resolution = new Vector2f();
     private final Vector3f posScratch = new Vector3f();
     private final Vector3f sizeScratch = new Vector3f();
+    private final Vector4f roundScratch = new Vector4f();
     /** true когда рисуем HUD (InGameHudMixin), false для ClickGUI и др. */
     public static boolean hudContext = false;
     /** TabVisuals blur config (was driven by the LoxeDLC HUD feature). */
@@ -66,6 +67,12 @@ public class Blur implements Shape, QuickImports {
             rectangle.render(shape);
             return;
         }
+        // setup() не вызывался — сэмплить нечего, шейдер прочитал бы мусор
+        // из юнита текстуры (атлас шрифта и т.п.).
+        if (input == null) {
+            rectangle.render(shape);
+            return;
+        }
 
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
@@ -75,7 +82,9 @@ public class Blur implements Shape, QuickImports {
         Matrix4f matrix4f = shape.getMatrix().peek().getPositionMatrix();
         Vector3f pos = matrix4f.transformPosition(shape.getX(), shape.getY(), 0, posScratch).mul(scale);
         Vector3f size = matrix4f.getScale(sizeScratch).mul(scale);
-        Vector4f round = shape.getRound().mul(size.y);
+        // Копия, а не мутация getRound(): повторный рендер того же properties
+        // раньше компаундил радиус умножением на scale.
+        Vector4f round = roundScratch.set(shape.getRound()).mul(size.y);
         float softness = shape.getSoftness();
         float thickness = shape.getThickness();
         float width = shape.getWidth() * size.x;

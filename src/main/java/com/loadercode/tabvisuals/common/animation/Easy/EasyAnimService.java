@@ -32,6 +32,9 @@ public abstract class EasyAnimService {
     }
 
     public double getLinearOutput() {
+        if (duration <= 0) {
+            return 0.0;
+        }
         return 1 - ((timerUtil.getTime() / (double) duration) * endPoint);
     }
 
@@ -59,6 +62,10 @@ public abstract class EasyAnimService {
     }
 
     public double getOutput() {
+        // duration == 0: деление на ноль дало бы NaN/Infinity в обеих ветках
+        if (duration <= 0) {
+            return direction == Direction.FORWARDS ? endPoint : 0;
+        }
         if (direction == Direction.FORWARDS) {
             if (isDone()) return endPoint;
             return getEquation(timerUtil.getTime() / (double) duration) * endPoint;

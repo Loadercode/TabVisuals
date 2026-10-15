@@ -275,11 +275,13 @@ public class ColorAssist {
     }
 
     public static int applyOpacity(int hex, int percent) {
-        return applyOpacity(hex, 2.55f * Math.min(percent, 100));
+        return applyOpacity(hex, 2.55f * MathHelper.clamp(percent, 0, 100));
     }
     public static int applyOpacity(int hex, float opacity) {
-        return ColorHelper.getArgb((int)(ColorHelper.getAlpha(hex) * (opacity / 255)),
-                ColorHelper.getRed(hex), ColorHelper.getGreen(hex), ColorHelper.getBlue(hex));
+        // opacity задаётся в 0..255; наружу уходило неклампнутое значение,
+        // и alpha > 255 переполняла байт (цвет становился прозрачным)
+        int alpha = Math.round(getAlpha(hex) * (opacity / 255.0f));
+        return pack(getRed(hex), getGreen(hex), getBlue(hex), alpha);
     }
 
     public static int lerp(float value, int from, int to) { return ColorHelper.lerp(value, from, to); }
@@ -287,11 +289,18 @@ public class ColorAssist {
     public static int pixelColor(int x, int y) {
         ByteBuffer byteBuffer = ByteBuffer.allocateDirect(4);
         GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, byteBuffer);
-        return ColorHelper.getArgb(getRed(byteBuffer.get()), getGreen(byteBuffer.get()), getBlue(byteBuffer.get()));
+        byteBuffer.rewind();
+        // Раньше байты шли в getRed/getGreen, которые сдвигают на 16/8 бит:
+        // для байта результат всегда 0 — цвет возвращался мусорный.
+        int r = byteBuffer.get() & 0xFF;
+        int g = byteBuffer.get() & 0xFF;
+        int b = byteBuffer.get() & 0xFF;
+        return ColorHelper.getArgb(255, r, g, b);
     }
 
     public static int calculateHuyDegrees(int divisor, int offset) {
-        return (int) ((System.currentTimeMillis() / divisor + offset) % 360L);
+        // divisor приходит из конфига и может быть 0 → ArithmeticException на рендер-потоке
+        return (int) ((System.currentTimeMillis() / Math.max(1, divisor) + offset) % 360L);
     }
 
     public static int reAlphaInt(final int color, final int alpha) {
@@ -354,6 +363,8 @@ public class ColorAssist {
     }
 
     public int multBright(int color, float percent01) {
+        // percent01 == 0 давал Infinity → Math.round → 255 на всех каналах (неправильный цвет)
+        if (percent01 == 0.0f || Float.isNaN(percent01)) return color;
         return pack(Math.min(255, Math.round(red(color)   / percent01)),
                 Math.min(255, Math.round(green(color) / percent01)),
                 Math.min(255, Math.round(blue(color)  / percent01)),
@@ -369,18 +380,23 @@ public class ColorAssist {
     }
 
     public Vector4i multRedAndAlpha(Vector4i color, float red, float alpha) {
+        // Порядок компонент сохраняется: z и w раньше менялись местами,
+        // из-за чего верхние углы квада получали цвета друг друга.
         return new Vector4i(multRedAndAlpha(color.x, red, alpha), multRedAndAlpha(color.y, red, alpha),
-                multRedAndAlpha(color.w, red, alpha), multRedAndAlpha(color.z, red, alpha));
+                multRedAndAlpha(color.z, red, alpha), multRedAndAlpha(color.w, red, alpha));
     }
 
     public int multRedAndAlpha(int color, float red, float alpha) {
+        // red == 0 → Infinity на зелёном/синем; стабилизируем делитель
+        float d = red == 0.0f || Float.isNaN(red) ? 1.0f : red;
         return pack(red(color),
-                Math.min(255, Math.round(green(color) / red)),
-                Math.min(255, Math.round(blue(color)  / red)),
+                Math.min(255, Math.round(green(color) / d)),
+                Math.min(255, Math.round(blue(color)  / d)),
                 Math.round(alpha(color) * alpha));
     }
 
     public int multRed(int color, float percent01) {
+        if (percent01 == 0.0f || Float.isNaN(percent01)) return color;
         return pack(red(color),
                 Math.min(255, Math.round(green(color) / percent01)),
                 Math.min(255, Math.round(blue(color)  / percent01)),
@@ -388,6 +404,7 @@ public class ColorAssist {
     }
 
     public int multGreen(int color, float percent01) {
+        if (percent01 == 0.0f || Float.isNaN(percent01)) return color;
         return pack(Math.min(255, Math.round(green(color) / percent01)),
                 green(color),
                 Math.min(255, Math.round(blue(color)  / percent01)),
@@ -397,10 +414,12 @@ public class ColorAssist {
     public int rgba(int red, int green, int blue, int alpha) { return pack(red, green, blue, alpha); }
 
     public int[] genGradientForText(int color1, int color2, int length) {
+        if (length <= 0) return new int[0];
         int[] gradient = new int[length];
+        // length == 1 → (length - 1) == 0 → 0/0 = NaN, вместо цвета выходил прозрачный чёрный
+        float step = length == 1 ? 0.0f : 1.0f / (length - 1);
         for (int i = 0; i < length; i++) {
-            float pc = (float) i / (length - 1);
-            gradient[i] = overCol(color1, color2, pc);
+            gradient[i] = overCol(color1, color2, i * step);
         }
         return gradient;
     }
@@ -411,6 +430,8 @@ public class ColorAssist {
     }
 
     public static int interpolate(int start, int end, float value) {
+        // фактор вне [0..1] давал экстраполяцию каналов за 0..255 (NaN → чёрный)
+        value = MathHelper.clamp(value, 0.0f, 1.0f);
         float[] s = rgba(start), e2 = rgba(end);
         return rgba((int) Calculate.interpolate(s[0]*255, e2[0]*255, value),
                 (int) Calculate.interpolate(s[1]*255, e2[1]*255, value),
@@ -419,13 +440,13 @@ public class ColorAssist {
     }
 
     public int rainbow(int speed, int index, float saturation, float brightness, float opacity) {
-        int angle = (int)((System.currentTimeMillis() / speed + index) % 360);
+        int angle = (int)((System.currentTimeMillis() / Math.max(1, speed) + index) % 360);
         int color = Color.HSBtoRGB(angle / 360f, saturation, brightness);
         return pack(red(color), green(color), blue(color), Math.round(opacity * 255));
     }
 
     public int fade(int speed, int index, int first, int second) {
-        int angle = (int)((System.currentTimeMillis() / speed + index) % 360);
+        int angle = (int)((System.currentTimeMillis() / Math.max(1, speed) + index) % 360);
         angle = angle >= 180 ? 360 - angle : angle;
         return overCol(first, second, angle / 180f);
     }
@@ -457,13 +478,25 @@ public class ColorAssist {
     }
 
     public static int toColor(String hexColor) {
-        return setAlpha(Integer.parseInt(hexColor.substring(1), 16), 255);
+        // null / без '#' / неверная длина / не-hex → прозрачный чёрный вместо исключения
+        if (hexColor == null || hexColor.isEmpty() || hexColor.charAt(0) != '#') {
+            return 0x00000000;
+        }
+        String digits = hexColor.substring(1);
+        if (digits.length() != 6) {
+            return 0x00000000;
+        }
+        try {
+            return setAlpha(Integer.parseInt(digits, 16), 255);
+        } catch (NumberFormatException e) {
+            return 0x00000000;
+        }
     }
 
-    public static int setAlpha(int color, int alpha) { return (color & 0x00ffffff) | (alpha << 24); }
+    public static int setAlpha(int color, int alpha) { return (MathHelper.clamp(alpha, 0, 255) << 24) | (color & 0x00ffffff); }
 
     public static int gradient(int start, int end, int index, int speed) {
-        int angle = (int)((System.currentTimeMillis() / speed + index) % 360);
+        int angle = (int)((System.currentTimeMillis() / Math.max(1, speed) + index) % 360);
         angle = (angle > 180 ? 360 - angle : angle) + 180;
         int color = interpolate(start, end, Math.clamp(angle / 180f - 1, 0, 1));
         float[] hs = rgba(color);
@@ -473,7 +506,8 @@ public class ColorAssist {
     }
 
     public static int gradient(int speed, int index, int... colors) {
-        int angle = (int)((System.currentTimeMillis() / speed + index) % 360);
+        if (colors.length == 0) return 0; // без палитры брать нечего — стабильный пустой цвет
+        int angle = (int)((System.currentTimeMillis() / Math.max(1, speed) + index) % 360);
         angle = (angle > 180 ? 360 - angle : angle) + 180;
         int colorIndex = (int)(angle / 360f * colors.length);
         if (colorIndex == colors.length) colorIndex--;

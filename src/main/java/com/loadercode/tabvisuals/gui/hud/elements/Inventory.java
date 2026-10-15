@@ -16,6 +16,8 @@ import java.awt.*;
 
 public class Inventory extends AbstractDraggable {
     private static final int SLOT_COUNT = 27;
+    /** Базовая ширина панели; растёт только если счётчик не помещается справа. */
+    private static final int BASE_WIDTH = 123;
     private static final int BODY_OUTLINE = new Color(33, 33, 33, 255).getRGB();
     private static final int BODY_COLOR_1 = new Color(18, 19, 20, 75).getRGB();
     private static final int BODY_COLOR_2 = new Color(0, 2, 5, 75).getRGB();
@@ -38,7 +40,7 @@ public class Inventory extends AbstractDraggable {
     private float animDt;
 
     public Inventory() {
-        super("Inventory", 385, 40, 123, 60, true);
+        super("Inventory", 385, 40, BASE_WIDTH, 60, true);
     }
 
     @Override
@@ -79,6 +81,10 @@ public class Inventory extends AbstractDraggable {
 
         shownCount = approach_smooth(shownCount, itemCount, 10f, animDt);
         String itemCountText = String.valueOf(Math.round(shownCount));
+
+        // Счётчик (до 1728 = 4 цифры) при фиксированной колонке x=105 вылезал
+        // за правый край панели — расширяем панель только при необходимости
+        setWidth(Math.max(BASE_WIDTH, 105 + (int) Math.ceil(itemsCached.getStringWidth(itemCountText)) + 4));
 
         matrix.push();
         matrix.translate(0f, (1f - enter) * 6f, 0f);

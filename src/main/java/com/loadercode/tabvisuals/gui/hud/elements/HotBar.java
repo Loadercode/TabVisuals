@@ -20,6 +20,17 @@ import java.util.Objects;
 
 public class HotBar extends AbstractDraggable {
 
+    /** Ширина ванильного бара — сам бар центрируется по ней, не по хитбоксу. */
+    private static final float BAR_W = 182f;
+    /**
+     * Запас хитбокса с каждой стороны: оффхенд-слот рисуется сбоку бара
+     * (getX()-28 при правой руке, getX()+198 при левой + рамка 2.5px), то есть
+     * до ~30.5px левее и ~36.5px правее бара — бокс редактора должен
+     * покрывать то, что нарисовано (37 ≥ 36.5, симметрия смещения не даёт
+     * «уезжать» при смене основной руки).
+     */
+    private static final int OFFHAND_GUTTER = 37;
+
     private static final int SLOT_OUTLINE = 0xFF000000;
     private static final int SLOT_NUMBER = 0xFFFFFFFF;
     private static final int GRID_COLOR = 0x99000000;
@@ -41,7 +52,7 @@ public class HotBar extends AbstractDraggable {
     private float animDt;
 
     public HotBar() {
-        super("HotBar", 0, 50, 182, 22, false);
+        super("HotBar", 0, 50, (int) BAR_W + 2 * OFFHAND_GUTTER, 22, false);
     }
 
     @Override
@@ -71,15 +82,18 @@ public class HotBar extends AbstractDraggable {
         selectItemX = approach_smooth(selectItemX, inventory.selectedSlot * 20, 16f, animDt);
         selectPulse = approach_smooth(selectPulse, 0f, 7f, animDt);
 
-        // Центруем хотбар по низу экрана
-        setX((mc.getWindow().getScaledWidth() - getWidth()) / 2);
+        // Центруем сам бар по низу экрана; хитбокс шире бара на OFFHAND_GUTTER
+        // с каждой стороны, чтобы оффхенд-слот (рисуется вне бара) был «схватываем»
+        setX((int) ((mc.getWindow().getScaledWidth() - BAR_W) / 2f) - OFFHAND_GUTTER);
         setY(mc.getWindow().getScaledHeight() - 27);
+        setWidth((int) BAR_W + 2 * OFFHAND_GUTTER);
+        final float barX = getX() + OFFHAND_GUTTER;
 
         matrix.push();
         matrix.translate(0f, (1f - enter) * 8f, 0f);
 
         // Фон хотбара
-        blur.render(ShapeProperties.create(matrix, getX() - 0.5F, getY() - 0.5F, getWidth() + 1, 23F)
+        blur.render(ShapeProperties.create(matrix, barX - 0.5F, getY() - 0.5F, BAR_W + 1, 23F)
                     .quality(Hud.getInstance().getBlurQuality())
                     .round(4f)
                     .softness(1f)
@@ -92,7 +106,7 @@ public class HotBar extends AbstractDraggable {
         float pulseGrow = 2.5f * selectPulse;
         int hlAlpha = (int) ((0x50 + 0x70 * selectPulse) * enter);
         int hlOutline = (int) ((0x40 + 0x50 * selectPulse) * enter);
-            blur.render(ShapeProperties.create(matrix, getX() + selectItemX + 1 - pulseGrow / 2f, getY() + 1 - pulseGrow / 2f, 20 + pulseGrow, 20 + pulseGrow)
+            blur.render(ShapeProperties.create(matrix, barX + selectItemX + 1 - pulseGrow / 2f, getY() + 1 - pulseGrow / 2f, 20 + pulseGrow, 20 + pulseGrow)
                     .quality(Hud.getInstance().getBlurQuality())
                     .round(4.5F)
                     .softness(1f)
@@ -106,7 +120,7 @@ public class HotBar extends AbstractDraggable {
 
         // Основные 9 слотов хотбара; номера — одним glyph-batch (раньше 9×9 drawString)
         for (int i = 0; i < 9; i++) {
-            float slotX = getX() + i * 20 + 2;
+            float slotX = barX + i * 20 + 2;
             float slotY = getY() + 2;
             drawStack(context, inventory.main.get(i), slotX, slotY, false);
             SLOT_NUM_X[i] = slotX + 1f;
@@ -116,7 +130,7 @@ public class HotBar extends AbstractDraggable {
 
         // Оффхенд — отдельный квадратик слева/справа
         if (!offHand.isEmpty()) {
-            int offX = getX() + (mc.player.getMainArm().equals(Arm.RIGHT) ? -28 : 198);
+            int offX = (int) barX + (mc.player.getMainArm().equals(Arm.RIGHT) ? -28 : 198);
             drawStack(context, offHand, offX, getY() + 2, true);
         }
 
@@ -130,7 +144,7 @@ public class HotBar extends AbstractDraggable {
     }
 
     private void drawHotbarGrid(MatrixStack matrix, float fade) {
-        float x = getX();
+        float x = getX() + OFFHAND_GUTTER;
         float y = getY() + 1f;
         float h = 20f;
         int gridColor = ColorAssist.multAlpha(GRID_COLOR, fade);
@@ -139,8 +153,8 @@ public class HotBar extends AbstractDraggable {
             Render2D.drawQuad(x + i * 20f, y, 1f, h, gridColor);
         }
         // Горизонтальные линии сверху/снизу внутри бара — лёгкая сетка
-        Render2D.drawQuad(x + 1f, y, getWidth() - 2f, 1f, gridColor);
-        Render2D.drawQuad(x + 1f, getY() + 20f, getWidth() - 2f, 1f, gridColor);
+        Render2D.drawQuad(x + 1f, y, BAR_W - 2f, 1f, gridColor);
+        Render2D.drawQuad(x + 1f, getY() + 20f, BAR_W - 2f, 1f, gridColor);
     }
 
     private void drawSlotNumbers(MatrixStack matrix, float fade) {

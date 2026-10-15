@@ -28,8 +28,10 @@ public abstract class AbstractDraggable implements Draggable, QuickImports, Quic
         this.name = name;
         this.x = x;
         this.y = y;
-        this.width = width;
-        this.height = height;
+        // ноль легален (PlayerInfo меряет высоту сам), отрицателет — нет:
+        // оно ломало hit-test и clamp границ
+        this.width = Math.max(0, width);
+        this.height = Math.max(0, height);
         this.canDrag = canDrag;
     }
 

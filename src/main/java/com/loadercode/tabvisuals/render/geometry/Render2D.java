@@ -91,8 +91,10 @@ public class Render2D implements QuickImports {
 
     public static int applyOpacity(int color_int, float opacity) {
         opacity = Math.min(1, Math.max(0, opacity));
-        Color color = new Color(color_int);
-        return new Color(color.getRed(), color.getGreen(), color.getBlue(), (int) (color.getAlpha() * opacity)).getRGB();
+        // new Color(int) трактует аргумент как непрозрачный RGB и терял альфу
+        // исходного цвета: полупрозрачный цвет становился непрозрачным.
+        int a = (int) ((color_int >> 24 & 0xFF) * opacity);
+        return (a << 24) | (color_int & 0x00FFFFFF);
     }
 
     public void drawTexture(DrawContext context, Identifier id,float x,float y, float size, float round, int uvSize, int regionSize, int textureSize, int backgroundColor) {

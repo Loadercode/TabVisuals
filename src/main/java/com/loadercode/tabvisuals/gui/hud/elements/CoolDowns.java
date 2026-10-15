@@ -70,6 +70,9 @@ public class CoolDowns extends AbstractDraggable {
     @Override
     public void tick() {
         if (mc.player == null) {
+            // tick на титуле не вызывается, но ветка страхует прямые вызовы:
+            // строки прошлого мира не должны пережить разconnect
+            clearAllCooldowns();
             activeCooldownCount = 0;
             return;
         }
@@ -122,6 +125,8 @@ public class CoolDowns extends AbstractDraggable {
     public void onCooldownUpdate(Identifier cooldownGroup, int cooldownTicks) {
         if (HudHelper.nullCheck()) return;
         Item item = Registries.ITEM.get(cooldownGroup);
+        // Неизвестная группа кулдауна резолвится в AIR — карточка "air" не нужна
+        if (item == Items.AIR) return;
 
         // Деактивируем существующий кулдаун этого предмета
         CoolDownItem existingItem = individualCooldowns.get(item);
@@ -135,7 +140,9 @@ public class CoolDowns extends AbstractDraggable {
             }
         }
 
-        if (cooldownTicks != 0) {
+        // Только положительные тики: отрицательные дали бы Stopwatch в прошлом
+        // и отображение "-1:59" на карточке
+        if (cooldownTicks > 0) {
             // Создаем новый отдельный перетаскиваемый элемент
             float startX = getX() + 10;
             float startY = getY() + 30 + (individualCooldowns.size() * 20);
@@ -252,9 +259,11 @@ public class CoolDowns extends AbstractDraggable {
         iconCached.drawString(matrix, "D", getX() + HudHelper.hud_px(4f), getY() + HudHelper.hud_px(5.5f), ColorAssist.getText());
         fontCached.drawString(matrix, "CoolDowns", getX() + HudHelper.hud_px(22f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
 
-        // Показываем инфо что каждый кулдаун теперь можно двигать отдельно
+        // Показываем инфо что каждый кулдаун теперь можно двигать отдельно;
+        // подсказка шире панели (80px) — усекаем, чтобы не вылезала за край
         if (HudHelper.isChat(mc.currentScreen)) {
-            itemsCached.drawString(matrix, "Каждый CD можно двигать!", getX() + 5, getY() + 20, ColorAssist.getText());
+            String hint = StringHelper.trimToWidth("Каждый CD можно двигать!", getWidth() - 10, itemsCached);
+            itemsCached.drawString(matrix, hint, getX() + 5, getY() + 20, ColorAssist.getText());
         }
         });
         matrix.pop();

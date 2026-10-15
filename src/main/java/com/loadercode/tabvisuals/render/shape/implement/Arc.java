@@ -24,20 +24,32 @@ public class Arc implements Shape, QuickImports {
     private final ShaderProgramKey SHADER_KEY = new ShaderProgramKey(Identifier.of("minecraft", "core/arc"), VertexFormats.POSITION, Defines.EMPTY);
     private final Vector3f posScratch = new Vector3f();
     private final Vector3f sizeScratch = new Vector3f();
+    private final Vector4f roundScratch = new Vector4f();
 
     @Override
     public void render(ShapeProperties shape) {
         FontRenderer.flushDeferred();
+
+        // Окно проверяем ДО begin(): ранний выход после begin() оставлял
+        // Tessellator в состоянии «идёт построение» — следующий чужой begin()
+        // падал IllegalStateException посреди кадра.
+        var currentWindow = mc.getWindow();
+        if (currentWindow == null) {
+            return;
+        }
+
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
 
-        float scale = (float) mc.getWindow().getScaleFactor();
+        float scale = (float) currentWindow.getScaleFactor();
         float alpha = RenderSystem.getShaderColor()[3];
 
         Matrix4f matrix4f = shape.getMatrix().peek().getPositionMatrix();
         Vector3f pos = matrix4f.transformPosition(shape.getX(), shape.getY(), 0, posScratch).mul(scale);
         Vector3f size = matrix4f.getScale(sizeScratch).mul(scale);
-        Vector4f round = shape.getRound().mul(size.y);
+        // Копия, а не мутация getRound(): повторный рендер того же properties
+        // раньше компаундил радиус умножением на scale.
+        Vector4f round = roundScratch.set(shape.getRound()).mul(size.y);
 
         float width = shape.getWidth() * size.x;
         float height = shape.getHeight() * size.y;
@@ -48,10 +60,6 @@ public class Arc implements Shape, QuickImports {
         ShaderProgram shader = RenderSystem.setShader(SHADER_KEY);
         assert shader != null;
         shader.getUniformOrDefault("size").set(width, height);
-        var currentWindow = mc.getWindow();
-        if (currentWindow == null) {
-            return;
-        }
         shader.getUniformOrDefault("location").set(pos.x, currentWindow.getHeight() - height - pos.y);
         shader.getUniformOrDefault("radius").set(round.x);
         shader.getUniformOrDefault("thickness").set(shape.getThickness());

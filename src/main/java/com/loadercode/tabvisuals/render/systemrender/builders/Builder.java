@@ -7,30 +7,28 @@ import com.loadercode.tabvisuals.render.systemrender.builders.impl.*;
 
 public final class Builder {
 
-    private static final RectangleBuilder RECTANGLE_BUILDER = new RectangleBuilder();
-    private static final BorderBuilder BORDER_BUILDER = new BorderBuilder();
-    private static final TextureBuilder TEXTURE_BUILDER = new TextureBuilder();
-    private static final TextBuilder TEXT_BUILDER = new TextBuilder();
-    private static final BlurBuilder BLUR_BUILDER = new BlurBuilder();
+    // Билдеры больше не синглтоны: каждый вызов отдаёт свежий экземпляр,
+    // поэтому вложенный build() из колбэка не портит состояние чужой цепочки.
+    // Сигнатуры методов не менялись.
 
     public static RectangleBuilder rectangle() {
-        return RECTANGLE_BUILDER;
+        return new RectangleBuilder();
     }
 
     public static BorderBuilder border() {
-        return BORDER_BUILDER;
+        return new BorderBuilder();
     }
 
     public static TextureBuilder texture() {
-        return TEXTURE_BUILDER;
+        return new TextureBuilder();
     }
 
     public static TextBuilder text() {
-        return TEXT_BUILDER;
+        return new TextBuilder();
     }
 
     public static BlurBuilder blur() {
-        return BLUR_BUILDER;
+        return new BlurBuilder();
     }
 
 }

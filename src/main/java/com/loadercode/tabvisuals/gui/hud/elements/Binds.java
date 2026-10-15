@@ -2,7 +2,6 @@
 package com.loadercode.tabvisuals.gui.hud.elements;
 
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
-import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.component.DataComponentTypes;
@@ -170,29 +169,6 @@ public class Binds extends AbstractDraggable {
         matrices.pop();
     }
 
-    private int countItemInInventory(Item targetItem, java.lang.String searchName) {
-        if (HudHelper.nullCheck()) return 0;
-
-        int count = 0;
-        for (int i = 0; i < Objects.requireNonNull(mc.player).getInventory().size(); i++) {
-            ItemStack itemStack = mc.player.getInventory().getStack(i);
-            if (itemStack.isEmpty()) continue;
-
-            boolean useCustomName = FTHelper.getInstance().isCustomNameCheckEnabled();
-            if (useCustomName && searchName != null && targetItem == Items.SPLASH_POTION) {
-                if (itemStack.getItem() == targetItem &&
-                        HudHelper.getCleanName(itemStack.getName()).contains(searchName.toLowerCase())) {
-                    count += itemStack.getCount();
-                }
-            } else {
-                if (itemStack.getItem() == targetItem) {
-                    count += itemStack.getCount();
-                }
-            }
-        }
-        return count;
-    }
-
     private float getCooldownProgress(Item item) {
         if (HudHelper.nullCheck()) return 0;
         ItemStack stack = new ItemStack(item);
@@ -215,14 +191,23 @@ public class Binds extends AbstractDraggable {
         // is rebuilt each tick — new slot items appear as new pills.
         binds.clear();
         initializeBinds();
-        activeBindsCache.clear();
+        List<BindInfo> activeNow = new ArrayList<>();
         for (BindInfo bind : binds) {
             if (isBindActive(bind)) {
-                activeBindsCache.add(bind);
+                activeNow.add(bind);
             }
         }
+        if (!activeNow.isEmpty()) {
+            activeBindsCache.clear();
+            activeBindsCache.addAll(activeNow);
+        } else if (HudHelper.isChat(mc.currentScreen)) {
+            // в чате без биндов — превью; кэш чистим, иначе он показал бы устаревшие пилюли
+            activeBindsCache.clear();
+        }
+        // При пустом списке кэш намеренно НЕ чистим: пилюли доигрывают
+        // выходную анимацию, а не исчезают мгновенно.
 
-        if (!activeBindsCache.isEmpty()) {
+        if (!activeNow.isEmpty()) {
             animation.setDirection(Direction.FORWARDS);
         } else if (HudHelper.isChat(mc.currentScreen)) {
             animation.setDirection(Direction.FORWARDS);
@@ -242,10 +227,13 @@ public class Binds extends AbstractDraggable {
             for (BindInfo bind : binds) {
                 if (bind.keyBind.item() != item) continue;
                 if (useCustomName && bind.searchName != null && item == Items.SPLASH_POTION
-                        && !HudHelper.getCleanName(itemStack.getName()).contains(bind.searchName.toLowerCase())) {
+                        && !HudHelper.getCleanName(itemStack.getName()).contains(bind.searchName.toLowerCase(Locale.ROOT))) {
                     continue;
                 }
+                // Стек считается один раз: два бинда на один предмет иначе
+                // удваивали счётчик (merge за каждое совпадение).
                 itemCounts.merge(item, itemStack.getCount(), Integer::sum);
+                break;
             }
 
             if (mc.player.getItemCooldownManager().isCoolingDown(itemStack)) {

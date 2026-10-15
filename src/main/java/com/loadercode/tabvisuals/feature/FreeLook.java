@@ -62,8 +62,13 @@ public final class FreeLook {
     public static void tickFrame() {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) {
-            // disconnect/world change with the key held — no perspective to restore to
-            saved = null;
+            // disconnect/world change с зажатой клавишей: perspective надо
+            // вернуть ДО очистки, иначе игрок навсегда застрянет в третьем
+            // лице до следующего нажатия/отпускания клавиши
+            if (saved != null) {
+                mc.options.setPerspective(saved);
+                saved = null;
+            }
             angleSet = false;
             return;
         }

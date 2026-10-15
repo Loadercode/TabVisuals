@@ -20,13 +20,16 @@ float median(vec3 color) {
 void main() {
     float dist = median(texture(Sampler0, TexCoord).rgb) - 0.5 + Thickness;
     vec2 h = vec2(dFdx(TexCoord.x), dFdy(TexCoord.y)) * textureSize(Sampler0, 0);
-    float pixels = Range * inversesqrt(h.x * h.x + h.y * h.y);
-    float alpha = smoothstep(-Smoothness, Smoothness, dist * pixels);
+    // вырожденные производные (нулевой атлас/экран) дали inversesqrt(0) = Inf
+    float pixels = Range * inversesqrt(max(h.x * h.x + h.y * h.y, 1e-6));
+    // Smoothness == 0 → равные края smoothstep неопределены (NaN-альфа текста)
+    float s = max(Smoothness, 1e-4);
+    float alpha = smoothstep(-s, s, dist * pixels);
     vec4 color = vec4(FragColor.rgb, FragColor.a * alpha);
     
     if (Outline) {
         color = mix(OutlineColor, FragColor, alpha);
-        color.a *= smoothstep(-Smoothness, Smoothness, (dist + OutlineThickness) * pixels);
+        color.a *= smoothstep(-s, s, (dist + OutlineThickness) * pixels);
     }
     
     OutColor = color;

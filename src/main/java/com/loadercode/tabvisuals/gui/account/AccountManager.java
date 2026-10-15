@@ -4,12 +4,16 @@ package com.loadercode.tabvisuals.gui.account;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.loadercode.tabvisuals.TabVisualsClient;
+import com.mojang.authlib.GameProfile;
+import com.mojang.authlib.yggdrasil.ProfileResult;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.session.Session;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Offline nickname profiles (alt manager): JSON-backed CRUD plus runtime
@@ -106,7 +111,7 @@ public final class AccountManager {
             return;
         }
         String removed = d.accounts.remove(index);
-        if (removed.equals(d.current)) {
+        if (removed.equalsIgnoreCase(d.current)) {   // create/rename keep the stored case
             d.current = null;
         }
         save();
@@ -173,6 +178,7 @@ public final class AccountManager {
             MinecraftClient mc = MinecraftClient.getInstance();
             // non-static final field: setAccessible(true) grants write access (JDK spec)
             sessionField().set(mc, session);
+            refreshGameProfile(mc, name, uuid);
             data().current = name;
             save();
             TabVisualsClient.LOGGER.info("Offline session applied: {} ({})", name, uuid);
@@ -180,4 +186,42 @@ public final class AccountManager {
             TabVisualsClient.LOGGER.error("Offline login failed for " + name, t);
         }
     }
+
+    /**
+     * MinecraftClient caches the resolved profile in gameProfileFuture, which
+     * MinecraftClient.getGameProfile() joins — after a session swap it would
+     * keep returning the previous account (skin, tab, telemetry identity).
+     * Best-effort: the login packet reads the Session directly, so a failed
+     * refresh degrades to a stale display profile, not a broken login.
+     */
+    private static void refreshGameProfile(MinecraftClient mc, String name, UUID uuid) {
+        try {
+            if (profileFutureField == null && !profileFutureFieldFailed) {
+                for (Field f : MinecraftClient.class.getDeclaredFields()) {
+                    if (f.getType() != CompletableFuture.class) {
+                        continue;
+                    }
+                    Type generic = f.getGenericType();
+                    if (generic instanceof ParameterizedType pt
+                            && pt.getActualTypeArguments()[0] == ProfileResult.class) {
+                        f.setAccessible(true);
+                        profileFutureField = f;
+                        break;
+                    }
+                }
+                if (profileFutureField == null) {
+                    profileFutureFieldFailed = true;
+                }
+            }
+            if (profileFutureField != null) {
+                profileFutureField.set(mc,
+                        CompletableFuture.completedFuture(new ProfileResult(new GameProfile(uuid, name))));
+            }
+        } catch (Throwable t) {
+            TabVisualsClient.LOGGER.warn("gameProfile refresh failed: {}", t.toString());
+        }
+    }
+
+    private static Field profileFutureField;
+    private static boolean profileFutureFieldFailed;
 }

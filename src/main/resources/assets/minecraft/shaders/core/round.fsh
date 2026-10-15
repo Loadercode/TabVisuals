@@ -15,6 +15,8 @@ uniform float softness;
 out vec4 fragColor;
 
 float roundedBoxSDF(vec2 center, vec2 size, vec4 radius) {
+    // Отрицательный радиус (некорректный properties) ломал SDF в NaN.
+    radius = max(radius, vec4(0.0));
     radius.xy = (center.x > 0.0) ? radius.xy : radius.zw;
     radius.x  = (center.y > 0.0) ? radius.x : radius.y;
 
@@ -31,15 +33,20 @@ vec4 createGradient(vec2 coords, vec4 color1, vec4 color2, vec4 color3, vec4 col
 void main() {
     float distance = roundedBoxSDF(gl_FragCoord.xy - location - (size / 2.0), size / 2.0, radius);
 
-    float smoothedAlpha = 1.0 - smoothstep(-1.0, thickness > 0. ? 1. : softness + 1., distance);
-    float smoothedborderAlpha = (1.0 - smoothstep(-softness,  softness, distance));
+    // 0-размер (анимация сворачивания) / отрицательная softness: smoothstep с
+    // равными краями и деление на 0 давали NaN — прямоугольник мигал мусором.
+    float safeSoftness = max(softness, 0.0001);
+    float smoothedAlpha = 1.0 - smoothstep(-1.0, thickness > 0. ? 1. : safeSoftness + 1., distance);
+    float smoothedborderAlpha = (1.0 - smoothstep(-safeSoftness, safeSoftness, distance));
 
     float borderAlpha = 1.0 - smoothstep(thickness - 2.0, thickness, abs(distance));
 
     if(smoothedAlpha < 0.49 && thickness > 0.) {
-        fragColor = vec4(outlineColor.rgb, smoothedborderAlpha);
+        // Альфа обводки учитывается (как в blur.fsh) — иначе полупрозрачная
+        // тема рисовала обводку в полную непрозрачность.
+        fragColor = vec4(outlineColor.rgb, smoothedborderAlpha * outlineColor.a);
     } else {
-        vec4 gradient = createGradient((gl_FragCoord.xy - location) / size, color1, color2, color3, color4);
+        vec4 gradient = createGradient((gl_FragCoord.xy - location) / max(size, vec2(0.0001)), color1, color2, color3, color4);
         vec4 basicColor = vec4(gradient.rgb, gradient.a * smoothedAlpha);
 
         fragColor = mix(vec4(gradient.rgb, 0.), mix(basicColor, thickness > 0. ? outlineColor : basicColor, borderAlpha), smoothedAlpha);

@@ -4,6 +4,7 @@ package com.loadercode.tabvisuals.gui.hud;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.config.ConfigManager;
 import com.loadercode.tabvisuals.gui.hud.draggable.AbstractDraggable;
+import com.loadercode.tabvisuals.gui.hud.draggable.DraggableRepository;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -122,7 +123,12 @@ public final class HudEditor {
     // ------------------------------------------------------------- data API
 
     public static Map<String, float[]> positions() {
-        return new LinkedHashMap<>(POS);
+        // глубокая копия: массивы POS живые, снимок не должен зависеть от драга
+        Map<String, float[]> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, float[]> e : POS.entrySet()) {
+            copy.put(e.getKey(), e.getValue().clone());
+        }
+        return copy;
     }
 
     public static void loadPositions(Map<String, float[]> in) {
@@ -153,10 +159,14 @@ public final class HudEditor {
             if (!finite) {
                 continue;
             }
-            float[] copy = v.length >= 2 ? new float[]{v[0], v[1]} : new float[]{v[0]};
-            POS.put(k, copy);
+            // точная длина: toasts = {yOffset}, остальные = {x, y}; запись с
+            // другой длиной (повреждённый конфиг) отбрасывается — pushPositions
+            // и clampAll читают v[1] и падали бы с AIOOBE
             if (k.equals(TOASTS)) {
-                NotificationManager.yOffset = copy[0];
+                POS.put(k, new float[]{v[0]});
+                NotificationManager.yOffset = v[0];
+            } else if (v.length >= 2) {
+                POS.put(k, new float[]{v[0], v[1]});
             }
         }
     }
@@ -170,18 +180,15 @@ public final class HudEditor {
         BOUNDS.put(id, new float[]{x, y, w, h});
     }
 
-    /** Saved position (top-left) or null → the element uses the auto layout. */
-    static float[] placed(String id) {
-        return POS.get(id);
-    }
-
     /**
      * Saved positions → draggable coordinates, run before the draw loop every
      * frame (so persistence also applies outside the editor). The first
      * sighting of an element captures its constructor position as the default.
      */
     static void pushPositions(float sw, float sh) {
-        for (AbstractDraggable d : Hud.getRepository().draggable()) {
+        DraggableRepository repo = Hud.getRepository();
+        prune_unknown(repo);
+        for (AbstractDraggable d : repo.draggable()) {
             String n = d.getName();
             float[] p = POS.get(n);
             if (p == null) {
@@ -192,9 +199,24 @@ public final class HudEditor {
             }
             float maxX = Math.max(2f, sw - Math.max(8f, d.getWidth()));
             float maxY = Math.max(2f, sh - Math.max(8f, d.getHeight()));
-            d.setX((int) clamp(p[0], 2f, maxX));
-            d.setY((int) clamp(p[1], 2f, maxY));
+            float cx = (int) clamp(p[0], 2f, maxX);
+            float cy = (int) clamp(p[1], 2f, maxY);
+            d.setX((int) cx);
+            d.setY((int) cy);
+            // разрешение могло смениться — нормализуем и сохранённые координаты,
+            // иначе снимок уехал бы за край экрана до первого драга
+            p[0] = cx;
+            p[1] = cy;
         }
+        clamp_toasts(sh);
+    }
+
+    /** Позиции элементов, которых больше нет (или никогда не было), не живут в POS вечно. */
+    private static void prune_unknown(DraggableRepository repo) {
+        if (POS.isEmpty()) {
+            return;
+        }
+        POS.keySet().removeIf(k -> !TOASTS.equals(k) && !repo.has_name(k));
     }
 
     /** A drawn element reports its box; saved entries follow the live coords. */
@@ -310,6 +332,10 @@ public final class HudEditor {
             }
         }
 
+        if (dragging != null && !TOASTS.equals(dragging) && find_draggable(dragging) == null) {
+            dragging = null; // элемент исчез — хвост не должен тянуть «призрака»
+            GUIDES.clear();
+        }
         if (dragging != null) {
             if (left) {
                 updateDrag(mouseX, mouseY, sw, sh);
@@ -358,8 +384,13 @@ public final class HudEditor {
                 AbstractDraggable d = Hud.getRepository().get(menuFor);
                 float[] def = DEFAULTS.get(menuFor);
                 if (d != null && def != null) {
-                    d.setX((int) def[0]);
-                    d.setY((int) def[1]);
+                    // дефолт из конструктора мог устареть (Totem Counter живёт на
+                    // координатах большой разрешения) — зажимаем в текущий экран
+                    float[] b = LAST.get(menuFor);
+                    float bw = Math.max(1f, b != null ? b[2] : d.getWidth());
+                    float bh = Math.max(1f, b != null ? b[3] : d.getHeight());
+                    d.setX((int) clamp(def[0], 2f, Math.max(2f, sw - bw - 2f)));
+                    d.setY((int) clamp(def[1], 2f, Math.max(2f, sh - bh - 2f)));
                 }
             }
             ConfigManager.autosave();
@@ -440,19 +471,35 @@ public final class HudEditor {
 
     /** Keep every saved element inside the screen (resolution changes). */
     private static void clampAll(float sw, float sh) {
+        clamp_toasts(sh);
         for (Map.Entry<String, float[]> e : POS.entrySet()) {
             float[] v = e.getValue();
             if (e.getKey().equals(TOASTS)) {
-                float baseY = sh / 2f + NotificationManager.START_OFFSET;
-                v[0] = clamp(v[0], 4f - baseY, sh - NotificationManager.TOAST_H - 4f - baseY);
                 continue;
             }
             float[] b = LAST.get(e.getKey());
-            if (b != null) {
+            if (b != null && v.length >= 2) {
                 v[0] = clamp(v[0], 2f, Math.max(2f, sw - b[2] - 2f));
                 v[1] = clamp(v[1], 2f, Math.max(2f, sh - b[3] - 2f));
             }
         }
+    }
+
+    /** Toasts живут в системе координат смещения от центра; держим в экране. */
+    private static void clamp_toasts(float sh) {
+        float[] v = POS.get(TOASTS);
+        if (v == null || v.length == 0) {
+            return;
+        }
+        if (!Float.isFinite(v[0])) {
+            v[0] = 0f;
+        }
+        float baseY = sh / 2f + NotificationManager.START_OFFSET;
+        float lo = 4f - baseY;
+        float hi = sh - NotificationManager.TOAST_H - 4f - baseY;
+        // на низком экране hi < lo — берём середину вместо перевёрнутого clamp
+        v[0] = hi < lo ? (lo + hi) / 2f : clamp(v[0], lo, hi);
+        NotificationManager.yOffset = v[0];
     }
 
     private static String hitTest(float mx, float my) {

@@ -8,6 +8,7 @@ import com.loadercode.tabvisuals.render.systemrender.builders.states.QuadRadiusS
 import com.loadercode.tabvisuals.render.systemrender.builders.states.SizeState;
 import com.loadercode.tabvisuals.render.systemrender.renderers.IRenderer;
 import net.minecraft.client.gl.Defines;
+import net.minecraft.client.gl.GlUniform;
 import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.gl.ShaderProgramKey;
 import net.minecraft.client.render.BufferBuilder;
@@ -16,8 +17,6 @@ import net.minecraft.client.render.Tessellator;
 import net.minecraft.client.render.VertexFormat.DrawMode;
 import net.minecraft.client.render.VertexFormats;
 import org.joml.Matrix4f;
-
-import java.util.Objects;
 
 public record BuiltRectangle(
         SizeState size,
@@ -31,17 +30,23 @@ public record BuiltRectangle(
 
     @Override
     public void render(Matrix4f matrix, float x, float y, float z) {
+        float width = this.size.width(), height = this.size.height();
+        ShaderProgram shader = RenderSystem.setShader(RECTANGLE_SHADER_KEY);
+        GlUniform sizeUniform = ShaderUniforms.get(shader, "rectangle", "Size");
+        GlUniform radiusUniform = ShaderUniforms.get(shader, "rectangle", "Radius");
+        GlUniform smoothnessUniform = ShaderUniforms.get(shader, "rectangle", "Smoothness");
+        if (!ShaderUniforms.allPresent(sizeUniform, radiusUniform, smoothnessUniform)) {
+            // uniform'ов нет — пропускаем draw-call, GL-состояние ещё не тронуто
+            return;
+        }
+        sizeUniform.set(width, height);
+        radiusUniform.set(this.radius.radius1(), this.radius.radius2(),
+            this.radius.radius3(), this.radius.radius4());
+        smoothnessUniform.set(this.smoothness);
+
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
         RenderSystem.disableCull();
-
-        float width = this.size.width(), height = this.size.height();
-        ShaderProgram shader = RenderSystem.setShader(RECTANGLE_SHADER_KEY);
-        assert shader != null;
-        Objects.requireNonNull(shader.getUniform("Size")).set(width, height);
-        Objects.requireNonNull(shader.getUniform("Radius")).set(this.radius.radius1(), this.radius.radius2(),
-            this.radius.radius3(), this.radius.radius4());
-        Objects.requireNonNull(shader.getUniform("Smoothness")).set(this.smoothness);
 
         BufferBuilder builder = Tessellator.getInstance().begin(DrawMode.QUADS, VertexFormats.POSITION_COLOR);
         builder.vertex(matrix, x, y, z).color(this.color.color1());

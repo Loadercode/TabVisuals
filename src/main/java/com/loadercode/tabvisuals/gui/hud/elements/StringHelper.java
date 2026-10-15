@@ -4,6 +4,7 @@ package com.loadercode.tabvisuals.gui.hud.elements;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
 
+import java.util.Locale;
 import java.util.Random;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -31,10 +32,13 @@ public final class StringHelper {
                 .replace("key.keyboard.", "")
                 .replace("key.mouse.", "mouse ")
                 .replace(".", " ")
-                .toUpperCase();
+                .toUpperCase(Locale.ROOT);
     }
 
     public static String wrap(String input, int width, int size) {
+        if (input == null || input.isEmpty()) {
+            return "";
+        }
         String[] words = input.split(" ");
         StringBuilder output = new StringBuilder();
         float lineWidth = 0;
@@ -54,14 +58,26 @@ public final class StringHelper {
         return output.toString();
     }
 
+    /**
+     * Единственный формат «часы:минуты / минуты:секунды» HUD-а — «H:MM».
+     * Locale.ROOT: в некоторых локалях %d/%02d дают не-латинские цифры,
+     * а раскладка/выравнивание меряются под точный текст.
+     */
+    public static String format_clock(long hour, long minute) {
+        return String.format(Locale.ROOT, "%d:%02d", hour, minute);
+    }
+
     /** Seconds → "M:SS". */
     public static String getDuration(int time) {
-        int mins = time / 60;
-        String sec = String.format("%02d", time % 60);
-        return mins + ":" + sec;
+        // Отрицательные секунды (истёкший кулдаун) не должны давать "-1:59"
+        int clamped = Math.max(0, time);
+        return format_clock(clamped / 60, clamped % 60);
     }
 
     public static String trimToWidth(String text, float maxWidth, FontRenderer font) {
+        if (text == null || text.isEmpty() || maxWidth <= 0f) {
+            return "";
+        }
         StringBuilder builder = new StringBuilder();
         for (char c : text.toCharArray()) {
             if (font.getStringWidth(builder.toString() + c) > maxWidth) {

@@ -8,6 +8,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
+import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.island.IslandStatus;
 import com.loadercode.tabvisuals.util.Network;
 import com.loadercode.tabvisuals.render.color.ColorAssist;
@@ -82,7 +83,7 @@ public class MineStatus extends IslandStatus implements QuickImports {
                         if (mi >= 0 && si > mi + 5) {
                             int min = Integer.parseInt(t.substring(0, mi).trim());
                             int sec = Integer.parseInt(t.substring(mi + 5, si).trim());
-                            time = String.format("%d:%02d", min, sec);
+                            time = StringHelper.format_clock(min, sec);
                         }
                     } catch (NumberFormatException | IndexOutOfBoundsException ignored) {
                         // Формат серверного текста не совпал — оставляем прошлое время.

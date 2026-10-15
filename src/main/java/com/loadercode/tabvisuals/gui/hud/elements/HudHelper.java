@@ -55,7 +55,10 @@ public final class HudHelper implements QuickImports {
     }
 
     public static String getHealthString(float hp) {
-        return String.format("%.1f", hp).replace(",", ".").replace(".0", "");
+        // Locale.ROOT: в ru-локали "%.1f" даёт «0,0», а старый replace(".0","")
+        // превращал «0.0» в пустую строку — HP 0 не отображался вовсе.
+        String s = String.format(java.util.Locale.ROOT, "%.1f", hp);
+        return s.endsWith(".0") ? s.substring(0, s.length() - 2) : s;
     }
 
     public static net.minecraft.client.util.InputUtil.Type getKeyType(int key) {

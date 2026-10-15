@@ -17,7 +17,6 @@ uniform vec4 color3;
 uniform vec4 color4;
 uniform vec4 outlineColor;
 
-in vec2 texCoord;
 out vec4 fragColor;
 
 float roundedBoxSDF(vec2 center, vec2 size, vec4 radius) {
@@ -41,9 +40,12 @@ const int   MAX_BLUR_SAMPLES = 64;
 const float BLUR_GOLDEN_ANGLE = 2.399963229728653; // ~137.5 degrees
 
 vec4 blur() {
-    vec4 rectColor = createGradient((gl_FragCoord.xy - location) / size, color1, color2, color3, color4);
-    vec2 texel = 1.0 / InputResolution.xy;
-    vec2 uv = gl_FragCoord.xy / InputResolution.xy;
+    // setup() мог не отработать (ресайз/первый кадр): InputResolution = (0,0)
+    // давал texel = 1/0 = Inf и неопределённую выборку текстуры.
+    vec2 safeResolution = max(InputResolution, vec2(1.0));
+    vec4 rectColor = createGradient((gl_FragCoord.xy - location) / max(size, vec2(0.0001)), color1, color2, color3, color4);
+    vec2 texel = 1.0 / safeResolution;
+    vec2 uv = gl_FragCoord.xy / safeResolution;
 
     vec4 blur = texture(InputSampler, uv);
     float total = 1.0;
@@ -66,10 +68,12 @@ vec4 blur() {
 
 void main() {
     float distance = roundedBoxSDF(gl_FragCoord.xy - location - (size / 2.0), size / 2.0, radius);
-    float smoothedAlpha = 1.0 - smoothstep(-1.0, thickness > 0. ? 1. : softness + 1., distance);
+    // softness == 0 → smoothstep с равными краями неопределён (NaN-альфа).
+    float safeSoftness = max(softness, 0.0001);
+    float smoothedAlpha = 1.0 - smoothstep(-1.0, thickness > 0. ? 1. : safeSoftness + 1., distance);
 
     if(smoothedAlpha < 0.49 && thickness > 0.) {
-        float smoothedborderAlpha = (1.0 - smoothstep(-softness,  softness, distance));
+        float smoothedborderAlpha = (1.0 - smoothstep(-safeSoftness, safeSoftness, distance));
         fragColor = vec4(outlineColor.rgb, smoothedborderAlpha * outlineColor.a);
     } else {
         float borderAlpha = 1.0 - smoothstep(thickness - 2.0, thickness, abs(distance));

@@ -16,6 +16,7 @@ import net.minecraft.world.World;
 import net.minecraft.util.math.MathHelper;
 import org.apache.commons.lang3.StringUtils;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -34,10 +35,8 @@ import com.loadercode.tabvisuals.render.math.time.StopWatch;
 public class Network implements QuickImports {
     /** Универсальный поиск PVP: PVP/PvP/ПВП в любом регистре, либо «режим»+«активен». */
     private static final Pattern PVP_PATTERN = Pattern.compile("[Pp][Vv][Pp]|[Пп][Вв][Пп]");
-    /** Число + время (сек, сек., секунд, s, с). */
-    private static final Pattern PVP_TIME_PATTERN = Pattern.compile("(\\d+)\\s*(?:сек\\.?|секунд(?:ы|а)?|СЕК\\.?|СЕКУНД(?:Ы|А)?|Секунд|s|с)(?=\\s|$|\\p{Punct})", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-    /** Число + время для телепорта. */
-    private static final Pattern TELEPORT_TIME_PATTERN = Pattern.compile("(\\d+)\\s*(?:сек\\.?|секунд(?:ы|а)?|СЕК\\.?|СЕКУНД(?:Ы|А)?|Секунд|s|с)(?=\\s|$|\\p{Punct})", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /** Число + время (сек, сек., секунд, s, с) — общий паттерн PVP/телепорта. */
+    private static final Pattern TIME_PATTERN = Pattern.compile("(\\d+)\\s*(?:сек\\.?|секунд(?:ы|а)?|СЕК\\.?|СЕКУНД(?:Ы|А)?|Секунд|s|с)(?=\\s|$|\\p{Punct})", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     private static final Pattern FORMATTING = Pattern.compile("(?i)§[0-9a-f-or]");
 
     private final StopWatch pvpWatch = new StopWatch();
@@ -62,6 +61,10 @@ public class Network implements QuickImports {
     /** BossBarHud.bossBars is private in Yarn — read it via the accessor mixin.
      *  1.21.4: the map holds ClientBossBar (client wrapper of ServerBossBar). */
     public Map<java.util.UUID, net.minecraft.client.gui.hud.ClientBossBar> bossBars() {
+        // щит для прямых вызовов до инициализации HUD (титульный экран, ранний tick)
+        if (mc == null || mc.inGameHud == null) {
+            return java.util.Map.of();
+        }
         return ((com.loadercode.tabvisuals.mixin.BossBarHudAccessor) mc.inGameHud.getBossBarHud()).getBossBars();
     }
 
@@ -96,7 +99,7 @@ public class Network implements QuickImports {
         for (var bossBar : bossBars().values()) {
             if (bossBar.getName() == null) continue;
             String name = stripFormatting(bossBar.getName().getString());
-            if (PVP_PATTERN.matcher(name).find() && name.toLowerCase().contains("активен")) {
+            if (PVP_PATTERN.matcher(name).find() && name.toLowerCase(Locale.ROOT).contains("активен")) {
                 hasPvpActive = true;
                 break;
             }
@@ -111,10 +114,12 @@ public class Network implements QuickImports {
             if (bossBar.getName() == null) continue;
             String name = stripFormatting(bossBar.getName().getString());
             if (!isPvpRelated(name)) continue;
-            Matcher m = PVP_TIME_PATTERN.matcher(name);
+            Matcher m = TIME_PATTERN.matcher(name);
             if (m.find()) {
-                pvpCountdownSeconds = Integer.parseInt(m.group(1));
-                hasPvpCountdown = pvpCountdownSeconds > 0;
+                // safe parse: 25+ цифр в босбаре падало NumberFormatException прямо в client tick
+                int seconds = parseIntOrNegative(m.group(1));
+                pvpCountdownSeconds = Math.max(0, seconds);
+                hasPvpCountdown = seconds > 0;
                 break;
             }
         }
@@ -123,7 +128,7 @@ public class Network implements QuickImports {
     /** Текст считается PVP-режимом: PVP/ПВП или «режим»+«активен». */
     public static boolean isPvpRelated(String name) {
         if (PVP_PATTERN.matcher(name).find()) return true;
-        String lower = name.toLowerCase();
+        String lower = name.toLowerCase(Locale.ROOT);
         return lower.contains("режим") && (lower.contains("активен") || lower.contains("до конца"));
     }
 
@@ -140,11 +145,12 @@ public class Network implements QuickImports {
         for (var bossBar : bossBars().values()) {
             if (bossBar.getName() == null) continue;
             String name = stripFormatting(bossBar.getName().getString());
-            if (!name.toLowerCase().contains("телепортация")) continue;
-            Matcher m = TELEPORT_TIME_PATTERN.matcher(name);
+            if (!name.toLowerCase(Locale.ROOT).contains("телепортация")) continue;
+            Matcher m = TIME_PATTERN.matcher(name);
             if (m.find()) {
-                teleportCountdownSeconds = Integer.parseInt(m.group(1));
-                hasTeleportCountdown = teleportCountdownSeconds > 0;
+                int seconds = parseIntOrNegative(m.group(1));
+                teleportCountdownSeconds = Math.max(0, seconds);
+                hasTeleportCountdown = seconds > 0;
                 break;
             }
         }
@@ -164,8 +170,8 @@ public class Network implements QuickImports {
         if (mc.player == null || mc.getNetworkHandler() == null
                 || mc.getNetworkHandler().getServerInfo() == null
                 || mc.getNetworkHandler().getBrand() == null) return "Vanilla";
-        String serverIp = mc.getNetworkHandler().getServerInfo().address.toLowerCase();
-        String brand = mc.getNetworkHandler().getBrand().toLowerCase();
+        String serverIp = mc.getNetworkHandler().getServerInfo().address.toLowerCase(Locale.ROOT);
+        String brand = mc.getNetworkHandler().getBrand().toLowerCase(Locale.ROOT);
 
         if (isFunTimeByAddress(serverIp)) return "FunTime";
         if (brand.contains("botfilter")) return "FunTime";
@@ -242,7 +248,7 @@ public class Network implements QuickImports {
     /** Проверка по адресу: funtime.su или поддомен.funtime.su. */
     public static boolean isFunTimeByAddress(String address) {
         if (address == null || address.isEmpty()) return false;
-        String host = address.toLowerCase().split(":")[0].trim();
+        String host = address.toLowerCase(Locale.ROOT).split(":")[0].trim();
         return host.equals("funtime.su") || host.endsWith(".funtime.su");
     }
 

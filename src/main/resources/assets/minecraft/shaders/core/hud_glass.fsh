@@ -20,7 +20,6 @@ uniform vec4 color3;
 uniform vec4 color4;
 uniform vec4 outlineColor;
 
-in vec2 texCoord;
 out vec4 fragColor;
 
 #define PI 3.14159265
@@ -41,7 +40,7 @@ vec4 createGradient(vec2 coords, vec4 color1, vec4 color2, vec4 color3, vec4 col
 
 // liquidGlassBlur - как в HandsShader Glass, даёт характерное "жидкое стекло"
 vec4 liquidGlassBlur(vec2 uv, float dir, float qual, float blurSize) {
-    vec2 radius = blurSize / InputResolution.xy;
+    vec2 radius = blurSize / max(InputResolution, vec2(1.0));
     vec4 color = texture(InputSampler, uv);
     float total = 1.0;
     for (float d = 0.0; d < PI; d += PI / dir) {
@@ -55,15 +54,19 @@ vec4 liquidGlassBlur(vec2 uv, float dir, float qual, float blurSize) {
 }
 
 void main() {
-    vec2 uv = gl_FragCoord.xy / InputResolution.xy;
+    // setup() мог не отработать: InputResolution = (0,0) → 1/0 → Inf → NaN.
+    vec2 safeResolution = max(InputResolution, vec2(1.0));
+    vec2 uv = gl_FragCoord.xy / safeResolution;
     float distance = roundedBoxSDF(gl_FragCoord.xy - location - (size / 2.0), size / 2.0, radius);
-    float smoothedAlpha = 1.0 - smoothstep(-1.0, thickness > 0. ? 1. : softness + 1., distance);
+    // softness == 0 → smoothstep с равными краями неопределён (NaN-альфа).
+    float safeSoftness = max(softness, 0.0001);
+    float smoothedAlpha = 1.0 - smoothstep(-1.0, thickness > 0. ? 1. : safeSoftness + 1., distance);
 
     if(smoothedAlpha < 0.49 && thickness > 0.) {
-        float smoothedborderAlpha = (1.0 - smoothstep(-softness, softness, distance));
+        float smoothedborderAlpha = (1.0 - smoothstep(-safeSoftness, safeSoftness, distance));
         fragColor = vec4(outlineColor.rgb, smoothedborderAlpha * outlineColor.a);
     } else {
-        vec4 rectColor = createGradient((gl_FragCoord.xy - location) / size, color1, color2, color3, color4);
+        vec4 rectColor = createGradient((gl_FragCoord.xy - location) / max(size, vec2(0.0001)), color1, color2, color3, color4);
 
         // Основной blur в стиле liquid glass (dir=6, qual=4 — облегчённый: 24 выборки вместо 48)
         vec3 glassColor = liquidGlassBlur(uv, 6.0, 4.0, BlurSize).rgb;

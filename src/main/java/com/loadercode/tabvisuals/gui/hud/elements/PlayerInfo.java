@@ -76,7 +76,9 @@ public class PlayerInfo extends AbstractDraggable {
 
         // Округляем вверх: (int) усечение уменьшало панель и текст упирался в край
         float width = (float) Math.ceil(font.getStringWidth(text)) + 10;
-        setWidth((int) width);
+        // Хитбокс = панели: блюр-подложка шире текста на 4px (width + 4 ниже),
+        // иначе её правый край не попадал в бокс редактора/ховер-тест
+        setWidth((int) width + 4);
         setHeight(14);
 
         // Въезд: альфа набирается быстрее, сдвиг догоняет (длинный хвост).

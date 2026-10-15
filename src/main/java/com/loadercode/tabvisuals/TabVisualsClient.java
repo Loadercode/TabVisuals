@@ -5,9 +5,12 @@ import com.loadercode.tabvisuals.gui.ClickGuiScreen;
 import com.loadercode.tabvisuals.gui.config.ConfigManager;
 import com.loadercode.tabvisuals.gui.hud.HotkeyManager;
 import com.loadercode.tabvisuals.gui.hud.HudRenderer;
+import com.loadercode.tabvisuals.gui.hud.elements.MediaPlayer;
 import com.loadercode.tabvisuals.gui.music.MusicManager;
+import com.loadercode.tabvisuals.media.MediaBridge;
 import com.loadercode.tabvisuals.render.font.Fonts;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.option.KeyBinding;
@@ -17,6 +20,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class TabVisualsClient implements ClientModInitializer {
 
@@ -28,6 +32,8 @@ public final class TabVisualsClient implements ClientModInitializer {
 
 	private static volatile long lastTabRenderAt;
 	private static KeyBinding clickGuiKey;
+	/** Единичный флаг: повторный вызов остановки (двойная регистрация события) — no-op. */
+	private static final AtomicBoolean MEDIA_STACK_STOPPED = new AtomicBoolean();
 
 	@Override
 	public void onInitializeClient() {
@@ -51,15 +57,47 @@ public final class TabVisualsClient implements ClientModInitializer {
 
 		HudRenderer.register();
 		MusicManager.init(); // SMTC + Discord bridges start with the client
+
+		// Остановка медиа-стека на выходе: без неё процесс powershell.exe моста
+		// переживает JVM (спасает только PID-вотчDOG в скрипте). Дисконнект-хук
+		// не ставим: мост глобальный (системный SMTC) и start() блокируется флагом
+		// started — убитый при дисконнекте мост не вернулся бы после выхода из сервера.
+		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> shutdown_media_stack());
+	}
+
+	/**
+	 * Идемпотентная остановка медиа-стека на выходе из игры. MediaPlayer.shutdown()
+	 * глушит control-пул плеера и убивает процесс PowerShell моста (destroyForcibly
+	 * без ожидания — залипший процесс не задержит выход); MediaBridge.stop()
+	 * дублируется напрямую, если HUD-элемент плеера не создавался. LrcClient и
+	 * MusicManager public stop-API не имеют — их воркеры daemon-овые и JVM не удерживают.
+	 */
+	private static void shutdown_media_stack() {
+		if (!MEDIA_STACK_STOPPED.compareAndSet(false, true)) return;
+		try {
+			MediaPlayer player = MediaPlayer.getInstance();
+			if (player != null) {
+				player.shutdown(); // controlExecutor.shutdownNow() + MediaBridge.stop()
+			}
+		} catch (Throwable t) {
+			LOGGER.debug("media player shutdown failed", t);
+		}
+		try {
+			MediaBridge.stop(); // идемпотентно: уже остановленный мост — no-op
+		} catch (Throwable t) {
+			LOGGER.debug("media bridge shutdown failed", t);
+		}
 	}
 
 	/** Called from the PlayerListHud render hook, once per frame while the tab list is visible. */
 	public static void onTabRender() {
-		lastTabRenderAt = System.currentTimeMillis();
+		// nanoTime: монотонные отсчёты для интервала (NTP-подкрутка часов
+		// wall-clock не должна ломать grace-окно)
+		lastTabRenderAt = System.nanoTime();
 	}
 
 	public static boolean isTabOpen() {
-		return System.currentTimeMillis() - lastTabRenderAt < TAB_OPEN_GRACE_MS;
+		return System.nanoTime() - lastTabRenderAt < TAB_OPEN_GRACE_MS * 1_000_000L;
 	}
 
 	/** Short label of the ClickGUI bind ("RSHIFT", "F", …) for HUD rows and the GUI hint. */

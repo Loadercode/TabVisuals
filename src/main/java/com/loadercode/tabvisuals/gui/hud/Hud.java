@@ -9,6 +9,8 @@ import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
 import com.loadercode.tabvisuals.gui.setting.Setting;
 import com.loadercode.tabvisuals.render.color.ColorAssist;
 
+import java.util.Locale;
+
 /**
  * Settings facade for the ported LoxeDLC HUD elements: their code reads
  * {@code Hud.getInstance().*}, values are pulled from our ModuleRegistry
@@ -88,7 +90,7 @@ public final class Hud {
         // HudTheme; the LoxeDLC elements draw through ColorAssist — feed it.
         ColorAssist.lightTheme = HudTheme.isLight();
         ColorAssist.glassMode = glass;
-        ColorAssist.glassOpacity = clamp01(HudTheme.glassOpacity());
+        ColorAssist.glassOpacity = clamp_glass_opacity(HudTheme.glassOpacity());
         ColorAssist.hudBlurMode = blur;
         ColorAssist.setThemeOverride(HudTheme.isCustom(),
                 HudTheme.text(), HudTheme.text2(), HudTheme.blurColor(),
@@ -97,8 +99,18 @@ public final class Hud {
                 HudTheme.clientColor());
     }
 
-    private static float clamp01(float v) {
-        return v < 0f ? 0f : Math.min(v, 1.6f);
+    /**
+     * Прозрачность стекла в допустимый диапазон перед ColorAssist.
+     * Единственный вызов — {@link #syncFromSettings()} со слайдера 0.2..0.9,
+     * так что верхняя граница 1.0 (а не старая «1.6 под именем clamp01»):
+     * легальные значения не меняются, NaN из битого конфига больше не
+     * протекает в альфы (был прозрачный кадр) — уходит в дефолт слайдера.
+     */
+    private static float clamp_glass_opacity(float v) {
+        if (Float.isNaN(v)) {
+            return 0.5f;
+        }
+        return v < 0f ? 0f : Math.min(v, 1f);
     }
 
     /** LoxeDLC MultiSelectSetting replacement: normalized name lookup. */
@@ -121,7 +133,7 @@ public final class Hud {
             if (s == null) {
                 return "";
             }
-            return s.replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase();
+            return s.replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase(Locale.ROOT);
         }
     }
 }

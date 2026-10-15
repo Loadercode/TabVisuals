@@ -23,7 +23,11 @@ public class KeySetting extends Setting {
     }
 
     public void set(int key) {
-        this.key = key;
+        // диапазон GLFW: mouse buttons 0..7 и keys 0..GLFW_KEY_LAST; всё
+        // остальное из старого конфига → unbound, а не «KEY99999» в HUD
+        this.key = (key == GLFW.GLFW_KEY_UNKNOWN
+                || (key >= GLFW.GLFW_MOUSE_BUTTON_1 && key <= GLFW.GLFW_KEY_LAST))
+                ? key : GLFW.GLFW_KEY_UNKNOWN;
     }
 
     /** Label for the GUI row and the HotKeys HUD; em-dash when unbound. */

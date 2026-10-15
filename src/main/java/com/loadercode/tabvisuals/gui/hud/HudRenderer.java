@@ -32,10 +32,12 @@ import org.joml.Vector4f;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.ConcurrentModificationException;
 
 /**
@@ -125,19 +127,41 @@ public final class HudRenderer {
     private HudRenderer() {
     }
 
+    /** Элемент×фаза, у которых первый сбой уже зафиксирован: повторы гасим — лог не захламляем. */
+    private static final Set<String> FAILED_ELEMENTS = new HashSet<>();
+
+    /** Первый сбой элемента в фазе (tick/draw) — debug со stacktrace, далее подавление. */
+    private static void log_element_failure(String name, String phase, Throwable t) {
+        if (FAILED_ELEMENTS.add(name + "/" + phase)) {
+            TabVisualsClient.LOGGER.debug("HUD element {} failed in {}", name, phase, t);
+        }
+    }
+
+    /** Последний игрок, для которого гонялись тики элементов. */
+    private static Object lastTickedPlayer;
+
     /** Wire into the Fabric HUD event + per-tick element/service ticks. */
     public static void register() {
         HudRenderCallback.EVENT.register((context, tickCounter) -> render(context));
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            if (client.player == null) {
+            if (client.player != null) {
+                Network.tick();
+            }
+            // Игрок только что пропал (disconnect/возврат в меню): элементы
+            // чистят строки прошлого мира внутри tick() (lastPlayer/ветка
+            // player==null), но раньше этот тик не запускался вообще —
+            // даём ровно один проход с player==null, дальше как раньше.
+            boolean playerLost = client.player == null && lastTickedPlayer != null;
+            lastTickedPlayer = client.player;
+            if (client.player == null && !playerLost) {
                 return;
             }
-            Network.tick();
-            for (Draggable d : Hud.getRepository().draggable()) {
+            for (AbstractDraggable d : Hud.getRepository().draggable()) {
                 try {
                     d.tick();
-                } catch (Throwable ignored) {
-                    // element tick failures must not kill the client tick
+                } catch (Throwable t) {
+                    // сбой тика элемента не должен ронять client tick
+                    log_element_failure(d.getName(), "tick", t);
                 }
             }
         });
@@ -289,10 +313,11 @@ public final class HudRenderer {
                         m.pop();
                     }
                     HudEditor.syncDraggable(ad);
-                } catch (ConcurrentModificationException ignored) {
+                } catch (ConcurrentModificationException t) {
+                    log_element_failure(ad.getName(), "draw", t);
                 } catch (Throwable t) {
                     ad.stopAnimation();
-                    TabVisualsClient.LOGGER.debug("HUD element {} failed", ad.getName(), t);
+                    log_element_failure(ad.getName(), "draw", t);
                 }
             }
         } finally {
@@ -313,47 +338,6 @@ public final class HudRenderer {
     }
 
     // ------------------------------------------------------ placement / editor
-
-    /**
-     * Top-left corner of an element: the saved editor position when the
-     * element was dragged, otherwise the LoxeDLC default; clamped on-screen.
-     * Registers the final bounds with the editor either way.
-     */
-    public static float[] place(String id, float w, float totalH, float screenW, float screenH) {
-        float[] saved = HudEditor.placed(id);
-        float x;
-        float y;
-        if (saved != null) {
-            x = clamp(saved[0], 2f, Math.max(2f, screenW - w - 2f));
-            y = clamp(saved[1], 2f, Math.max(2f, screenH - totalH - 2f));
-        } else {
-            float[] def = defaultPos(id, screenW, screenH);
-            x = clamp(def[0], 2f, Math.max(2f, screenW - w - 2f));
-            y = clamp(def[1], 2f, Math.max(2f, screenH - totalH - 2f));
-        }
-        HudEditor.bind(id, x, y, w, totalH);
-        return new float[]{x, y};
-    }
-
-    /** LoxeDLC default positions per element (scaled down when the screen is small). */
-    private static float[] defaultPos(String id, float sw, float sh) {
-        return switch (id) {
-            case WATERMARK -> new float[]{10, 10};
-            case COOLDOWNS -> new float[]{10, 40};
-            case POTIONS -> new float[]{Math.min(200, sw * 0.45f), 40};
-            case HOTKEYS -> new float[]{Math.min(300, sw * 0.65f), 40};
-            case TARGETHUD -> new float[]{10, 80};
-            case SCOREBOARD -> new float[]{10, 100};
-            case MEDIAPLAYER -> new float[]{10, 120};
-            case ARMOR -> new float[]{10, 150};
-            case KEYSTROKES -> new float[]{10, 160};
-            case BINDS -> new float[]{10, Math.min(180, sh - 70)};
-            case EPR -> new float[]{20, Math.min(200, sh - 120)};
-            case INVENTORY -> new float[]{sw - 140, 40};
-            case TOTEM -> new float[]{sw - 60, sh - 60};
-            default -> new float[]{10, 30};
-        };
-    }
 
     public static float clamp(float v, float min, float max) {
         return v < min ? min : v > max ? max : v;

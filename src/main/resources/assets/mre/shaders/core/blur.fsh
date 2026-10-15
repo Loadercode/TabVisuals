@@ -18,7 +18,10 @@ const int   BLUR_SAMPLES = 24;
 const float BLUR_GOLDEN_ANGLE = 2.399963229728653; // ~137.5 degrees
 
 void main() {
-    vec2 multiplier = BlurRadius / textureSize(Sampler0, 0);
+    // textureSize необрезанного сэмплера может быть (0,0) → 1/0 = Inf;
+    // векторную форму пишем через vec2 — float / ivec2 в GLSL 150 не преобразуется
+    vec2 texSize = max(vec2(textureSize(Sampler0, 0)), vec2(1.0));
+    vec2 multiplier = vec2(BlurRadius) / texSize;
 
     // Vogel-disk sampling (25 taps) instead of the 16x5 ring loop (81 taps).
     vec3 average = texture(Sampler0, TexCoord).rgb;

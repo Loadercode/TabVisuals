@@ -39,17 +39,56 @@ public final class LrcClient {
         }
     }
 
+    /** One queued lookup. A single pending slot coalesces rapid track changes. */
+    private record Request(String key, String title, String artist, long durationMs, Consumer<Lyrics> onReady) {
+    }
+
+    /** Memoized around()-result: reuses the returned array while the triple is unchanged. */
+    private record Around(Lyrics lyrics, Line prev, Line cur, Line next, Line[] out) {
+    }
+
     private static final ExecutorService EXEC = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "tabvisuals-lrclib");
         t.setDaemon(true);
         return t;
     });
 
+    /** Shared empty triple — callers only read it (documented contract of around()). */
+    private static final Line[] NO_LINES = new Line[]{null, null, null};
+
+    /** lrclib answers with a small JSON document; anything bigger is garbage. */
+    private static final int MAX_BODY_BYTES = 2 << 20;
+    /** Minimum gap between real network fetches. */
+    private static final long FETCH_THROTTLE_MS = 1500;
+
     private static volatile Lyrics cache = Lyrics.EMPTY;
     private static volatile String cacheKey = "";
-    private static volatile long lastRequestAt;
+    private static volatile Around aroundCache;
+
+    private static final Object LOCK = new Object();
+    /** Latest requested track; replaced (not queued) when tracks flip fast. */
+    private static Request pending;
+    /** True while a drain loop owns the worker thread. */
+    private static boolean draining;
+    /** Executor-thread confined: when the last network fetch happened. */
+    private static long lastFetchAt;
 
     private LrcClient() {
+    }
+
+    /**
+     * Stops the background worker (game exit). Idempotent: repeat calls are
+     * no-ops. A fetch in flight is bounded by the 4s/6s HTTP timeouts, so the
+     * worker thread dies shortly after the interrupt; clearing pending and
+     * draining here guarantees no caller is left waiting for a worker that
+     * will never restart (a rejected EXEC.execute already resets draining).
+     */
+    public static void shutdown() {
+        EXEC.shutdownNow();
+        synchronized (LOCK) {
+            pending = null;
+            draining = false;
+        }
     }
 
     public static Lyrics cached() {
@@ -58,37 +97,105 @@ public final class LrcClient {
 
     /**
      * Ensures lyrics for the given track are loading; fires {@code onReady}
-     * with the result (possibly {@link Lyrics#EMPTY}) on the executor thread.
+     * with the result (possibly {@link Lyrics#EMPTY}) once the lookup lands.
+     * Rapid track changes coalesce into the newest request instead of being
+     * silently dropped by a rate limiter.
      */
     public static void request(String title, String artist, long durationMs, Consumer<Lyrics> onReady) {
         String key = (title + "|" + artist).toLowerCase(Locale.ROOT);
         // cache by key alone: a fetched "no lyrics" result IS Lyrics.EMPTY, and
         // requiring a different identity made every no-lyrics track refetch forever
         if (key.equals(cacheKey)) {
-            onReady.accept(cache);
+            safeAccept(onReady, cache);
             return;
         }
-        long now = System.currentTimeMillis();
-        if (now - lastRequestAt < 1500) return; // rate limit lookups on rapid track changes
-        lastRequestAt = now;
-        EXEC.execute(() -> {
-            Lyrics result = fetch(title, artist, durationMs);
-            cacheKey = key;
-            cache = result;
+        boolean startWorker;
+        synchronized (LOCK) {
+            pending = new Request(key, title, artist, durationMs, onReady);
+            startWorker = !draining;
+            draining = startWorker;
+        }
+        if (startWorker) {
             try {
-                onReady.accept(result);
+                EXEC.execute(LrcClient::drain);
             } catch (Throwable t) {
-                TabVisualsClient.LOGGER.debug("lyrics listener failed", t);
+                // иначе draining остался бы навсегда true и все будущие
+                // запросы зависли бы в pending
+                synchronized (LOCK) {
+                    draining = false;
+                }
             }
-        });
+        }
+    }
+
+    private static void drain() {
+        try {
+            while (true) {
+                Request req;
+                synchronized (LOCK) {
+                    req = pending;
+                    pending = null;
+                    if (req == null) return;
+                }
+                if (req.key().equals(cacheKey)) {
+                    safeAccept(req.onReady(), cache);
+                    continue;
+                }
+                // the throttle lives on the worker thread: tracks that flipped
+                // faster than the limit collapse into pending instead of losing
+                // their lyrics until the next track change
+                long wait = FETCH_THROTTLE_MS - (System.currentTimeMillis() - lastFetchAt);
+                if (wait > 0) {
+                    try {
+                        Thread.sleep(wait);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                synchronized (LOCK) {
+                    if (pending != null) continue; // a fresher track arrived — skip this one
+                }
+                lastFetchAt = System.currentTimeMillis();
+                Lyrics result = fetch(req.title(), req.artist(), req.durationMs());
+                cacheKey = req.key();
+                cache = result;
+                safeAccept(req.onReady(), result);
+            }
+        } finally {
+            boolean restart;
+            synchronized (LOCK) {
+                draining = false;
+                restart = pending != null;
+                if (restart) draining = true;
+            }
+            if (restart) {
+                try {
+                    EXEC.execute(LrcClient::drain);
+                } catch (Throwable t) {
+                    synchronized (LOCK) {
+                        draining = false;
+                    }
+                }
+            }
+        }
+    }
+
+    private static void safeAccept(Consumer<Lyrics> onReady, Lyrics result) {
+        try {
+            onReady.accept(result);
+        } catch (Throwable t) {
+            TabVisualsClient.LOGGER.debug("lyrics listener failed", t);
+        }
     }
 
     /**
      * Returns the triple of lines around {@code posMs}: previous (or null),
-     * current (or null), next (or null).
+     * current (or null), next (or null). The result array is shared and reused
+     * between calls while the triple stays the same — read-only for callers.
      */
     public static Line[] around(Lyrics lyrics, long posMs) {
-        if (lyrics == null || lyrics.lines().isEmpty()) return new Line[]{null, null, null};
+        if (lyrics == null || lyrics.lines().isEmpty()) return NO_LINES;
         List<Line> lines = lyrics.lines();
         Line prev = null, cur = null, next = null;
         for (Line line : lines) {
@@ -100,7 +207,14 @@ public final class LrcClient {
                 break;
             }
         }
-        return new Line[]{prev, cur, next};
+        Around memo = aroundCache;
+        if (memo != null && memo.lyrics() == lyrics && memo.prev() == prev
+                && memo.cur() == cur && memo.next() == next) {
+            return memo.out();
+        }
+        Line[] out = new Line[]{prev, cur, next};
+        aroundCache = new Around(lyrics, prev, cur, next, out);
+        return out;
     }
 
     private static Lyrics fetch(String title, String artist, long durationMs) {
@@ -165,7 +279,10 @@ public final class LrcClient {
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 StringBuilder sb = new StringBuilder();
                 String line;
-                while ((line = r.readLine()) != null) sb.append(line);
+                while ((line = r.readLine()) != null) {
+                    sb.append(line);
+                    if (sb.length() > MAX_BODY_BYTES) return null; // не душим OOM на мусорном ответе
+                }
                 return sb.toString();
             }
         } finally {
@@ -176,15 +293,34 @@ public final class LrcClient {
     static List<Line> parseLrc(String lrc) {
         List<Line> out = new ArrayList<>();
         if (lrc == null || lrc.isBlank()) return out;
-        for (String raw : lrc.split("\r?\n")) {
+        // [offset:±ms] applies to every line: per the LRC spec a positive
+        // offset makes a line appear EARLIER than its timestamp
+        long offset = 0;
+        String[] rawLines = lrc.split("\r?\n");
+        for (String raw : rawLines) {
             String line = raw.trim();
-            if (line.isEmpty() || line.charAt(0) != '[') continue;
-            int close = line.indexOf(']');
-            if (close < 0) continue;
-            String tag = line.substring(1, close);
-            String text = line.substring(close + 1).trim();
-            long ms = parseTag(tag);
-            if (ms >= 0) out.add(new Line(ms, text));
+            if (line.regionMatches(true, 0, "[offset:", 0, 8)) {
+                int close = line.indexOf(']');
+                if (close > 8) {
+                    try {
+                        offset = Long.parseLong(line.substring(8, close).trim());
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+        }
+        for (String raw : rawLines) {
+            String line = raw.trim();
+            int i = 0;
+            // a line may carry several timestamps: [00:10.00][00:50.00]Chorus
+            while (i < line.length() && line.charAt(i) == '[') {
+                int close = line.indexOf(']', i);
+                if (close < 0) break;
+                long ms = parseTag(line.substring(i + 1, close));
+                i = close + 1;
+                if (ms < 0) continue; // metadata tags ([ar:], [ti:]) and junk
+                out.add(new Line(Math.max(0, ms - offset), line.substring(i).trim()));
+            }
         }
         out.sort(Comparator.comparingLong(Line::timeMs));
         return out;
@@ -193,8 +329,7 @@ public final class LrcClient {
     /** Accepts [mm:ss], [mm:ss.xx] and [mm:ss.xxx] tags; returns -1 otherwise. */
     private static long parseTag(String tag) {
         int colon = tag.indexOf(':');
-        if (colon <= 0 || tag.startsWith("ar") || tag.startsWith("al")
-                || tag.startsWith("ti") || tag.startsWith("by")) return -1;
+        if (colon <= 0) return -1;
         try {
             long min = Long.parseLong(tag.substring(0, colon).trim());
             String rest = tag.substring(colon + 1).trim();
@@ -202,14 +337,18 @@ public final class LrcClient {
             long fracMs = 0;
             int dot = rest.indexOf('.');
             if (dot >= 0) {
-                sec = Long.parseLong(rest.substring(0, dot));
-                String frac = rest.substring(dot + 1);
-                fracMs = (long) (Double.parseDouble("0." + frac) * 1000);
+                sec = Long.parseLong(rest.substring(0, dot).trim());
+                // 1 знак — десятые, 2 — сотые, 3 — миллисекунды; хвост отбрасываем
+                String frac = rest.substring(dot + 1).trim();
+                if (frac.isEmpty()) return -1;
+                long f = Long.parseLong(frac.substring(0, Math.min(3, frac.length())));
+                fracMs = frac.length() == 1 ? f * 100 : frac.length() == 2 ? f * 10 : f;
             } else {
                 sec = Long.parseLong(rest);
             }
             if (min < 0 || sec < 0 || sec > 59) return -1;
-            return min * 60_000 + sec * 1000 + fracMs;
+            long ms = min * 60_000 + sec * 1000 + fracMs;
+            return ms < 0 ? -1 : ms; // переполнение от сумасшедших значений
         } catch (NumberFormatException e) {
             return -1;
         }

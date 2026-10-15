@@ -7,7 +7,7 @@ public class InOutBack extends Animation {
 
     @Override
     public double calculation(double value) {
-        double x = value / ms;
+        double x = ms <= 0 ? 1.0 : Math.min(1.0, Math.max(0.0, value / ms));
 
         double c1 = 1.70158;
         double c2 = c1 * 1.525;

@@ -16,6 +16,12 @@ import static org.lwjgl.opengl.GL11.GL_STENCIL_TEST;
 public class Stencil implements QuickImports {
 
     public void push() {
+        var currentWindow = mc.getWindow();
+        // До любых GL-побочек: раньше delete+create рендербуфера шёл до проверки,
+        // и окно null оставляло framebuffer с висячим (уже удалённым) id.
+        if (currentWindow == null) {
+            return;
+        }
         var framebuffer = mc.getFramebuffer();
         if (framebuffer.depthAttachment > -1) {
             mc.getFramebuffer().beginWrite(false);
@@ -23,10 +29,6 @@ public class Stencil implements QuickImports {
             glDeleteRenderbuffersEXT(framebuffer.depthAttachment);
             final int stencilDepthBufferID = glGenRenderbuffersEXT();
             glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, stencilDepthBufferID);
-            var currentWindow = mc.getWindow();
-            if (currentWindow == null) {
-                return;
-            }
             glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_DEPTH_STENCIL_EXT, currentWindow.getWidth(), currentWindow.getHeight());
             glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_STENCIL_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, stencilDepthBufferID);
             glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, stencilDepthBufferID);
@@ -53,5 +55,9 @@ public class Stencil implements QuickImports {
     public void pop() {
         glDisable(GL_STENCIL_TEST);
         glEnable(GL_DEPTH_TEST);
+        // push() выключил запись цвета (glColorMask false×4); pop без
+        // промежуточного read() оставлял бы маску выключенной — весь
+        // дальнейший рендер кадра стал бы невидимым.
+        glColorMask(true, true, true, true);
     }
 }

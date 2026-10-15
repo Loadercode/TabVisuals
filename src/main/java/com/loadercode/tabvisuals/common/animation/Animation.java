@@ -51,11 +51,15 @@ public class Animation implements AnimationCalculation {
      * разобрать их обратно через floatValue().
      */
     public double output() {
-        double time = (1 - calculation(counter.getTime())) * value;
-
-        return direction == Direction.FORWARDS
-                ? endValue()
-                : isDone() ? 0.0 : time;
+        // calculation() зовём только когда результат реально используется:
+        // при ms == 0 он даёт NaN (0/0), а при «отмотанном» таймере — x > 1
+        if (direction == Direction.FORWARDS) {
+            return endValue();
+        }
+        if (isDone()) {
+            return 0.0;
+        }
+        return (1 - calculation(counter.getTime())) * value;
     }
 
     public Double getOutput() {

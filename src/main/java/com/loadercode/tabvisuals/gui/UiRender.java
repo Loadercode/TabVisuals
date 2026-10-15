@@ -52,6 +52,10 @@ public final class UiRender implements QuickImports {
      * @param alpha  global fade multiplier (entry animations)
      */
     public static void glow(MatrixStack m, float cx, float cy, float radius, int rgb, float peak, float alpha) {
+        // нулевой/отрицательный радиус — рисовать нечего, цикл из 45 слоёв бессмысленен
+        if (!(radius > 0f) || !(peak > 0f) || !(alpha > 0f)) {
+            return;
+        }
         int layers = 44;
         for (int i = layers; i >= 0; i--) {
             float f = i / (float) layers;
@@ -66,6 +70,9 @@ public final class UiRender implements QuickImports {
     }
 
     public static void text(FontRenderer font, MatrixStack m, String s, double x, double y, int argb) {
+        if (font == null || s == null) {
+            return;
+        }
         font.drawString(m, s, x, y, argb);
     }
 
@@ -106,6 +113,11 @@ public final class UiRender implements QuickImports {
      * Corner order passed to {@link #gradient}: tl, bl, br, tr.
      */
     public static void gradientBorder(MatrixStack m, float x, float y, float w, float h, float radius, int fill) {
+        // при w/h < 2 внутренняя заливка не помещается — рамка превратилась
+        // бы в сплошной градиентный прямоугольник; мелочь просто не рисуется
+        if (w < 2f || h < 2f) {
+            return;
+        }
         int[] g = Theme.accentGradient();
         gradient(m, x, y, w, h, g[0], g[1], g[2], g[3]);
         punchInterior(m, x, y, w, h, radius, fill);
@@ -113,6 +125,9 @@ public final class UiRender implements QuickImports {
 
     /** Same, but with an explicit accent colour instead of the theme's. */
     public static void gradientBorder(MatrixStack m, float x, float y, float w, float h, float radius, int fill, int accent) {
+        if (w < 2f || h < 2f) {
+            return;
+        }
         int a = (accent >>> 24) & 0xFF;
         int lo = withAlpha(mix(accent, 0xFFFFFFFF, 0.18f), a);
         int hi = withAlpha(mix(accent, 0xFFFFFFFF, 0.36f), a);
@@ -173,6 +188,9 @@ public final class UiRender implements QuickImports {
     }
 
     public static void shadow(MatrixStack m, float x, float y, float w, float h, float radius, int rgb, float alpha) {
+        if (!(alpha > 0f) || !(w > 0f) || !(h > 0f)) {
+            return;
+        }
         int layers = 9;
         float spread = 3.5f;
         for (int i = layers; i >= 0; i--) {
@@ -189,11 +207,20 @@ public final class UiRender implements QuickImports {
     }
 
     public static void textTruncated(FontRenderer font, MatrixStack m, String s, double x, double y, float maxWidth, int argb) {
+        if (font == null || s == null) {
+            return;
+        }
         font.drawStringWithScroll(m, s, x, y, maxWidth, argb);
     }
 
     /** Centered text inside a pill; returns the full pill width. */
     public static float pill(MatrixStack m, FontRenderer font, float cx, float y, float h, float pad, String label, int bg, int fg) {
+        if (font == null) {
+            return 0f;
+        }
+        if (label == null) {
+            label = "";
+        }
         float tw = font.getStringWidth(label);
         float w = tw + pad * 2;
         float x = cx - w / 2f;
@@ -205,6 +232,8 @@ public final class UiRender implements QuickImports {
     // ----------------------------------------------------- smooth controls
 
     public static float clamp01(float v) {
+        // NaN в 0: Math.min/max с NaN дают NaN, а NaN уходил в цвета/альфы кадра
+        if (Float.isNaN(v)) return 0f;
         return v < 0f ? 0f : (v > 1f ? 1f : v);
     }
 
@@ -227,24 +256,21 @@ public final class UiRender implements QuickImports {
      */
     public static void button(MatrixStack m, FontRenderer font, float x, float y, float w, float h,
                               float round, String label, float hoverT, float pressT, int bg, int fg) {
-        float s = pressScale(pressT);
-        float cx = x + w / 2f;
-        float cy = y + h / 2f;
-        m.push();
-        m.translate(cx, cy, 0f);
-        m.scale(s, s, 1f);
-        m.translate(-cx, -cy, 0f);
-        rect(m, x, y, w, h, round, lighten(bg, 0.07f * clamp01(hoverT)));
-        if (font != null && label != null && !label.isEmpty()) {
-            font.drawString(m, label, x + (w - font.getStringWidth(label)) / 2f,
-                    y + (h - font.getStringHeight(label)) / 2f + 1f, fg);
-        }
-        m.pop();
+        buttonBody(m, font, x, y, w, h, round, label, hoverT, pressT, bg, fg, false);
     }
 
     /** Same button, but the body uses the accent gradient border recipe. */
     public static void accentButton(MatrixStack m, FontRenderer font, float x, float y, float w, float h,
                                     float round, String label, float hoverT, float pressT, int fill, int fg) {
+        buttonBody(m, font, x, y, w, h, round, label, hoverT, pressT, fill, fg, true);
+    }
+
+    private static void buttonBody(MatrixStack m, FontRenderer font, float x, float y, float w, float h,
+                                   float round, String label, float hoverT, float pressT, int bg, int fg, boolean accent) {
+        // вырожденная кнопка: раньше push/pop отрабатывал вхолостую
+        if (!(w > 0f) || !(h > 0f)) {
+            return;
+        }
         float s = pressScale(pressT);
         float cx = x + w / 2f;
         float cy = y + h / 2f;
@@ -252,7 +278,12 @@ public final class UiRender implements QuickImports {
         m.translate(cx, cy, 0f);
         m.scale(s, s, 1f);
         m.translate(-cx, -cy, 0f);
-        gradientBorder(m, x, y, w, h, round, lighten(fill, 0.07f * clamp01(hoverT)));
+        int body = lighten(bg, 0.07f * clamp01(hoverT));
+        if (accent) {
+            gradientBorder(m, x, y, w, h, round, body);
+        } else {
+            rect(m, x, y, w, h, round, body);
+        }
         if (font != null && label != null && !label.isEmpty()) {
             font.drawString(m, label, x + (w - font.getStringWidth(label)) / 2f,
                     y + (h - font.getStringHeight(label)) / 2f + 1f, fg);
@@ -260,18 +291,20 @@ public final class UiRender implements QuickImports {
         m.pop();
     }
 
+    /** Alpha 0..255: значения вне диапазона зажимаются (было «по модулю 256» — 256 давал невидимость). */
     public static int withAlpha(int argb, int a) {
-        return (argb & 0x00FFFFFF) | (a << 24);
+        int clamped = a < 0 ? 0 : (a > 255 ? 255 : a);
+        return (argb & 0x00FFFFFF) | (clamped << 24);
     }
 
     public static int mulAlpha(int argb, float factor) {
-        int a = (int) (((argb >>> 24) & 0xFF) * Math.max(0f, Math.min(1f, factor)));
+        int a = (int) (((argb >>> 24) & 0xFF) * clamp01(factor));
         return (argb & 0x00FFFFFF) | (a << 24);
     }
 
     /** Linear ARGB blend of two colors (alpha included). */
     public static int mix(int from, int to, float k) {
-        float t = Math.max(0f, Math.min(1f, k));
+        float t = clamp01(k);
         int fa = (from >>> 24) & 0xFF, fr = (from >>> 16) & 0xFF, fg = (from >>> 8) & 0xFF, fb = from & 0xFF;
         int ta = (to >>> 24) & 0xFF, tr = (to >>> 16) & 0xFF, tg = (to >>> 8) & 0xFF, tb = to & 0xFF;
         int a = (int) (fa + (ta - fa) * t);

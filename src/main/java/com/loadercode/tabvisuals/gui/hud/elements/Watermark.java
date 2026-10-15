@@ -16,8 +16,6 @@ import net.minecraft.util.Identifier;
 import org.joml.Matrix4f;
 import com.mojang.blaze3d.systems.RenderSystem;
 
-import java.awt.Color;
-import java.util.Objects;
 import java.util.function.Supplier;
 
 public class Watermark extends AbstractDraggable {
@@ -25,13 +23,14 @@ public class Watermark extends AbstractDraggable {
     private static final Supplier<MsdfFont> ICONS_FONT_1 = Suppliers.memoize(() -> MsdfFont.builder().atlas("clienticon1").data("clienticon1").build());
     private FontRenderer default12;
     private FontRenderer default13;
-    private FontRenderer bold12;
     private FontRenderer iconNew17;
     private String cachedServerIp = "";
     private long lastServerIpUpdate;
 
     /** Длительность въезда: альфа набирается быстрее, сдвиг догоняет. */
     private static final float ENTRANCE_MS = 420f;
+    /** Высота панели: конструктор даёт 16, панель рисуется на 4px выше/ниже — фиксированная. */
+    private static final float PANEL_HEIGHT = 20f;
     /** Пауза отрисовки, после которой въезд проигрывается заново (скрытие/показ HUD). */
     private static final float ENTRANCE_GAP_MS = 350f;
     /** Сдвиг въезда по X — плашка выезжает слева. */
@@ -73,7 +72,6 @@ public class Watermark extends AbstractDraggable {
         if (default12 == null) {
             default12 = Fonts.getSize(12, Fonts.Type.DEFAULT);
             default13 = Fonts.getSize(13, Fonts.Type.DEFAULT);
-            bold12 = Fonts.getSize(12, Fonts.Type.BOLD);
             iconNew17 = Fonts.getSize(17, Fonts.Type.ICONSTYPENEW);
         }
 
@@ -89,9 +87,12 @@ public class Watermark extends AbstractDraggable {
         float totalWidth = iconWidth + 7 + 4 + titleWidth + 9 + 5 + fpsWidth + 2 + 10 + 5
                 + serverIpWidth + 2.5f + icon2Width;
         float finalWidth = totalWidth + 9;
-        float finalHeight = getHeight() + 4;
+        // getHeight()+4 росло бы на 4px каждый кадр, стоило лишь где-то вызвать
+        // setHeight; заодно хитбокс редактора совпадает с нарисованной панелью
+        float finalHeight = PANEL_HEIGHT;
 
         setWidth((int) finalWidth);
+        setHeight((int) PANEL_HEIGHT);
         com.loadercode.tabvisuals.render.geometry.Render2D.renderElementShadow(matrix, getX(), getY(), finalWidth, finalHeight);
 
 
@@ -114,7 +115,6 @@ public class Watermark extends AbstractDraggable {
                 .build());
 
         // Отрисовка логотипа по центру по высоте бара
-        int logoSizeInt = (int) iconWidth;
         float logoX = getX() + 5f;                          // небольшой отступ слева
         float logoY = getY() + (finalHeight - iconWidth) / 2f; // вертикальный центр
 
@@ -187,14 +187,6 @@ public class Watermark extends AbstractDraggable {
                 .color(ColorAssist.multAlpha(ColorAssist.getText(), alpha))
                 .build()
                 .render(matrix4f, currentX + 2.5f, getY() + 2f);
-
-//
-//        currentX += 5;
-//        assert mc.player != null;
-//        int ping = Objects.requireNonNull(Objects.requireNonNull(mc.getNetworkHandler()).getPlayerListEntry(mc.player.getUuid())).getLatency();
-//
-//        default13.drawString(matrix, String.valueOf(ping), currentX, getY(), ColorAssist.getText());
-//
 
         matrix.pop();
     }

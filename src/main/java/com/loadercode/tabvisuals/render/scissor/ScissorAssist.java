@@ -70,11 +70,13 @@ public class ScissorAssist implements QuickImports {
         if (currentWindow == null) {
             return;
         }
-        int scaleFactor = (int) currentWindow.getScaleFactor();
-        int x = scissor.x * scaleFactor;
-        int y = currentWindow.getHeight() - (scissor.y * scaleFactor + scissor.height * scaleFactor);
-        int width = scissor.width * scaleFactor;
-        int height = scissor.height * scaleFactor;
+        // Без (int)-усечения: дробный scale factor (GUI Scale = Auto даёт
+        // нецелые значения) сдвигал и обрезал область срезки на полпикселя.
+        double scaleFactor = currentWindow.getScaleFactor();
+        int x = (int) Math.round(scissor.x * scaleFactor);
+        int y = (int) Math.round(currentWindow.getHeight() - (scissor.y * scaleFactor + scissor.height * scaleFactor));
+        int width = (int) Math.round(scissor.width * scaleFactor);
+        int height = (int) Math.round(scissor.height * scaleFactor);
 
         RenderSystem.enableScissor(x, y, width, height);
     }

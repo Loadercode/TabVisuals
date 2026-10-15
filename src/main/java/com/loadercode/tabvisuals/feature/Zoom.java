@@ -80,6 +80,11 @@ public final class Zoom {
         } else if (!down && prevDown) {
             lastChangedFov = fov;
             fov = base;
+        } else if (!down) {
+            // модуль включён с самого старта (конфиг) или base сменился в
+            // настройках: без этой ветки цель оставалась бы на стартовых 30°
+            // и игрок жил бы в постоянном зуме до первого нажатия клавиши
+            fov = base;
         }
         prevDown = down;
 

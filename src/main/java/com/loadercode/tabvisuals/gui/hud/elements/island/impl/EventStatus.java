@@ -4,6 +4,7 @@ package com.loadercode.tabvisuals.gui.hud.elements.island.impl;
 import net.minecraft.client.gui.DrawContext;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
+import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.island.IslandStatus;
 import com.loadercode.tabvisuals.gui.hud.compat.FTHelper;
 import com.loadercode.tabvisuals.render.color.ColorAssist;
@@ -72,7 +73,7 @@ public class EventStatus extends IslandStatus implements QuickImports {
         if (remainingSec <= 0) return 0f;
         int min = (int) (remainingSec / 60);
         int sec = (int) (remainingSec % 60);
-        String timeStr = String.format("%d:%02d", min, sec);
+        String timeStr = StringHelper.format_clock(min, sec);
         float timeW = mc.textRenderer.getWidth(timeStr);
         float boxW = TIME_BOX_PAD * 2 + timeW;
         var font7 = Fonts.getSize(18, Fonts.Type.NOTVISUALS_MEDIUM);
@@ -170,7 +171,7 @@ public class EventStatus extends IslandStatus implements QuickImports {
     private void drawEventRow(DrawContext context, float x, float y, FTHelper.ServerEvent event, long remainingSec, FontRenderer font7, float alpha) {
         int min = (int) (remainingSec / 60);
         int sec = (int) (remainingSec % 60);
-        String timeStr = String.format("%d:%02d", min, sec);
+        String timeStr = StringHelper.format_clock(min, sec);
 
         // Math.abs(Integer.MIN_VALUE) остаётся отрицательным → отрицательный
         // индекс и ArrayIndexOutOfBoundsException при рендере.

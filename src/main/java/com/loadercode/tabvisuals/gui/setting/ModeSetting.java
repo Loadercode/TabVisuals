@@ -24,6 +24,19 @@ public final class ModeSetting extends Setting {
         this.index = Math.max(0, Math.min(options.length - 1, i));
     }
 
+    /** Sets by option name (old configs stored names); unknown → first option. */
+    public void set_by_name(String name) {
+        if (name != null) {
+            for (int i = 0; i < options.length; i++) {
+                if (options[i].equalsIgnoreCase(name)) {
+                    this.index = i;
+                    return;
+                }
+            }
+        }
+        this.index = 0;
+    }
+
     public String[] options() {
         return options;
     }

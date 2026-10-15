@@ -1,6 +1,7 @@
 /*© 2026 LoxeDLC. All rights reserved.*/
 package com.loadercode.tabvisuals.render.shader;
 
+import com.loadercode.tabvisuals.TabVisualsClient;
 import com.mojang.blaze3d.systems.RenderSystem;
 import lombok.Getter;
 import net.minecraft.client.MinecraftClient;
@@ -71,11 +72,10 @@ public class HandShaderHelper {
             endPortalShader = new Shader("hand", "endportal");
             blendShader = new Shader("hand", "blend");
             initialized = true;
-            System.out.println("[HandShaderHelper] All hand shaders initialized successfully.");
+            TabVisualsClient.LOGGER.debug("All hand shaders initialized successfully.");
         } catch (Exception e) {
             deleteLoadedShaders();
-            System.err.println("[HandShaderHelper] Failed to initialize hand shaders: " + e.getMessage());
-            e.printStackTrace();
+            TabVisualsClient.LOGGER.error("Failed to initialize hand shaders", e);
         }
     }
 
@@ -151,13 +151,19 @@ public class HandShaderHelper {
      * This bypasses Minecraft's BufferRenderer which would override our custom shader program.
      */
     public static void drawFullScreenQuad() {
+        // Snapshot до init: initQuadBuffers() сама биндит/отпускает VAO.
+        // Восстанавливаем состояние, которое сами меняем: glBindVertexArray(0) в конце
+        // сбивал VAO следующего ванильного draw'я, program тоже возвращаем как есть.
+        int prevVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+        int prevProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
         if (quadVao == -1) {
             initQuadBuffers();
         }
 
         GL30.glBindVertexArray(quadVao);
         GL11.glDrawArrays(GL11.GL_TRIANGLE_FAN, 0, 4);
-        GL30.glBindVertexArray(0);
+        GL30.glBindVertexArray(prevVao);
+        GL20.glUseProgram(prevProgram);
     }
 
     private static void initQuadBuffers() {

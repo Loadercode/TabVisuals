@@ -23,22 +23,36 @@ public class Rectangle implements Shape, QuickImports {
     private final ShaderProgramKey SHADER_KEY = new ShaderProgramKey(Identifier.of("minecraft", "core/round"), VertexFormats.POSITION, Defines.EMPTY);
     private final Vector3f posScratch = new Vector3f();
     private final Vector3f sizeScratch = new Vector3f();
+    private final Vector4f roundScratch = new Vector4f();
 
     @Override
     public void render(ShapeProperties shape) {
         FontRenderer.flushDeferred();
+
+        // Окно проверяем ДО begin(): ранний выход после begin() оставлял
+        // Tessellator в состоянии «идёт построение» — следующий чужой begin()
+        // падал IllegalStateException посреди кадра.
+        var currentWindow = mc.getWindow();
+        if (currentWindow == null) {
+            return;
+        }
+
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
 
-        float scale = (float) mc.getWindow().getScaleFactor();
+        float scale = (float) currentWindow.getScaleFactor();
         float alpha = RenderSystem.getShaderColor()[3];
 
         Matrix4f matrix4f = shape.getMatrix().peek().getPositionMatrix();
         Vector3f pos = matrix4f.transformPosition(shape.getX(), shape.getY(), 0, posScratch).mul(scale);
         Vector3f size = matrix4f.getScale(sizeScratch).mul(scale);
-        Vector4f round = shape.getRound().mul(size.y);
+        // Копия, а не мутация getRound(): умножение на scale прямо в properties
+        // компаундилось при повторном рендере одного и того же объекта.
+        Vector4f round = roundScratch.set(shape.getRound()).mul(size.y);
 
-        float softness = shape.getSoftness() * alpha;
+        // Как в Blur/Arc: softness не домножается на альфу шейдера — при
+        // fade-анимациях (alpha < 1) прямоугольник раньше сжимался.
+        float softness = shape.getSoftness();
         float thickness = shape.getThickness();
         float width = shape.getWidth() * size.x;
         float height = shape.getHeight() * size.y;
@@ -47,10 +61,6 @@ public class Rectangle implements Shape, QuickImports {
         drawEngine.quad(matrix4f, buffer, shape.getX() - softness / 2, shape.getY() - softness / 2, shape.getWidth() + softness, shape.getHeight() + softness);
 
         ShaderProgram shader = RenderSystem.setShader(SHADER_KEY);
-        var currentWindow = mc.getWindow();
-        if (currentWindow == null) {
-            return;
-        }
         Blur.shader(pos, round, softness, thickness, width, height, shader, currentWindow.getHeight());
         Blur.ShaderUniform(shape, alpha, shader);
 

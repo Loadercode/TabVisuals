@@ -29,6 +29,8 @@ import com.loadercode.tabvisuals.render.color.ColorAssist;
 import com.loadercode.tabvisuals.render.math.calc.Calculate;
 import com.loadercode.tabvisuals.render.math.projection.Projection;
 import com.loadercode.tabvisuals.render.shader.Shader;
+import com.loadercode.tabvisuals.TabVisualsClient;
+import org.slf4j.Logger;
 
 import java.util.HashMap;
 import java.util.function.Consumer;
@@ -67,6 +69,13 @@ public class Render3D implements QuickImports {
      */
     private static volatile boolean lineSmoothEnabled = true;
     public static void setLineSmooth(boolean enabled) { lineSmoothEnabled = enabled; }
+
+    private static final Logger LOGGER = TabVisualsClient.LOGGER;
+    /** Rate-limit для beginWrite-ошибок: exception каждый кадр заливал бы консоль. */
+    private static final long FRAMEBUFFER_LOG_INTERVAL_MS = 5_000L;
+    private static long lastFramebufferLogAt;
+    /** entry-трансформ в vertex*Raw не применяется (см. warnEntryIgnored) — предупреждаем один раз. */
+    private static boolean entryTransformWarned;
 
     private static BufferBuilder batchBuffer = null;
     @Getter
@@ -299,14 +308,20 @@ public class Render3D implements QuickImports {
         if (mc.getFramebuffer() != null) {
             try {
                 mc.getFramebuffer().beginWrite(true);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                long now = System.currentTimeMillis();
+                if (now - lastFramebufferLogAt >= FRAMEBUFFER_LOG_INTERVAL_MS) {
+                    lastFramebufferLogAt = now;
+                    LOGGER.debug("main framebuffer beginWrite failed", e);
+                }
+            }
         }
 
         if (!TEXTURE.isEmpty()) {
             try {
                 Map<Identifier, List<Texture>> groups = groupTextures(TEXTURE);
                 RenderSystem.enableBlend();
-                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_CONSTANT_ALPHA);
+                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_SRC_ALPHA);
                 for (Map.Entry<Identifier, List<Texture>> group : groups.entrySet()) {
                     RenderSystem.setShaderTexture(0, group.getKey());
                     RenderSystem.setShader(ShaderProgramKeys.POSITION_TEX_COLOR);
@@ -329,7 +344,7 @@ public class Render3D implements QuickImports {
                 RenderSystem.enableDepthTest();
                 RenderSystem.depthFunc(GL11.GL_LEQUAL);
                 RenderSystem.depthMask(false);
-                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_CONSTANT_ALPHA);
+                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_SRC_ALPHA);
                 for (Map.Entry<Identifier, List<Texture>> group : groups.entrySet()) {
                     RenderSystem.setShaderTexture(0, group.getKey());
                     RenderSystem.setShader(ShaderProgramKeys.POSITION_TEX_COLOR);
@@ -353,7 +368,7 @@ public class Render3D implements QuickImports {
                 RenderSystem.enableBlend();
                 RenderSystem.disableCull();
                 RenderSystem.disableDepthTest();
-                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_CONSTANT_ALPHA);
+                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_SRC_ALPHA);
                 RenderSystem.setShader(ShaderProgramKeys.RENDERTYPE_LINES);
                 widths.forEach(width -> {
                     RenderSystem.lineWidth(width);
@@ -377,7 +392,7 @@ public class Render3D implements QuickImports {
                 RenderSystem.enableBlend();
                 RenderSystem.disableCull();
                 RenderSystem.disableDepthTest();
-                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_CONSTANT_ALPHA);
+                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_SRC_ALPHA);
                 RenderSystem.setShader(ShaderProgramKeys.POSITION_COLOR);
                 BufferBuilder buffer = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
                 QUAD.forEach(quad -> vertexQuadRaw(quad.entry, buffer, quad.x.toVector3f(), quad.y.toVector3f(), quad.w.toVector3f(), quad.z.toVector3f(), quad.color));
@@ -399,7 +414,7 @@ public class Render3D implements QuickImports {
                 RenderSystem.enableDepthTest();
                 RenderSystem.depthFunc(GL11.GL_LEQUAL);
                 RenderSystem.depthMask(false);
-                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_CONSTANT_ALPHA);
+                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_SRC_ALPHA);
                 RenderSystem.setShader(ShaderProgramKeys.RENDERTYPE_LINES);
                 widths.forEach(width -> {
                     RenderSystem.lineWidth(width);
@@ -425,7 +440,7 @@ public class Render3D implements QuickImports {
                 RenderSystem.enableDepthTest();
                 RenderSystem.depthFunc(GL11.GL_LEQUAL);
                 RenderSystem.depthMask(false);
-                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_CONSTANT_ALPHA);
+                RenderSystem.blendFunc(GlStateManager.SrcFactor.SRC_ALPHA, GlStateManager.DstFactor.ONE_MINUS_SRC_ALPHA);
                 RenderSystem.setShader(ShaderProgramKeys.POSITION_COLOR);
                 BufferBuilder buffer = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
                 QUAD_DEPTH.forEach(quad -> vertexQuadRaw(quad.entry, buffer, quad.x.toVector3f(), quad.y.toVector3f(), quad.w.toVector3f(), quad.z.toVector3f(), quad.color));
@@ -455,14 +470,13 @@ public class Render3D implements QuickImports {
     }
 
     public void drawShape(BlockPos blockPos, VoxelShape voxelShape, int color, float width, boolean fill, boolean depth) {
-        if (SHAPE_BOXES.containsKey(voxelShape)) {
-            SHAPE_BOXES.get(voxelShape).forEach(box -> {
-                box = box.offset(blockPos);
-                if (Projection.canSee(box)) drawBox(box, color, width, true, fill, depth);
-            });
-            return;
-        }
-        SHAPE_BOXES.put(voxelShape, voxelShape.getBoundingBoxes());
+        // computeIfAbsent вместо «проверка → put → return»: раньше первый вызов с новой
+        // формой только прогревал кэш и ничего не рисовал (первый кадр был пустым).
+        List<Box> boxes = SHAPE_BOXES.computeIfAbsent(voxelShape, shape -> shape.getBoundingBoxes());
+        boxes.forEach(box -> {
+            box = box.offset(blockPos);
+            if (Projection.canSee(box)) drawBox(box, color, width, true, fill, depth);
+        });
     }
 
     public void drawShapeAlternative(BlockPos blockPos, VoxelShape voxelShape, int color, float width, boolean fill, boolean depth) {
@@ -671,7 +685,23 @@ public class Render3D implements QuickImports {
         out.set(rel).rotateY(yaw).rotateX(pitch);
     }
 
+    /**
+     * Очереди LINE/QUAD хранят camera-relative координаты, а {@code vertex*Raw} дополнительно
+     * сама поворачивает их в view-пространство ({@link #toCameraSpace}). MatrixStack.Entry из
+     * ванильного мир-рендера — это modelview (см. {@link #lastWorldSpaceMatrix} и Projection):
+     * умножить координаты на entry поверх toCameraSpace() значило бы повернуть камеру дважды,
+     * то есть однозначно корректного применения здесь нет. Все реальные вызывающие передают
+     * null, поэтому вместо молчаливо неверной отрисовки — одноразовое предупреждение.
+     */
+    private static void warnEntryIgnored(MatrixStack.Entry entry) {
+        if (entry == null || entryTransformWarned) return;
+        entryTransformWarned = true;
+        LOGGER.warn("Render3D: MatrixStack.Entry is not applied by vertexLineRaw/vertexQuadRaw "
+                + "(camera-space pipeline) — geometry with a non-identity entry is drawn without its transform");
+    }
+
     private void vertexLineRaw(MatrixStack.Entry entry, VertexConsumer buffer, Vector3f start, Vector3f end, int startColor, int endColor) {
+        warnEntryIgnored(entry);
         // s и e — это один и тот же переиспользуемый вектор, поэтому после
         // второго toCameraSpace значения первого читаем уже в скалярах.
         toCameraSpace(start, CAMERA_SPACE);
@@ -697,6 +727,7 @@ public class Render3D implements QuickImports {
     }
 
     private void vertexQuadRaw(MatrixStack.Entry entry, VertexConsumer buffer, Vector3f v1, Vector3f v2, Vector3f v3, Vector3f v4, int color) {
+        warnEntryIgnored(entry);
         toCameraSpace(v1, CAMERA_SPACE);
         buffer.vertex(CAMERA_SPACE.x, CAMERA_SPACE.y, CAMERA_SPACE.z).color(color);
         toCameraSpace(v2, CAMERA_SPACE);
@@ -753,8 +784,10 @@ public class Render3D implements QuickImports {
 
     public Vector3f getNormal(Vector3f start, Vector3f end) {
         Vector3f normal = new Vector3f(start).sub(end);
-        float sqrt = (float) Math.sqrt(normal.lengthSquared());
-        return normal.div(sqrt);
+        float lengthSq = normal.lengthSquared();
+        // Вырожденная линия (start == end): деление на √0 давало NaN-нормаль и NaN-вершины.
+        if (lengthSq < 1.0E-12f) return new Vector3f(0f, 1f, 0f);
+        return normal.div((float) Math.sqrt(lengthSq));
     }
 
     // --- Группировка батчей по текстуре ---

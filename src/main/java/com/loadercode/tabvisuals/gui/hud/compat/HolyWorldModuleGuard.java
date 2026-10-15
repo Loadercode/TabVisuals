@@ -45,7 +45,12 @@ public final class HolyWorldModuleGuard {
         return matchesHolyWorldHost(mc.getNetworkHandler().getServerInfo().address);
     }
 
-    /** Host match: holyworld.ru, any subdomain, or "holyworld" anywhere in the host. */
+    /**
+     * Host match: holyworld.ru, any subdomain, or "holyworld" anywhere in the host.
+     * Копия осознанная: в util\Network есть только isFunTimeByAddress (функайм-специфичный),
+     * общего публичного extract-host хелпера нет — выносить некуда, а держать рядом
+     * с вычислением флага дешевле. Locale.ROOT — как и в Network (не дрейфовать).
+     */
     public static boolean matchesHolyWorldHost(String address) {
         if (address == null || address.isEmpty()) {
             return false;
