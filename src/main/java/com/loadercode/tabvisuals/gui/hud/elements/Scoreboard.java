@@ -89,7 +89,8 @@ public class Scoreboard extends AbstractDraggable {
                 .round(4)
                 .build());
 
-        float titleX = getX() + (cachedWidth - cachedTitleWidth) / 2;
+        // Центр/правый край — снап по 0.5-сетке; slide остаётся дробным (это анимация)
+        float titleX = HudHelper.hud_px(getX() + (cachedWidth - cachedTitleWidth) / 2);
 
         // пауза в отрисовке (выключение/смена мира) перезапускает вход;
         // обновление счётов при видимой панели анимацию не трогает
@@ -112,7 +113,7 @@ public class Scoreboard extends AbstractDraggable {
             float slide = (1f - rowP) * REVEAL_SLIDE_PX;
             font.drawString(context.getMatrices(), line.name, getX() + 4 - slide, getY() + yOffset,
                     ColorAssist.multAlpha(-1, rowP));
-            font.drawString(context.getMatrices(), line.score, getX() + cachedWidth - line.scoreWidth - 4 - slide,
+            font.drawString(context.getMatrices(), line.score, HudHelper.hud_px(getX() + cachedWidth - line.scoreWidth - 4) - slide,
                     getY() + yOffset, ColorAssist.multAlpha(SCORE_COLOR, rowP));
             yOffset += 9;
             rowIndex++;
@@ -165,7 +166,8 @@ public class Scoreboard extends AbstractDraggable {
             cachedLines.add(new CachedLine(formattedName, score, scoreWidth));
         }
 
-        cachedWidth = maxWidth + 10;
+        // Ширина панели — ceil: (int)-усечение срезало последний пиксель обводки
+        cachedWidth = (float) Math.ceil(maxWidth) + 10;
         cachedHeight = (cachedLines.size() + 1) * 9 + 4;
     }
 

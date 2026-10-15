@@ -3,6 +3,7 @@ package com.loadercode.tabvisuals.mixin;
 
 import com.loadercode.tabvisuals.feature.FreeLook;
 import com.loadercode.tabvisuals.feature.Zoom;
+import com.loadercode.tabvisuals.gui.hud.elements.MediaPlayer;
 import com.llamalad7.mixinextras.injector.v2.WrapWithCondition;
 import net.minecraft.client.Mouse;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -17,6 +18,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * deltas by the current zoom ratio and hijacks the hotbar scroll while held;
  * FreeLook runs its perspective state machine each frame and intercepts
  * changeLookDirection to steer the detached camera instead of the player.
+ * The same HEAD hook routes clicks to the HUD media player transport buttons
+ * before the event reaches the open Screen.
  */
 @Mixin(Mouse.class)
 public class MouseMixin {
@@ -52,6 +55,19 @@ public class MouseMixin {
             cancellable = true)
     private void tabvisuals$zoomScroll(long window, double horizontal, double vertical, CallbackInfo ci) {
         if (Zoom.onScroll(vertical)) {
+            ci.cancel();
+        }
+    }
+
+    /**
+     * Транспортные кнопки MediaPlayer: HEAD onMouseButton срабатывает раньше
+     * диспатча клика в Screen, поэтому кнопки живут и с открытым меню.
+     * ci.cancel() ставится ТОЛЬКО при попадании в кнопку — клики мимо неё
+     * уходят в игру/экран как обычно.
+     */
+    @Inject(method = "onMouseButton", at = @At("HEAD"), cancellable = true)
+    private void tabvisuals$mediaButtons(long window, int button, int action, int mods, CallbackInfo ci) {
+        if (MediaPlayer.on_global_mouse_button(window, button, action)) {
             ci.cancel();
         }
     }

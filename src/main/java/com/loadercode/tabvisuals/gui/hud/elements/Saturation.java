@@ -84,9 +84,12 @@ public class Saturation extends AbstractDraggable {
                 baseY -= iconSize + 2f;
             }
 
-            // Обновляем базовые координаты драггебла, чтобы хитбокс совпадал с визуа
-            setX((int) baseX);
-            setY((int) baseY);
+            // Обновляем базовые координаты драггебла, чтобы хитбокс совпадал с визуалом;
+            // округление вместо (int)-усечения — иконки не уезжали на пиксель влево
+            setX(Math.round(baseX));
+            setY(Math.round(baseY));
+            baseX = getX();
+            baseY = getY();
         }
 
         anim_update();
@@ -161,8 +164,8 @@ public class Saturation extends AbstractDraggable {
                 Render2D.drawTexture(
                         matrices,
                         iconTexture,
-                        (int) cellX,
-                        (int) baseY,
+                        Math.round(cellX),
+                        Math.round(baseY),
                         iconSize,
                         iconSize,
                         0,

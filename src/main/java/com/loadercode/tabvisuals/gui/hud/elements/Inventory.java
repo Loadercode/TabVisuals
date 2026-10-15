@@ -101,11 +101,11 @@ public class Inventory extends AbstractDraggable {
                     .outlineColor(fadeOutline)
                     .color(fadeGradient0, fadeGradient1, fadeGradient2, fadeGradient3)
                     .build());
-            blur.render(ShapeProperties.create(matrix, getX(), getY() + 16.40f, getWidth(), getHeight() - 15)
+            blur.render(ShapeProperties.create(matrix, getX(), getY() + 16.5f, getWidth(), getHeight() - 17)
                     .round(0, 4, 0, 4).quality(com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality())
                     .color(fadeBlur)
                     .build());
-            rectangle.render(ShapeProperties.create(matrix, getX(), getY() + 16.40f, getWidth(), getHeight() - 15)
+            rectangle.render(ShapeProperties.create(matrix, getX(), getY() + 16.5f, getWidth(), getHeight() - 17)
                     .round(0, 4, 0, 4)
                     .thickness(0.1f)
                     .outlineColor(fadeOutline)
@@ -116,10 +116,11 @@ public class Inventory extends AbstractDraggable {
         itemsCached.drawString(matrix, "Items:", getX() + 76, getY() + 7, ColorAssist.getText(enter));
         itemsCached.drawString(matrix, itemCountText, getX() + 105, getY() + 7, ColorAssist.getText(enter));
 
-        rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 0.5f, 6).color(ColorAssist.getText(0.5F * enter)).round(0F).build());
+        // Маркер и линии сетки: целые координаты + толщина 1, без полупиксельных волосяных линий
+        rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 1f, 6).color(ColorAssist.getText(0.5F * enter)).round(0F).build());
 
-        iconCached.drawString(matrix, "F", getX() + 4.5f, getY() + 6, ColorAssist.getText(enter));
-        fontCached.drawString(matrix, getName(), getX() + 22, getY() + 6.5f, ColorAssist.getText(enter));
+        iconCached.drawString(matrix, "F", getX() + HudHelper.hud_px(4.5f), getY() + 6, ColorAssist.getText(enter));
+        fontCached.drawString(matrix, getName(), getX() + HudHelper.hud_px(22f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText(enter));
 
         int offsetY = 20;
         int offsetX = 4;
@@ -127,13 +128,13 @@ public class Inventory extends AbstractDraggable {
         int itemIndex = 0;
 
         int separatorColor = ColorAssist.getText(0.1F * enter);
-        float gridX = getX() + 14.5f;
+        float gridX = getX() + 15f;
         float gridY = getY() + 21f;
         for (int col = 0; col < 8; col++) {
-            Render2D.drawQuad(gridX + col * 13f, gridY, 0.5f, 35f, separatorColor);
+            Render2D.drawQuad(gridX + col * 13f, gridY, 1f, 35f, separatorColor);
         }
         for (int row = 0; row < 2; row++) {
-            Render2D.drawQuad(getX() + 4.5f, getY() + 31f + row * 13f, 113f, 0.5f, separatorColor);
+            Render2D.drawQuad(getX() + 5f, getY() + 31f + row * 13f, 112f, 1f, separatorColor);
         }
 
         for (int i = 0; i < SLOT_COUNT; i++) {

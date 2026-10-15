@@ -33,9 +33,11 @@ public final class MusicManager {
     private static volatile LrcClient.Lyrics lyrics = LrcClient.Lyrics.EMPTY;
     private static volatile long lyricsForTrack;
 
-    /** Registered cover texture + its width (square) once the file decodes. */
+    /** Registered cover texture + its width in pixels once the file decodes. */
     private static volatile Identifier coverTex;
     private static volatile int coverSize;
+    /** Высота той же текстуры — нужна для crop-fill обложки без растяжения. */
+    private static volatile int coverHeight;
     /** Read from the worker thread too — must be volatile for the stale-guard. */
     private static volatile long coverForTrack;
     /** One fetch round per track; stays false until a late cover event arrives. */
@@ -161,6 +163,11 @@ public final class MusicManager {
         return coverSize;
     }
 
+    /** Высота текстуры обложки в пикселях — вторая половина UV-геометрии. */
+    public static int coverHeight() {
+        return coverHeight;
+    }
+
     /** Decodes the captured cover file once per track, off-thread, registers it on the client thread. */
     private static void syncCover() {
         MediaBridge.Snapshot s = track();
@@ -194,8 +201,11 @@ public final class MusicManager {
                         if (prevCoverTex != null) prevCoverTex.close();
                         prevCoverTex = new NativeImageBackedTexture(img);
                         mc.getTextureManager().registerTexture(COVER_ID, prevCoverTex);
-                        coverTex = COVER_ID;
+                        // размеры — до публикации id: читатель не увидит новую
+                        // текстуру со старыми/нулевыми габаритами
                         coverSize = img.getWidth();
+                        coverHeight = img.getHeight();
+                        coverTex = COVER_ID;
                     });
                     return;
                 } catch (IOException | RuntimeException e) {
@@ -210,6 +220,7 @@ public final class MusicManager {
             if (coverForTrack == id) {
                 coverTex = null;
                 coverSize = 0;
+                coverHeight = 0;
             }
         }, "tabvisuals-cover");
         t.setDaemon(true);
@@ -224,6 +235,7 @@ public final class MusicManager {
         }
         coverTex = null;
         coverSize = 0;
+        coverHeight = 0;
     }
 
     /**

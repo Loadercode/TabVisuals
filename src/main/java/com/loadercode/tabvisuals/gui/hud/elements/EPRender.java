@@ -84,7 +84,8 @@ public class EPRender extends AbstractDraggable {
             int shadowWidth = Math.max(18, size);
             int shadowX1 = centerX - shadowWidth / 2;
             int shadowX2 = centerX + shadowWidth / 2;
-            context.fill(shadowX1, (int) (base_y - 4), shadowX2, (int) base_y,
+            // Округление вместо (int)-усечения: тень не дёргалась на дробном slide_px
+            context.fill(shadowX1, Math.round(base_y - 4), shadowX2, Math.round(base_y),
                     Math.round(SHADOW_ALPHA * enter) << 24);
         }
 

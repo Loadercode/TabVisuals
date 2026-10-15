@@ -2,7 +2,10 @@
 package com.loadercode.tabvisuals.gui.hud.elements;
 
 import lombok.Getter;
+import com.loadercode.tabvisuals.gui.Theme;
+import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.hud.Hud;
+import com.loadercode.tabvisuals.gui.hud.HudRenderer;
 import com.loadercode.tabvisuals.gui.hud.compat.Instance;
 import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 import com.loadercode.tabvisuals.gui.hud.draggable.AbstractDraggable;
@@ -48,6 +51,24 @@ public class MediaPlayer extends AbstractDraggable {
     private static final float SPOTIFY_ARTWORK_CROP_BOTTOM = 0.20f;
     @Getter
     private volatile float artworkCropBottom = 0f;
+
+    // ------------------------------------------------------------- transport
+
+    /** Зоны кнопок: предыдущая, play/pause, следующая. */
+    private static final int ZONE_PREV = 0, ZONE_PLAY = 1, ZONE_NEXT = 2;
+    private static final int ZONE_COUNT = 3;
+    /** Полоса кнопок: под строкой «время — иконки — время», ровно до полосы прогресса. */
+    private static final float ZONE_TOP = 21.5f, ZONE_PAD = 2f;
+    /** Скорости сглаживания hover (14) и press (24) — см. ease_zones. */
+    private static final float HOVER_K = 14f, PRESS_K = 24f;
+
+    private final float[] hover_t = new float[ZONE_COUNT];
+    private final float[] press_t = new float[ZONE_COUNT];
+    /** Зона, зажатая в данный момент; -1 — ничего не нажато. */
+    private int pressed_zone = -1;
+    private long pressed_ns;
+    /** nanoTime предыдущего кадра — из него считается dt для сглаживания. */
+    private long last_frame_ns;
 
     public MediaPlayer() {
         super("Media Player", 10, 120, 100, 40, true);
@@ -101,10 +122,6 @@ public class MediaPlayer extends AbstractDraggable {
         }
     }
 
-    private boolean isButtonArea(double mouseX, double mouseY, float buttonX, float buttonSize, float buttonY, float buttonHeight) {
-        return mouseX >= buttonX && mouseX <= buttonX + buttonSize && mouseY >= buttonY && mouseY <= buttonY + buttonHeight;
-    }
-
     /**
      * Команда плееру уходит через файл — внешний скрипт-мост читает его вместо
      * прямого control-канала. Вызывать внутри controlExecutor.
@@ -123,35 +140,231 @@ public class MediaPlayer extends AbstractDraggable {
         }
     }
 
-    @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button == 0 && isHovered(mouseX, mouseY)) {
-            ensureFonts();
-            int sw = Math.max(24, getHeight() - 8);
-            // Хитбоксы считаем строго по тем же формулам, что и отрисовка иконок
-            // (см. drawDraggable), иначе клик не попадал в нарисованную кнопку.
-            float baseX = (float) (getX() + (getWidth() + sw + 4 - 4) / 2);
-            float playPauseX = baseX + 4.5f;
-            float prevX = baseX - 4;
-            float nextX = baseX + 14f;
-            float y = getY() + 25.5f;
-            float buttonHeight = iconFont.getStringHeight("I");
-            if (media.active() && isButtonArea(mouseX, mouseY, playPauseX, iconFont.getStringWidth("I"), y, buttonHeight)) {
-                controlExecutor.execute(() -> sendCommand("playPause"));
+    // ---------------------------------------------------------- click routing
+
+    /**
+     * Глобальный клик/отпускание мыши — вызывается из MouseMixin на HEAD
+     * onMouseButton, то есть раньше, чем событие уйдёт в Screen. Поэтому
+     * кнопки работают и с открытым меню/инвентарём.
+     *
+     * <p>Возвращает true только при попадании в кнопку: тогда событие
+     * поглощается и игра/экран его не видят. Клики мимо кнопок возвращают
+     * false и обрабатываются как обычно — меню и геймплей не страдают.
+     */
+    public static boolean on_global_mouse_button(long window, int button, int action) {
+        if (action == 0) {
+            // отпускание мыши: просто убираем нажатие, ничего не поглощаем
+            MediaPlayer mp = getInstance();
+            if (mp != null) mp.pressed_zone = -1;
+            return false;
+        }
+        if (action != 1 || button != 0) return false;
+        if (mc.getWindow() == null || window != mc.getWindow().getHandle()) return false;
+        if (mc.player == null || mc.options.hudHidden) return false;
+        // без открытого экрана курсор захвачен (getX/getY = центр окна) —
+        // клик-атака не должен попадать в кнопки, наведение тоже бессмысленно
+        if (mc.currentScreen == null) return false;
+        // интерактивный редактор HUD живёт на собственных опросах мыши —
+        // пока он открыт, клик внутри чата принадлежит ему
+        if (HudHelper.isChat(mc.currentScreen) && HudRenderer.elementOn("Interactive editor")) return false;
+
+        MediaPlayer mp = getInstance();
+        if (mp == null || !mp.media.active()) return false;
+        Hud hud = Hud.getInstance();
+        if (hud == null || !mp.canDraw(hud, mp)) return false;
+
+        float[] zones = mp.zone_rects();
+        double scale = mc.getWindow().getScaleFactor();
+        double mx = mc.mouse.getX() / scale;
+        double my = mc.mouse.getY() / scale;
+        for (int i = 0; i < ZONE_COUNT; i++) {
+            if (UiRender.inside(mx, my, zones[4 * i], zones[4 * i + 1], zones[4 * i + 2], zones[4 * i + 3])) {
+                mp.press_zone(i);
                 return true;
             }
-            if (media.active() && isButtonArea(mouseX, mouseY, prevX, iconFont.getStringWidth("O"), y, buttonHeight)) {
-                controlExecutor.execute(() -> sendCommand("prev"));
-                return true;
-            }
-            if (media.active() && isButtonArea(mouseX, mouseY, nextX, iconFont.getStringWidth("P"), y, buttonHeight)) {
-                controlExecutor.execute(() -> sendCommand("next"));
-                return true;
-            }
-            if (isCanDrag()) return super.mouseClicked(mouseX, mouseY, button);
         }
         return false;
     }
+
+    /** Отправка команды + фиксация нажатия для press-анимации. */
+    private void press_zone(int zone) {
+        pressed_zone = zone;
+        pressed_ns = System.nanoTime();
+        String command = switch (zone) {
+            case ZONE_PREV -> "prev";
+            case ZONE_NEXT -> "next";
+            default -> "playPause";
+        };
+        controlExecutor.execute(() -> sendCommand(command));
+    }
+
+    /** Центр полосы иконок — та же целочисленная формула, что и в отрисовке. */
+    private float base_x() {
+        int sizeArtwork = Math.max(24, getHeight() - 8);
+        return (float) (getX() + (getWidth() + sizeArtwork + 4 - 4) / 2);
+    }
+
+    /**
+     * Хитбоксы трёх зон, построенные по тем же якорям, по которым рисуются
+     * иконки (base_x() - 4 / + 4.5 / + 14): граница зоны — середина между
+     * соседними иконками. Один расчёт и на отрисовку, и на клик, иначе клик
+     * не попадает в нарисованную кнопку.
+     */
+    private float[] zone_rects() {
+        ensureFonts();
+        float baseX = base_x();
+        float prevW = iconFont.getStringWidth("O");
+        float playW = Math.max(iconFont.getStringWidth("I"), iconFont.getStringWidth("H"));
+        float nextW = iconFont.getStringWidth("P");
+        float p0 = baseX - 4f, p1 = baseX + 4.5f, p2 = baseX + 14f;
+        float left = p0 - ZONE_PAD, right = p2 + nextW + ZONE_PAD;
+        float b1 = (p0 + prevW + p1) / 2f;
+        float b2 = (p1 + playW + p2) / 2f;
+        if (!(prevW > 0f) || !(playW > 0f) || !(nextW > 0f) || b1 <= left || b2 <= b1 || right <= b2) {
+            // метрики ещё не посчитаны — делим полосу на три равные части
+            b1 = left + (right - left) / 3f;
+            b2 = left + (right - left) * 2f / 3f;
+        }
+        // низ полосы — ровно верх полосы прогресса (getHeight() - 8)
+        float top = getY() + ZONE_TOP;
+        float bottom = Math.max(top + 6f, getY() + getHeight() - 8f);
+        float h = bottom - top;
+        return new float[]{
+                left, top, b1 - left, h,
+                b1, top, b2 - b1, h,
+                b2, top, right - b2, h,
+        };
+    }
+
+    /**
+     * Сглаживание hover/press по {@code 1 - exp(-dt * k)}: на 30 и на 300 FPS
+     * анимация занимает одно и то же wall-clock время.
+     */
+    private void ease_zones(float[] zones, float dt) {
+        float kHover = 1f - (float) Math.exp(-dt * HOVER_K);
+        float kPress = 1f - (float) Math.exp(-dt * PRESS_K);
+        if (pressed_zone >= 0 && System.nanoTime() - pressed_ns > 2_000_000_000L) {
+            pressed_zone = -1; // отпускание потерялось (alt-tab) — кнопка не должна залипнуть
+        }
+        // без экрана курсор захвачен — mx/my всегда центр окна, hover выключаем
+        boolean cursorFree = mc.currentScreen != null;
+        double scale = mc.getWindow().getScaleFactor();
+        double mx = mc.mouse.getX() / scale;
+        double my = mc.mouse.getY() / scale;
+        for (int i = 0; i < ZONE_COUNT; i++) {
+            float hoverTarget = cursorFree && media.active()
+                    && UiRender.inside(mx, my, zones[4 * i], zones[4 * i + 1], zones[4 * i + 2], zones[4 * i + 3])
+                    ? 1f : 0f;
+            float pressTarget = pressed_zone == i ? 1f : 0f;
+            hover_t[i] = approach(hover_t[i], hoverTarget, kHover);
+            press_t[i] = approach(press_t[i], pressTarget, kPress);
+        }
+    }
+
+    /** Приближение к цели со ступом, равным шагу экспоненты; снап на точности. */
+    private static float approach(float current, float target, float step) {
+        float next = current + (target - current) * step;
+        return Math.abs(target - next) < 0.0015f ? target : next;
+    }
+
+    /** Кнопки-плашки под иконками: подсветка при нажатии, уходящий press-scale. */
+    private void draw_zones(MatrixStack m, float[] zones, int accent) {
+        for (int i = 0; i < ZONE_COUNT; i++) {
+            float zx = zones[4 * i], zy = zones[4 * i + 1], zw = zones[4 * i + 2], zh = zones[4 * i + 3];
+            float h = hover_t[i];
+            if (h > 0.01f) {
+                UiRender.glow(m, zx + zw / 2f, zy + zh / 2f, Math.max(zw, zh) * 0.62f, accent, 0.28f * h, 1f);
+            }
+            int bg = UiRender.mix(ColorAssist.getRect(0.5f), UiRender.withAlpha(accent, 140), UiRender.clamp01(h));
+            if (i == ZONE_PLAY) {
+                // play/pause — основное действие, у него акцентная рамка
+                UiRender.accentButton(m, null, zx, zy, zw, zh, 3f, null, h, press_t[i], bg, 0);
+            } else {
+                UiRender.button(m, null, zx, zy, zw, zh, 3f, null, h, press_t[i], bg, 0);
+            }
+        }
+    }
+
+    /** Иконки транспорта поверх плашек: те же якоря, что и в zone_rects(). */
+    private void draw_transport(MatrixStack m, float[] zones) {
+        String[] glyphs = {"O", media.playing() ? "I" : "H", "P"};
+        float baseX = base_x();
+        float[] anchors = {baseX - 4f, baseX + 4.5f, baseX + 14f};
+        float y = getY() + 25.5f;
+        for (int i = 0; i < ZONE_COUNT; i++) {
+            float scale = UiRender.pressScale(press_t[i]);
+            float cx = zones[4 * i] + zones[4 * i + 2] / 2f;
+            float cy = zones[4 * i + 1] + zones[4 * i + 3] / 2f;
+            int color = UiRender.mix(ColorAssist.getText(), 0xFFFFFFFF, 0.35f * hover_t[i]);
+            m.push();
+            m.translate(cx, cy, 0f);
+            m.scale(scale, scale, 1f);
+            m.translate(-cx, -cy, 0f);
+            iconFont.drawString(m, glyphs[i], anchors[i], y, color);
+            m.pop();
+        }
+    }
+
+    // ----------------------------------------------------------------- cover
+
+    /**
+     * Обложка без растяжения: квадрат назначения заполняется квадратным
+     * куском источника по центру (crop-fill). Водяной знак Spotify снизу
+     * остаётся обрезкой по UV, а не растягиванием — как было раньше.
+     */
+    private void draw_cover(MatrixStack m, Identifier tex, int srcW, int srcH, float x, float y, float size) {
+        float usableH = srcH * (1f - artworkCropBottom);
+        if (usableH < 1f) usableH = srcH;
+        int side = Math.max(1, Math.round(Math.min(srcW, usableH)));
+        int u = Math.max(0, Math.min(srcW - side, Math.round((srcW - side) / 2f)));
+        int v = Math.max(0, Math.round((usableH - side) / 2f));
+        if (v + side > srcH) v = srcH - side;
+        com.mojang.blaze3d.systems.RenderSystem.enableBlend();
+        com.mojang.blaze3d.systems.RenderSystem.defaultBlendFunc();
+        Render2D.drawTexture(m, tex, x, x + size, y, y + size, 0f, side, side, u, v, srcW, srcH, 0xFFFFFFFF);
+        com.mojang.blaze3d.systems.RenderSystem.disableBlend();
+    }
+
+    /**
+     * Заглушка вместо обложки: фиолетово-белый градиент от акцента темы,
+     * мягкое радиальное свечение и буква трека. Рисуется только скруглёнными
+     * фигурами, поэтому углы остаются аккуратными.
+     */
+    private void draw_cover_placeholder(MatrixStack m, float x, float y, float size) {
+        int accent = Theme.get().accent();
+        int cTL = accent;
+        int cBL = UiRender.lighten(accent, 0.18f);
+        int cTR = UiRender.lighten(accent, 0.45f);
+        int cBR = UiRender.lighten(accent, 0.85f); // почти белый
+        // порядок цветов ShapeProperties: bl, tl, br, tr (см. UiRender.gradient)
+        rectangle.render(ShapeProperties.create(m, x, y, size, size)
+                .round(3f)
+                .color(cBL, cTL, cBR, cTR)
+                .build());
+        UiRender.glow(m, x + size / 2f, y + size / 2f, size * 0.55f, 0xFFFFFF, 0.30f, 1f);
+
+        String letter = cover_letter();
+        if (!letter.isEmpty()) {
+            float glyphH = 0.5f * bigFont.getStringHeight(letter);
+            bigFont.drawString(m, letter,
+                    x + (size - bigFont.getStringWidth(letter)) / 2f,
+                    y + (size - glyphH) / 2f + 2f,
+                    UiRender.withAlpha(0xFFFFFFFF, 235));
+        }
+    }
+
+    /** Первая буква названия трека (или приложения), если она есть. */
+    private String cover_letter() {
+        String source = media.title() != null && !media.title().isBlank() ? media.title() : media.app();
+        if (source == null) return "";
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (!Character.isWhitespace(c)) return String.valueOf(Character.toUpperCase(c));
+        }
+        return "";
+    }
+
+    // ------------------------------------------------------------------ draw
 
     @Override
     public void drawDraggable(DrawContext context) {
@@ -159,8 +372,12 @@ public class MediaPlayer extends AbstractDraggable {
         ScissorAssist scissor = ScissorAssist.INSTANCE;
         ensureFonts();
 
+        long now = System.nanoTime();
+        float dt = last_frame_ns == 0L ? 0.016f : (now - last_frame_ns) / 1_000_000_000f;
+        last_frame_ns = now;
+        dt = MathHelper.clamp(dt, 0.0001f, 0.05f);
+
         int sizeArtwork = Math.max(24, getHeight() - 8);
-        int sizePausePlay = 4;
         int maxDurationWidth = getWidth() - (sizeArtwork + 12) + 15;
 
         long rawDuration = media.endMs();
@@ -196,25 +413,23 @@ public class MediaPlayer extends AbstractDraggable {
 
         float ax = getX() + 4;
         float ay = getY() + 4;
-        int artworkWidthExtra = (artworkCropBottom > 0f) ? 9 : 0;
-        float drawW = (float) sizeArtwork + artworkWidthExtra;
-        float drawX1 = ax - artworkWidthExtra / 2f;
-        rectangle.render(ShapeProperties.create(matrix, ax, ay, (float) sizeArtwork, (float) sizeArtwork).round(3).color(ColorAssist.getRect(1)).build());
         // Обложку тянем из MusicManager (регистрируется один раз на трек); нет
-        // текстуры — рисуем только тёмный фон (он выше по коду).
+        // текстуры — рисуем фиолетовую заглушку вместо пустого прямоугольника.
         Identifier artTex = MusicManager.coverTexture();
-        int artSize = MusicManager.coverSize();
-        if (artTex != null && artSize > 0) {
-            com.mojang.blaze3d.systems.RenderSystem.enableBlend();
-            com.mojang.blaze3d.systems.RenderSystem.defaultBlendFunc();
-            if (artworkCropBottom > 0 && artworkCropBottom < 1) {
-                int regionH = (int) (artSize * (1f - artworkCropBottom));
-                Render2D.drawTexture(matrix, artTex, drawX1, drawX1 + drawW, ay, ay + (float) sizeArtwork, 0f, artSize, regionH, 0f, 0f, artSize, artSize, 0xFFFFFFFF);
-            } else {
-                Render2D.drawTexture(matrix, artTex, drawX1, drawX1 + drawW, ay, ay + (float) sizeArtwork, 0f, artSize, artSize, 0f, 0f, artSize, artSize, 0xFFFFFFFF);
-            }
-            com.mojang.blaze3d.systems.RenderSystem.disableBlend();
+        int artW = MusicManager.coverSize();
+        int artH = MusicManager.coverHeight();
+        if (artTex != null && artW > 0 && artH > 0) {
+            rectangle.render(ShapeProperties.create(matrix, ax, ay, (float) sizeArtwork, (float) sizeArtwork).round(3).color(ColorAssist.getRect(1)).build());
+            draw_cover(matrix, artTex, artW, artH, ax, ay, sizeArtwork);
+        } else {
+            draw_cover_placeholder(matrix, ax, ay, sizeArtwork);
         }
+
+        // кнопки рисуем ДО подписей времени, чтобы текст оставался читаемым
+        float[] zones = zone_rects();
+        ease_zones(zones, dt);
+        draw_zones(matrix, zones, Theme.get().accent());
+
         miniFont.drawString(matrix, timePosition, getX() + 8 + sizeArtwork, getY() + 27, ColorAssist.getText());
         miniFont.drawString(matrix, timeDuration, getX() + getWidth() - 4 - miniFont.getStringWidth(timeDuration) + 15, getY() + 27, ColorAssist.getText());
 
@@ -222,8 +437,7 @@ public class MediaPlayer extends AbstractDraggable {
         rectangle.render(ShapeProperties.create(matrix, getX() + 8 + sizeArtwork, getY() + getHeight() - 8f, widthDuration, 3.5f).softness(4).round(1).color(ColorAssist.roundClientColor(0.2F)).build());
         rectangle.render(ShapeProperties.create(matrix, getX() + 8 + sizeArtwork, getY() + getHeight() - 8f, widthDuration, 3.5f).round(0.85F).color(ColorAssist.roundClientColor(1)).build());
 
-        iconFont.drawString(matrix, (media.playing() ? "I" : "H"), (float) (getX() + (getWidth() + sizeArtwork + 4 - sizePausePlay) / 2) + 4.5f, getY() + 25.5f, ColorAssist.getText());
-        iconFont.drawString(matrix, "O", (float) (getX() + (getWidth() + sizeArtwork + 4 - sizePausePlay) / 2) - 4, getY() + 25.5f, ColorAssist.getText());
-        iconFont.drawString(matrix, "P", (float) (getX() + (getWidth() + sizeArtwork + 4 - sizePausePlay) / 2) + 14f, getY() + 25.5f, ColorAssist.getText());
+        // иконки последними — они интерактивные и всегда сверху
+        draw_transport(matrix, zones);
     }
 }

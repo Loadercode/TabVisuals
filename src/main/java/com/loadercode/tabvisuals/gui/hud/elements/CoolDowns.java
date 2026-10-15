@@ -184,7 +184,6 @@ public class CoolDowns extends AbstractDraggable {
       }
         String cooldownCountText = String.valueOf(activeCooldownCount);
         float textWidth = itemsCached.getStringWidth(cooldownCountText);
-        float boxWidth = textWidth + 6;
 
         // wall-clock развязка: по разрыву кадров понимаем, что элемент только что вернулся
         long now = System.currentTimeMillis();
@@ -204,7 +203,8 @@ public class CoolDowns extends AbstractDraggable {
         }
         final float countPulse = pulse_env(now - count_pulse_ms, 260L);
 
-        final float countX = getX() + getWidth() - boxWidth - 2.5f;
+        final float countX = HudHelper.hud_text_right(itemsCached, cooldownCountText,
+                HudHelper.hud_px(getX() + getWidth() - 8f));
         final float bump = 1f + 0.35f * countPulse;
         final int countColor = ColorAssist.interpolate(ColorAssist.getText(), ColorAssist.getClientColor(), countPulse);
         final float slideY = (1f - enter) * -6f;
@@ -238,16 +238,19 @@ public class CoolDowns extends AbstractDraggable {
                     .color(gc[0], gc[1], gc[2], gc[3])
                 .build());
 
-        itemsCached.drawString(matrix, "Active:", getX() + getWidth() - boxWidth - 22, getY() + 7, ColorAssist.getText());
+        // Фиксированная колонка справа: счётчик и подпись не «ездят» при смене разрядов
+        final float rightEdge = HudHelper.hud_px(getX() + getWidth() - 8f);
+        itemsCached.drawString(matrix, "Active:",
+                HudHelper.hud_text_right(itemsCached, "Active:", rightEdge - 22f), getY() + 7, ColorAssist.getText());
         // счётчик короткий — центр берём от измерения того же шрифта, выравнивание x фиксированное
-        Calculate.scale(matrix, countX + textWidth / 2f, getY() + 10f, bump, bump, () ->
+        Calculate.scale(matrix, HudHelper.hud_px(countX + textWidth / 2f), getY() + 10f, bump, bump, () ->
                 itemsCached.drawString(matrix, cooldownCountText, countX, getY() + 7, countColor));
 
-        rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 0.5f, 6)
+        rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 1f, 6)
                 .color(ColorAssist.getText(0.5F)).round(0F).build());
 
-        iconCached.drawString(matrix, "D", getX() + 4f, getY() + 5.5f, ColorAssist.getText());
-        fontCached.drawString(matrix, "CoolDowns", getX() + 22, getY() + 6.5f, ColorAssist.getText());
+        iconCached.drawString(matrix, "D", getX() + HudHelper.hud_px(4f), getY() + HudHelper.hud_px(5.5f), ColorAssist.getText());
+        fontCached.drawString(matrix, "CoolDowns", getX() + HudHelper.hud_px(22f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
 
         // Показываем инфо что каждый кулдаун теперь можно двигать отдельно
         if (HudHelper.isChat(mc.currentScreen)) {

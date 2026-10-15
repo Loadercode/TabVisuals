@@ -4,6 +4,7 @@ package com.loadercode.tabvisuals.gui.hud.elements.island;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.Identifier;
+import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.island.impl.*;
 import com.loadercode.tabvisuals.gui.hud.Hud;
 import com.loadercode.tabvisuals.gui.hud.compat.Instance;
@@ -13,7 +14,6 @@ import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
 import com.loadercode.tabvisuals.render.geometry.Render2D;
 import com.loadercode.tabvisuals.render.shape.ShapeProperties;
-import com.loadercode.tabvisuals.render.math.calc.Calculate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +41,8 @@ public class DynamicIsland extends AbstractDraggable {
     private float currentHeight = 20f;
     private long lastStatusLookupTime;
     private long lastTimeUpdate;
+    /** Момент предыдущего кадра — из него считается dt для FPS-независимого сглаживания. */
+    private long lastFrameNs;
     private String cachedTime = "";
     private FontRenderer externalFont;
 
@@ -67,6 +69,12 @@ public class DynamicIsland extends AbstractDraggable {
         IslandStatus activeStatus = getActiveStatus();
         cachedActiveStatus = activeStatus;
 
+        // 1 - exp(-dt*k), dt ограничен 0.1 — скорость не зависит от FPS
+        long now = System.nanoTime();
+        float dt = lastFrameNs == 0L ? 0.0166f : (now - lastFrameNs) / 1_000_000_000f;
+        lastFrameNs = now;
+        if (dt > 0.1f) dt = 0.1f;
+
         MatrixStack matrix = context.getMatrices();
         float screenW = mc.getWindow().getScaledWidth();
         float x = screenW / 2f - currentWidth / 2f;
@@ -80,11 +88,11 @@ public class DynamicIsland extends AbstractDraggable {
 
         if (activeStatus != null) {
             activeStatus.updateSize();
-            currentWidth  = Calculate.interpolateSmooth(4f, currentWidth,  activeStatus.getWidth());
-            currentHeight = Calculate.interpolateSmooth(4f, currentHeight, activeStatus.getHeight());
+            currentWidth  = HudHelper.hud_anim_approach(currentWidth,  activeStatus.getWidth(), 10f, dt);
+            currentHeight = HudHelper.hud_anim_approach(currentHeight, activeStatus.getHeight(), 10f, dt);
         } else {
-            currentWidth = Calculate.interpolateSmooth(4f, currentWidth, 48f);
-            currentHeight = Calculate.interpolateSmooth(4f, currentHeight, 15f);
+            currentWidth  = HudHelper.hud_anim_approach(currentWidth,  48f, 10f, dt);
+            currentHeight = HudHelper.hud_anim_approach(currentHeight, 15f, 10f, dt);
         }
 
         x = screenW / 2f - currentWidth / 2f;
@@ -96,8 +104,8 @@ public class DynamicIsland extends AbstractDraggable {
             statusAlpha = 0f;
             slideAnim = 0f;
         }
-        statusAlpha = Calculate.interpolateSmooth(2f, statusAlpha, 1f);  // 12f — скорость появления статуса
-        slideAnim = Calculate.interpolateSmooth(2f, slideAnim, 1f);      // 10f — скорость слайда
+        statusAlpha = HudHelper.hud_anim_approach(statusAlpha, 1f, 12f, dt);  // появление статуса
+        slideAnim = HudHelper.hud_anim_approach(slideAnim, 1f, 10f, dt);      // слайд
 
         int[] gradientColors = ColorAssist.getRectangleGradientColors();
         blur.render(ShapeProperties.create(matrix, x, y, currentWidth, currentHeight)
@@ -115,11 +123,11 @@ public class DynamicIsland extends AbstractDraggable {
         if (externalFont == null) {
             externalFont = Fonts.getSize(EXTERNAL_FONT_SIZE, Fonts.Type.NOTVISUALS_MEDIUM);
         }
+        // Время и пинг — фиксированные отступы от островка, выравнивание по точной
+        // ширине и посадка на пиксельную сетку
         String time = getCurrentTimeCached();
-        float timeW = externalFont.getStringWidth(time);
-        float extFontH = externalFont.getStringHeight("0");
-        float textCenterY = (y + currentHeight / 2f) - extFontH + 18f;
-        externalFont.drawString(matrix, time, x - timeW - 8, textCenterY, 0xFFFFFFFF);
+        externalFont.drawRightSnapped(matrix, time, x - 8,
+                HudHelper.hud_text_mid_y(externalFont, time, y, currentHeight), 0xFFFFFFFF);
 
         float iconPingX = x + currentWidth + 6;
         float iconSize = 12f;
@@ -128,10 +136,13 @@ public class DynamicIsland extends AbstractDraggable {
             Render2D.drawTexture(matrix, AIRPLANE_ICON, (int) iconPingX, (int) iconCenterY, iconSize, iconSize, 0, 0, 256, 256, 256, 256, 0xFFFFFFFF);
         } else {
             int ping = Objects.requireNonNull(mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid())).getLatency();
-            externalFont.drawString(matrix, ping + " ms", iconPingX, textCenterY, 0xFFFFFFFF);
+            String pingStr = ping + " ms";
+            externalFont.drawStringSnapped(matrix, pingStr, iconPingX,
+                    HudHelper.hud_text_mid_y(externalFont, pingStr, y, currentHeight), 0xFFFFFFFF);
         }
 
-        if (activeStatus != null && statusAlpha > 0.01f) {
+        // 0.02 — ниже alpha byte 4 ванильный текст форсировал бы непрозрачность
+        if (activeStatus != null && statusAlpha > 0.02f) {
             float slideX = -256f * (1f - slideAnim);
             activeStatus.draw(context, x + slideX, y, currentWidth - slideX, currentHeight, statusAlpha, slideAnim);
         }

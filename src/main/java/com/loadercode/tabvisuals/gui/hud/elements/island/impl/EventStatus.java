@@ -2,6 +2,8 @@
 package com.loadercode.tabvisuals.gui.hud.elements.island.impl;
 
 import net.minecraft.client.gui.DrawContext;
+import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.island.IslandStatus;
 import com.loadercode.tabvisuals.gui.hud.compat.FTHelper;
 import com.loadercode.tabvisuals.render.color.ColorAssist;
@@ -24,7 +26,8 @@ public class EventStatus extends IslandStatus implements QuickImports {
     private static final float TIME_BOX_PAD = 3f;  // отступ цифр внутри маленького окна таймера
     private static final float ROW_H = 17f;
     private static final float ROW_GAP = 2f;
-    private static final float LIST_ANIM_SMOOTH = 0.15f;
+    /** Момент предыдущего updateSize — dt для FPS-независимого раскрытия списка. */
+    private long lastUpdateNs = 0L;
 
     /** Список только активных ивентов (timeEnd > now). Истёкшие не показываем, чтобы островок не зависал. */
     private static List<FTHelper.ServerEvent> getActiveEvents() {
@@ -78,6 +81,11 @@ public class EventStatus extends IslandStatus implements QuickImports {
 
     @Override
     public void updateSize() {
+        long now = System.nanoTime();
+        float dt = lastUpdateNs == 0L ? 0.0166f : (now - lastUpdateNs) / 1_000_000_000f;
+        lastUpdateNs = now;
+        if (dt > 0.1f) dt = 0.1f;
+
         List<FTHelper.ServerEvent> active = getActiveEvents();
         FTHelper.ServerEvent event = getEventToShow(active);
         if (event == null) return;
@@ -96,7 +104,9 @@ public class EventStatus extends IslandStatus implements QuickImports {
         }
 
         float target = listExpanded ? 1f : 0f;
-        listAnim += (target - listAnim) * LIST_ANIM_SMOOTH;
+        // 1 - exp(-dt*k): старые 0.15 за кадр при 60 FPS ≈ 10f в секундах
+        listAnim = HudHelper.hud_anim_approach(listAnim, target, 10f, dt);
+        if (Math.abs(listAnim - target) < 0.002f) listAnim = target;
 
         List<FTHelper.ServerEvent> rows = getRowsForList(active);
         float maxW = compactW;
@@ -141,7 +151,7 @@ public class EventStatus extends IslandStatus implements QuickImports {
                 scissor.pop();
                 return;
             }
-            drawEventRow(context, x, y, primary, remaining, font7);
+            drawEventRow(context, x, y, primary, remaining, font7, alpha);
             scissor.pop();
             return;
         }
@@ -150,14 +160,14 @@ public class EventStatus extends IslandStatus implements QuickImports {
         for (FTHelper.ServerEvent e : rows) {
             long remaining = (long) ((e.timeEnd() - System.currentTimeMillis()) / 1000);
             if (remaining <= 0) continue;
-            drawEventRow(context, x, dy, e, remaining, font7);
+            drawEventRow(context, x, dy, e, remaining, font7, alpha);
             dy += ROW_H + ROW_GAP;
         }
 
         scissor.pop();
     }
 
-    private void drawEventRow(DrawContext context, float x, float y, FTHelper.ServerEvent event, long remainingSec, FontRenderer font7) {
+    private void drawEventRow(DrawContext context, float x, float y, FTHelper.ServerEvent event, long remainingSec, FontRenderer font7, float alpha) {
         int min = (int) (remainingSec / 60);
         int sec = (int) (remainingSec % 60);
         String timeStr = String.format("%d:%02d", min, sec);
@@ -173,11 +183,12 @@ public class EventStatus extends IslandStatus implements QuickImports {
         float boxX = x + 4;
         float boxY = y + 2f;
         float timeY = boxY + (boxH - mc.textRenderer.fontHeight) / 2f + 1f;
-        float textY = boxY + boxH + 2f - font7.getStringHeight("A") / 2f;
+        float textY = HudHelper.hud_text_mid_y(font7, event.name(), y, ROW_H);
 
-        rectangle.render(ShapeProperties.create(context.getMatrices(), boxX, boxY, boxW, boxH).round(3f).color(color | 0xFF000000).build());
-        context.drawText(mc.textRenderer, timeStr, (int) (boxX + TIME_BOX_PAD), (int) timeY, ColorAssist.getText(), false);
-        font7.drawString(context.getMatrices(), event.name(), boxX + boxW + 2, textY, ColorAssist.getText());
+        int textColor = UiRender.mulAlpha(ColorAssist.getText(), alpha);
+        rectangle.render(ShapeProperties.create(context.getMatrices(), boxX, boxY, boxW, boxH).round(3f).color(UiRender.mulAlpha(color, alpha)).build());
+        context.drawText(mc.textRenderer, timeStr, (int) (boxX + TIME_BOX_PAD), (int) timeY, textColor, false);
+        font7.drawStringSnapped(context.getMatrices(), event.name(), boxX + boxW + 2, textY, textColor);
     }
 
     @Override

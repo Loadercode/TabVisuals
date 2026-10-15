@@ -315,9 +315,10 @@ public class Binds extends AbstractDraggable {
             java.lang.String[] keys = {currentRandomKey1, currentRandomKey2, currentRandomKey3};
             float textWidth = 0;
             for (String key : keys) {
-                textWidth = Math.max(textWidth, font11.getStringWidth(key));
+                // +1.5f как при отрисовке — иначе hitbox уже нарисованных пилюль
+                textWidth = Math.max(textWidth, (float) Math.ceil(font11.getStringWidth(key)) + 1.5f);
             }
-            float bindWidth = iconSize + padding + textWidth + padding + 4;
+            float bindWidth = Math.round(iconSize + padding + textWidth + padding + 4);
             float totalWidth = bindWidth * 3 + spacing * 2;
             rowWidths.add(totalWidth);
             firstRowWidth = totalWidth;
@@ -329,8 +330,10 @@ public class Binds extends AbstractDraggable {
                     int bindIndex = row * BINDS_PER_ROW + i;
                     BindInfo bind = activeBinds.get(bindIndex);
                     java.lang.String keyName = StringHelper.getBindName(bind.keyBind.setting().getKey());
-                    float textWidth = font13.getStringWidth(keyName);
-                    float bindWidth = iconSize + padding + textWidth + padding + 4;
+                    // Та же формула, что и при отрисовке (+1.5f под текст), иначе
+                    // layout-ширина строк расходилась с нарисованными пилюлями
+                    float textWidth = (float) Math.ceil(font13.getStringWidth(keyName)) + 1.5f;
+                    float bindWidth = Math.round(iconSize + padding + textWidth + padding + 4);
                     currentX += bindWidth + spacing;
                 }
                 if (bindsInThisRow > 0) {
@@ -354,8 +357,9 @@ public class Binds extends AbstractDraggable {
                 final float enter = ease_out_cubic(clamp01((now - preview_born_ms - i * 45L) / 200f));
                 matrix.push();
                 matrix.translate(0f, (1f - enter) * 6f, 0f);
-                float textWidth = font11.getStringWidth(keys[i]) + 1.5f;
-                float backgroundWidth = iconSize + padding + textWidth + padding + 4;
+                float textWidth = (float) Math.ceil(font11.getStringWidth(keys[i])) + 1.5f;
+                // Округление: (int)-усечение ширины пилюли срезало правый пиксель обводки
+                float backgroundWidth = Math.round(iconSize + padding + textWidth + padding + 4);
 
                 int[] gradientColors = ColorAssist.getRectangleGradientColors();
                 blur.render(ShapeProperties.create(matrix, posX + offsetX - 1, posY, backgroundWidth, rowHeight - 6)
@@ -377,11 +381,13 @@ public class Binds extends AbstractDraggable {
                 renderItemStack(context, stacks[i], posX + offsetX + 2, posY + padding + 0.5f);
 
                 float textX = posX + offsetX + iconSize + padding;
-                float textY = posY + padding + (iconSize - font11.getStringHeight(keys[i])) / 2;
+                // Вертикальный центр по hud_text_mid_y: getStringHeight в глиф-пространстве
+                float textY = HudHelper.hud_text_mid_y(font11, keys[i], posY + padding, iconSize);
                 int textAlpha = (int) Math.min(255, Math.max(0, 255 * animationValue));
-                font11.drawString(matrix, keys[i], textX + 1f, textY + 3f, ColorAssist.getText(textAlpha / 255f));
+                font11.drawString(matrix, keys[i], textX + 1f, textY, ColorAssist.getText(textAlpha / 255f));
 
-                font10.drawString(matrix, "64", posX + offsetX + 7, posY + rowHeight - 12, ColorAssist.getText(textAlpha / 255f));
+                // Счётчик прижат правым краем к икон-слоту (фиксированная колонка)
+                font10.drawString(matrix, "64", HudHelper.hud_text_right(font10, "64", posX + offsetX + 15f), posY + rowHeight - 12, ColorAssist.getText(textAlpha / 255f));
                 matrix.pop();
 
                 offsetX += backgroundWidth + spacing;
@@ -407,8 +413,9 @@ public class Binds extends AbstractDraggable {
                     // Ширина пилюли меряется тем же font13, которым текст рисуется
                     // ниже (см. font13.drawString): font11 давал более узкий
                     // backgroundWidth и надпись вылезала за фон/хитбокс.
-                    float textWidth = font13.getStringWidth(keyName) + 1.5f;
-                    float backgroundWidth = iconSize + padding + textWidth + padding + 4;
+                    // ceil по ширине + округление итога — пилюля без дробных краёв.
+                    float textWidth = (float) Math.ceil(font13.getStringWidth(keyName)) + 1.5f;
+                    float backgroundWidth = Math.round(iconSize + padding + textWidth + padding + 4);
 
                     int itemCount = itemCounts.getOrDefault(bind.keyBind.item(), 0);
                     boolean isEmpty = itemCount == 0;
@@ -487,11 +494,13 @@ public class Binds extends AbstractDraggable {
                     renderItemStack(context, stack, posX + offsetX + 2, currentY + padding + 0.5f);
 
                     float textX = posX + offsetX + iconSize + padding;
-                    float textY = currentY + padding + (iconSize - font11.getStringHeight(keyName)) / 2;
+                    // Центр по font13 (им же и рисуем ниже) — font11 давал другую высоту
+                    float textY = HudHelper.hud_text_mid_y(font13, keyName, currentY + padding, iconSize);
                     int textAlpha = (int) Math.min(255, Math.max(0, 255 * animationValue));
-                    font13.drawString(matrix, keyName, textX + 1f, textY + 3f, ColorAssist.getText(textAlpha / 255f));
+                    font13.drawString(matrix, keyName, textX + 1f, textY, ColorAssist.getText(textAlpha / 255f));
 
-                    font10.drawString(matrix, String.valueOf(itemCount), posX + offsetX + 7, currentY + rowHeight - 12, ColorAssist.getText(textAlpha / 255f));
+                    // Счётчик прижат правым краем к икон-слоту (фиксированная колонка)
+                    font10.drawString(matrix, String.valueOf(itemCount), HudHelper.hud_text_right(font10, String.valueOf(itemCount), posX + offsetX + 15f), currentY + rowHeight - 12, ColorAssist.getText(textAlpha / 255f));
                     matrix.pop();
 
                     offsetX += backgroundWidth + spacing;

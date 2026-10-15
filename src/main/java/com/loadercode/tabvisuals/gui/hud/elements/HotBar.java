@@ -131,16 +131,16 @@ public class HotBar extends AbstractDraggable {
 
     private void drawHotbarGrid(MatrixStack matrix, float fade) {
         float x = getX();
-        float y = getY() + 1.5f;
+        float y = getY() + 1f;
         float h = 20f;
         int gridColor = ColorAssist.multAlpha(GRID_COLOR, fade);
-        // Вертикальные линии между 9 ячейками
+        // Вертикальные линии между 9 ячейками: целые координаты + толщина 1
         for (int i = 1; i < 9; i++) {
-            Render2D.drawQuad(x + i * 20f, y, 0.75f, h, gridColor);
+            Render2D.drawQuad(x + i * 20f, y, 1f, h, gridColor);
         }
         // Горизонтальные линии сверху/снизу внутри бара — лёгкая сетка
-        Render2D.drawQuad(x + 1f, y, getWidth() - 2f, 0.5f, gridColor);
-        Render2D.drawQuad(x + 1f, y + h - 0.5f, getWidth() - 2f, 0.5f, gridColor);
+        Render2D.drawQuad(x + 1f, y, getWidth() - 2f, 1f, gridColor);
+        Render2D.drawQuad(x + 1f, getY() + 20f, getWidth() - 2f, 1f, gridColor);
     }
 
     private void drawSlotNumbers(MatrixStack matrix, float fade) {
@@ -148,7 +148,7 @@ public class HotBar extends AbstractDraggable {
         slotFont.drawOutlinedBatch(matrix,
                 ColorAssist.multAlpha(SLOT_NUMBER, fade),
                 ColorAssist.multAlpha(SLOT_OUTLINE, fade),
-                0.75f, SLOT_LABELS, SLOT_NUM_X, SLOT_NUM_Y, 9);
+                1f, SLOT_LABELS, SLOT_NUM_X, SLOT_NUM_Y, 9);
     }
 
     private void drawExperienceBar(MatrixStack matrix, float fade) {
@@ -158,8 +158,11 @@ public class HotBar extends AbstractDraggable {
         // Не assert: он в продакшене выключен. HUD рисуется и в момент, когда
         // игрока ещё нет или он уже выгружен — тогда experienceLevel не из чего взять.
         if (mc.player == null) return;
-        experienceFont.drawCenteredString(matrix, String.valueOf(mc.player.experienceLevel),
-                mc.getWindow().getScaledWidth() / 2F, getY() - 9.5F, ColorAssist.multAlpha(ColorAssist.GREEN, fade));
+        String levelText = String.valueOf(mc.player.experienceLevel);
+        // drawCenteredString усекал x до int — центр берём через hud_text_center_x
+        experienceFont.drawString(matrix, levelText,
+                HudHelper.hud_text_center_x(experienceFont, levelText, mc.getWindow().getScaledWidth() / 2F),
+                getY() - 9.5F, ColorAssist.multAlpha(ColorAssist.GREEN, fade));
     }
 
     private void drawOverlayInfo(MatrixStack matrix) {
@@ -178,7 +181,7 @@ public class HotBar extends AbstractDraggable {
 
             Text text = hudAcc.getCurrentStack().getName();
             float width = overlayFont.getStringWidth(text);
-            int x = (int) (scaledWidth - width / 2);
+            int x = Math.round((float) (scaledWidth - width / 2));
 
             Calculate.setAlpha(alpha, () -> {
                 float tw = width + paddingX * 2;
@@ -197,7 +200,7 @@ public class HotBar extends AbstractDraggable {
 
             Text text = hudAcc.getOverlayMessage();
             float width = overlayFont.getStringWidth(text);
-            int x = (int) (scaledWidth - width / 2);
+            int x = Math.round((float) (scaledWidth - width / 2));
 
             Calculate.setAlpha(alpha, () -> {
                 float tw = width + paddingX * 2;

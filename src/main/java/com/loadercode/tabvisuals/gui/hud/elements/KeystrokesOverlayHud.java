@@ -159,8 +159,11 @@ public class KeystrokesOverlayHud extends AbstractDraggable {
                               float width, float height, boolean pressed, int cps, KeystrokesOverlay overlay) {
         float press = drawKey(matrix, font, label, x, y, width, height, pressed, overlay);
         if (overlay.getShowCps().isValue()) {
-            // CPS-счётчик едет вместе с крышкой при нажатии
-            small.drawCenteredString(matrix, cps + " CPS", x + width / 2.0f, y + height - 8.0f + press * PRESS_SHIFT, getTextColor(overlay));
+            // CPS-счётчик едет вместе с крышкой при нажатии; x центрируем округлением
+            String cpsText = cps + " CPS";
+            float cpsX = HudHelper.hud_text_center_x(small, cpsText, HudHelper.hud_px(x + width / 2.0f));
+            float cpsY = HudHelper.hud_px(y + height - 8.0f) + press * PRESS_SHIFT;
+            small.drawString(matrix, cpsText, cpsX, cpsY, getTextColor(overlay));
         }
     }
 
@@ -194,9 +197,16 @@ public class KeystrokesOverlayHud extends AbstractDraggable {
                 overlay.getBorderColor().getColor(), overlay.getPressedColor().getColor()), opacity * 0.75f);
         float border = overlay.getBorderThickness().getValue();
 
+        // Базовый бокс снапим по 0.5-сетке (дробные настройки размера дают мыльные края),
+        // а pressShift намеренно остаётся дробным — крышка едет плавно
+        float bx = HudHelper.hud_px(x);
+        float by = HudHelper.hud_px(y);
+        float bw = HudHelper.hud_px(width);
+        float bh = HudHelper.hud_px(height);
+
         Hud hud = Hud.getInstance();
         if (hud != null && hud.shouldDrawHudBlur()) {
-            blur.render(ShapeProperties.create(matrix, x, y, width, height)
+            blur.render(ShapeProperties.create(matrix, bx, by, bw, bh)
                     .round(round)
                     .quality(hud.getBlurQuality())
                     .color(ColorAssist.getBlurColor())
@@ -206,8 +216,8 @@ public class KeystrokesOverlayHud extends AbstractDraggable {
         // Крышка press-down: уходит вниз на PRESS_SHIFT и слегка сжимается к центру
         float pressShift = press * PRESS_SHIFT;
         float pressScale = 1f - press * 0.05f;
-        float centerX = x + width / 2.0f;
-        float centerY = y + height / 2.0f + pressShift;
+        float centerX = bx + bw / 2.0f;
+        float centerY = by + bh / 2.0f + pressShift;
 
         matrix.push();
         matrix.translate(centerX, centerY, 0);
@@ -215,18 +225,22 @@ public class KeystrokesOverlayHud extends AbstractDraggable {
         matrix.translate(-centerX, -centerY, 0);
 
         if (border > 0.0f) {
-            rectangle.render(ShapeProperties.create(matrix, x - border, y - border + pressShift, width + border * 2.0f, height + border * 2.0f)
+            rectangle.render(ShapeProperties.create(matrix, bx - border, by - border + pressShift, bw + border * 2.0f, bh + border * 2.0f)
                     .round(round + border)
                     .color(outline)
                     .build());
         }
-        rectangle.render(ShapeProperties.create(matrix, x, y + pressShift, width, height)
+        rectangle.render(ShapeProperties.create(matrix, bx, by + pressShift, bw, bh)
                 .round(round)
                 .color(background)
                 .build());
 
-        // Текст рисуется внутри того же matrix, что и крышка, — сам «едет» с ней
-        font.drawCenteredString(matrix, label, centerX, y + height / 2.0f - 1f + pressShift, getTextColor(overlay));
+        // Текст рисуется внутри того же matrix, что и крышка, — сам «едет» с ней;
+        // центр — округлением, drawCenteredString усекал x до int
+        font.drawString(matrix, label,
+                HudHelper.hud_text_center_x(font, label, centerX),
+                HudHelper.hud_text_mid_y(font, label, by + pressShift, bh),
+                getTextColor(overlay));
 
         matrix.pop();
         return press;

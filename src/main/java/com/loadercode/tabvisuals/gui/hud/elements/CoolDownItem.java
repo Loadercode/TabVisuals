@@ -132,8 +132,8 @@ public class CoolDownItem extends AbstractDraggable {
         );
 
         float nameWidth = fontCached.getStringWidth(name);
-        float durationWidth = fontCached.getStringWidth(duration);
-        float totalWidth = nameWidth + durationWidth + 30;
+        // ceil: (int)-усечение срезало правый пиксель обводки карточки
+        float totalWidth = (float) Math.ceil(nameWidth + fontCached.getStringWidth(duration) + 30);
         
         setWidth((int) totalWidth);
         setHeight(15);
@@ -157,16 +157,16 @@ public class CoolDownItem extends AbstractDraggable {
             // Иконка предмета
             Render2D.drawStack(matrix, displayStack, getX() + 2, getY() + 4, false, 0.5F);
             
-            // Разделитель
-            rectangle.render(ShapeProperties.create(matrix, getX() + 14, getY() + 4, 0.5F, 7)
+            // Разделитель: целые координаты + толщина 1, без полупиксельной линии
+            rectangle.render(ShapeProperties.create(matrix, getX() + 14, getY() + 4, 1F, 7)
                     .color(ColorAssist.getOutline(1, 0.5F))
                     .build());
             
             // Название предмета
-            fontCached.drawString(matrix, name, getX() + 18, getY() + 5, colorWithAlpha);
+            fontCached.drawString(matrix, name, getX() + HudHelper.hud_px(18f), getY() + 5, colorWithAlpha);
             
-            // Время
-            fontCached.drawString(matrix, duration, getX() + getWidth() - durationWidth - 4, getY() + 5, colorWithAlpha);
+            // Время: правый край фиксирован, не едет при смене разрядов
+            fontCached.drawString(matrix, duration, HudHelper.hud_text_right(fontCached, duration, HudHelper.hud_px(getX() + getWidth() - 4f)), getY() + 5, colorWithAlpha);
 
             // Линейная полоса остатка — акцент темы, ширина сглажена на прошлом кадре
             if (fill > 0.02f) {

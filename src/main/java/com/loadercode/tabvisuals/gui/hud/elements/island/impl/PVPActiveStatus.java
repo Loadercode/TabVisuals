@@ -2,6 +2,8 @@
 package com.loadercode.tabvisuals.gui.hud.elements.island.impl;
 
 import net.minecraft.client.gui.DrawContext;
+import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.island.IslandStatus;
 import com.loadercode.tabvisuals.util.Network;
 import com.loadercode.tabvisuals.render.color.ColorAssist;
@@ -32,10 +34,11 @@ public class PVPActiveStatus extends IslandStatus implements QuickImports {
         float boxH = 12f;
         float boxX = x + 4;
         float boxY = y + 2f;
-        float textY = boxY + boxH + 2f - font7.getStringHeight("A") / 2f;
+        float textY = HudHelper.hud_text_mid_y(font7, text, y, height);
 
-        rectangle.render(ShapeProperties.create(context.getMatrices(), boxX, boxY, boxW, boxH).round(3f).color(PVP_COLOR | 0xFF000000).build());
-        font7.drawString(context.getMatrices(), text, boxX + boxW + 2, textY, ColorAssist.getText());
+        int textColor = UiRender.mulAlpha(ColorAssist.getText(), alpha);
+        rectangle.render(ShapeProperties.create(context.getMatrices(), boxX, boxY, boxW, boxH).round(3f).color(UiRender.mulAlpha(PVP_COLOR, alpha)).build());
+        font7.drawStringSnapped(context.getMatrices(), text, boxX + boxW + 2, textY, textColor);
     }
 
     @Override

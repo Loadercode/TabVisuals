@@ -80,7 +80,8 @@ public class TotemCounterHud extends AbstractDraggable {
 
         Hud hud = Hud.getInstance();
         if (hud != null && hud.shouldDrawHudBlur()) {
-            blur.render(ShapeProperties.create(context.getMatrices(), x - PANEL_PAD, drawY - PANEL_PAD, backgroundWidth, PANEL_HEIGHT)
+            // Панель по getWidth() (int-ceil), чтобы бокс редактора и blur совпадали
+            blur.render(ShapeProperties.create(context.getMatrices(), x - PANEL_PAD, drawY - PANEL_PAD, getWidth(), PANEL_HEIGHT)
                     .round(4)
                     .quality(hud.getBlurQuality())
                     .color(ColorAssist.multAlpha(ColorAssist.getBlurColor(), alpha))
@@ -92,7 +93,8 @@ public class TotemCounterHud extends AbstractDraggable {
 
         draw_totem_icon(context, x, drawY, (0.88f + 0.12f * entrance) * popScale, alpha);
 
-        context.drawText(mc.textRenderer, text, (int) textX, (int) textY,
+        // Округление вместо (int)-усечения: дробная половина пикселя не «съедалась»
+        context.drawText(mc.textRenderer, text, Math.round(textX), Math.round(textY),
                 ColorAssist.multAlpha(0xFFFFFFFF, alpha), true);
     }
 

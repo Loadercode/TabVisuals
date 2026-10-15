@@ -202,6 +202,64 @@ public final class UiRender implements QuickImports {
         return w;
     }
 
+    // ----------------------------------------------------- smooth controls
+
+    public static float clamp01(float v) {
+        return v < 0f ? 0f : (v > 1f ? 1f : v);
+    }
+
+    /** Lighten toward white by k (alpha kept). */
+    public static int lighten(int argb, float k) {
+        return mix(argb, 0xFFFFFFFF, clamp01(k));
+    }
+
+    /** Uniform press sink: pressT 0..1 -> scale (1 at rest, 0.96 fully pressed). */
+    public static float pressScale(float pressT) {
+        return 1f - 0.04f * clamp01(pressT);
+    }
+
+    /**
+     * Smooth button body + centered label. The caller owns the animation state
+     * (hoverT / pressT in 0..1, eased FPS-independently) and the hit test
+     * (use {@link #inside}). Pressing sinks the button toward 0.96 scale,
+     * hovering lifts the fill a few percent toward white — the same feel
+     * everywhere in the client.
+     */
+    public static void button(MatrixStack m, FontRenderer font, float x, float y, float w, float h,
+                              float round, String label, float hoverT, float pressT, int bg, int fg) {
+        float s = pressScale(pressT);
+        float cx = x + w / 2f;
+        float cy = y + h / 2f;
+        m.push();
+        m.translate(cx, cy, 0f);
+        m.scale(s, s, 1f);
+        m.translate(-cx, -cy, 0f);
+        rect(m, x, y, w, h, round, lighten(bg, 0.07f * clamp01(hoverT)));
+        if (font != null && label != null && !label.isEmpty()) {
+            font.drawString(m, label, x + (w - font.getStringWidth(label)) / 2f,
+                    y + (h - font.getStringHeight(label)) / 2f + 1f, fg);
+        }
+        m.pop();
+    }
+
+    /** Same button, but the body uses the accent gradient border recipe. */
+    public static void accentButton(MatrixStack m, FontRenderer font, float x, float y, float w, float h,
+                                    float round, String label, float hoverT, float pressT, int fill, int fg) {
+        float s = pressScale(pressT);
+        float cx = x + w / 2f;
+        float cy = y + h / 2f;
+        m.push();
+        m.translate(cx, cy, 0f);
+        m.scale(s, s, 1f);
+        m.translate(-cx, -cy, 0f);
+        gradientBorder(m, x, y, w, h, round, lighten(fill, 0.07f * clamp01(hoverT)));
+        if (font != null && label != null && !label.isEmpty()) {
+            font.drawString(m, label, x + (w - font.getStringWidth(label)) / 2f,
+                    y + (h - font.getStringHeight(label)) / 2f + 1f, fg);
+        }
+        m.pop();
+    }
+
     public static int withAlpha(int argb, int a) {
         return (argb & 0x00FFFFFF) | (a << 24);
     }

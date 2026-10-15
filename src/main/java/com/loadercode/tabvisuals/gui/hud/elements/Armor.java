@@ -18,7 +18,7 @@ import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
 import com.loadercode.tabvisuals.render.shape.ShapeProperties;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
-import com.loadercode.tabvisuals.render.math.calc.Calculate;
+import com.loadercode.tabvisuals.gui.UiRender;
 
 import java.awt.*;
 import java.util.List;
@@ -55,6 +55,10 @@ public class Armor extends AbstractDraggable {
     private float menuX, menuY;
     private final Animation menuAlpha = new Decelerate().setMs(200).setValue(1);
     private final Animation menuHeight = new Decelerate().setMs(160).setValue(0);
+    /** Сглаженные hover/press строк меню ориентации, 0..1 (кадры снимаются в renderOrientationMenu). */
+    private final float[] rowHover = new float[ORIENTATION_OPTIONS.length];
+    private final float[] rowPress = new float[ORIENTATION_OPTIONS.length];
+    private long menuFrameNs;
 
     /** Плавно заполняющаяся полоска прочности, 0..1 */
     private final float[] barFill = new float[SLOT_COUNT];
@@ -99,7 +103,7 @@ public class Armor extends AbstractDraggable {
                 float listY = menuY + 18f;
                 for (int i = 0; i < ORIENTATION_OPTIONS.length; i++) {
                     float rowY = listY + i * MENU_ROW;
-                    if (Calculate.isHovered(mouseX, mouseY, menuX, rowY, MENU_WIDTH, MENU_ROW)) {
+                    if (UiRender.inside(mouseX, mouseY, menuX + 1f, rowY, MENU_WIDTH - 2f, MENU_ROW - 1f)) {
                         orientation.setSelected(ORIENTATION_OPTIONS[i]);
                         return true;
                     }
@@ -137,7 +141,7 @@ public class Armor extends AbstractDraggable {
 
     private boolean isMenuHovered(double mouseX, double mouseY) {
         float h = Math.max(menuHeight.getOutput().floatValue(), 1f);
-        return Calculate.isHovered(mouseX, mouseY, menuX, menuY, MENU_WIDTH, h);
+        return UiRender.inside(mouseX, mouseY, menuX, menuY, MENU_WIDTH, h);
     }
 
     @Override
@@ -274,12 +278,13 @@ public class Armor extends AbstractDraggable {
                 if (vertical) {
                     float textX = durabilityOnRight
                             ? slotX + iconSize + textGap
-                            : slotX - textGap - maxTextWidth;
+                            : HudHelper.hud_px(slotX - textGap - maxTextWidth);
                     float textY = slotY + (iconSize + 2f) / 2f - 2f;
                     percentFont.drawString(matrix, durabilityText, textX + 0.5f, textY + 0.5f, ColorAssist.multAlpha(SHADOW_TEXT, enter));
                     percentFont.drawString(matrix, durabilityText, textX, textY, ColorAssist.multAlpha(durabilityColor, enter));
                 } else {
-                    float textX = slotX + (slotSize - 13f) / 2f;
+                    // Центр по измерению того же шрифта вместо константы 13
+                    float textX = HudHelper.hud_text_center_x(percentFont, durabilityText, slotX + slotSize / 2f);
                     float textY = slotY - 6f;
                     percentFont.drawString(matrix, durabilityText, textX + 0.5f, textY + 0.5f, ColorAssist.multAlpha(SHADOW_TEXT, enter));
                     percentFont.drawString(matrix, durabilityText, textX, textY, ColorAssist.multAlpha(durabilityColor, enter));
@@ -332,11 +337,11 @@ public class Armor extends AbstractDraggable {
             String warnText = "Броня почти сломана";
             float screenW = mc.getWindow().getScaledWidth();
             float screenH = mc.getWindow().getScaledHeight();
-            float textW = warnFont.getStringWidth(warnText);
             float textH = warnFont.getFont().getSize() / 1.5f;
 
-            float sx = screenW / 2f - textW / 2f;
-            float sy = screenH / 2f - textH / 2f;
+            // Центр экрана: hud_text_center_x округляет, drawCenteredString усекает бы int
+            float sx = HudHelper.hud_text_center_x(warnFont, warnText, screenW / 2f);
+            float sy = HudHelper.hud_px(screenH / 2f - textH / 2f);
 
             warnFont.drawString(matrix, warnText, sx + 1.5f, sy + 1.5f, WARN_SHADOW);
             warnFont.drawString(matrix, warnText, sx, sy, WARN_RED);
@@ -347,16 +352,16 @@ public class Armor extends AbstractDraggable {
                                    int durabilityColor, int index, float fade) {
         float barW = slotSize - 6f;
         float barX = slotX + 3f;
-        float barY = slotY + slotSize - 3.4f;
+        float barY = slotY + slotSize - 3.5f;
 
-        rectangle.render(ShapeProperties.create(matrix, barX, barY, barW, 1.6f)
+        rectangle.render(ShapeProperties.create(matrix, barX, barY, barW, 1.5f)
                 .round(1f)
                 .color(ColorAssist.getText(0.12f * fade))
                 .build());
 
         float fillW = Math.max(barFill[index] * barW, barFill[index] > 0f ? 0.5f : 0f);
         if (fillW <= 0f) return;
-        rectangle.render(ShapeProperties.create(matrix, barX, barY, fillW, 1.6f)
+        rectangle.render(ShapeProperties.create(matrix, barX, barY, fillW, 1.5f)
                 .round(1f)
                 .color(ColorAssist.multAlpha(durabilityColor, fade))
                 .build());
@@ -404,25 +409,38 @@ public class Armor extends AbstractDraggable {
 
         // Заголовок
         Fonts.getSize(11, Fonts.Type.DEFAULT).drawString(matrix, "Ориентация",
-                menuX + 5f, menuY + 6f, ColorAssist.multAlpha(ColorAssist.getText(0.7f), opacity));
+                menuX + HudHelper.hud_px(5f), menuY + HudHelper.hud_px(6f), ColorAssist.multAlpha(ColorAssist.getText(0.7f), opacity));
 
-        // Разделитель
-        rectangle.render(ShapeProperties.create(matrix, menuX + 3f, menuY + 15f, MENU_WIDTH - 6f, 0.5f)
+        // Разделитель: целые координаты + толщина 1, без полупиксельной линии
+        rectangle.render(ShapeProperties.create(matrix, menuX + 3f, menuY + 15f, MENU_WIDTH - 6f, 1f)
                 .color(ColorAssist.multAlpha(ColorAssist.getOutline(), opacity * 0.6f))
                 .build());
 
+        // hover/press строк — экспоненциально, от мыши в экранных координатах
+        double scale = mc.getWindow().getScaleFactor();
+        double mx = mc.mouse.getX() / scale;
+        double my = mc.mouse.getY() / scale;
+        boolean leftHeld = HudHelper.isKey(0);
+        long nowNs = System.nanoTime();
+        float dt = menuFrameNs == 0L ? 0f : Math.min((nowNs - menuFrameNs) / 1_000_000_000f, 0.1f);
+        menuFrameNs = nowNs;
+
         float rowY = menuY + 18f;
-        for (String option : ORIENTATION_OPTIONS) {
-            boolean isSelected = option.equals(selected);
-            if (isSelected && rowY - menuY < animatedHeight) {
-                int hoverBg = ColorAssist.getGuiRectColor2(0.45f * opacity);
-                rectangle.render(ShapeProperties.create(matrix, menuX + 1f, rowY, MENU_WIDTH - 2f, MENU_ROW - 0.5f)
-                        .round(2)
-                        .color(hoverBg, hoverBg, ColorAssist.getGuiRectColor2(0), ColorAssist.getGuiRectColor2(0))
-                        .build());
-            }
-            if (rowY - menuY < animatedHeight) {
-                menuFont.drawString(matrix, option, menuX + 6f, rowY + 5f,
+        for (int i = 0; i < ORIENTATION_OPTIONS.length; i++) {
+            String option = ORIENTATION_OPTIONS[i];
+            boolean visible = rowY - menuY < animatedHeight;
+            boolean hovered = visible && UiRender.inside(mx, my, menuX + 1f, rowY, MENU_WIDTH - 2f, MENU_ROW - 1f);
+            rowHover[i] = HudHelper.hud_anim_approach(rowHover[i], hovered ? 1f : 0f, 14f, dt);
+            rowPress[i] = HudHelper.hud_anim_approach(rowPress[i], hovered && leftHeld ? 1f : 0f, 24f, dt);
+            if (visible) {
+                boolean isSelected = option.equals(selected);
+                int hoverBg = ColorAssist.getGuiRectColor2((isSelected ? 0.45f : 0.28f * rowHover[i]) * opacity);
+                // Тело без label: UiRender.button центрует по getStringHeight (глиф-пространство),
+                // подпись рисуем сами через hud_text_mid_y
+                UiRender.button(matrix, null, menuX + 1f, rowY, MENU_WIDTH - 2f, MENU_ROW - 1f, 2f,
+                        null, rowHover[i], rowPress[i], hoverBg, 0);
+                menuFont.drawString(matrix, option, menuX + HudHelper.hud_px(6f),
+                        HudHelper.hud_text_mid_y(menuFont, option, rowY, MENU_ROW - 1f),
                         ColorAssist.multAlpha(ColorAssist.getText(), opacity));
             }
             rowY += MENU_ROW;

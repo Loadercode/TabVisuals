@@ -30,9 +30,6 @@ public final class HudTheme {
     private static final int DARK_OUTLINE_EL = 0x373746FF;   // (55,55,70,255)
     private static final int LIGHT_TEXT = 0x1E1E1EFF;
     private static final int LIGHT_TEXT2 = 0x646464FF;
-    /** LoxeDLC GUI_DARK_BLUR / light counterpart — full-screen scrim @200. */
-    private static final int DARK_SCRIM = 0xC8000000;
-    private static final int LIGHT_SCRIM = 0xC8FFFFFF;
     /** LoxeDLC glass element outline — wins over the light/dark one. */
     private static final int GLASS_OUTLINE_EL = 0xB43C414B;   // (60,65,75,180)
 
@@ -238,18 +235,6 @@ public final class HudTheme {
 
     public static int outline(float alpha) {
         return multAlpha(outline(), alpha);
-    }
-
-    /**
-     * Full-screen overlay scrim (LoxeDLC getClickGuiBlurColor): near-black @200
-     * in the dark theme, white @200 in the light one, «Цвет блюра» in the
-     * custom one. Accent colours are untouched — this is only the backdrop.
-     */
-    public static int scrimColor() {
-        if (isCustom()) {
-            return color("Цвет блюра", DARK_SCRIM);
-        }
-        return isLight() ? LIGHT_SCRIM : DARK_SCRIM;
     }
 
     public static int clientColor(float alpha) {

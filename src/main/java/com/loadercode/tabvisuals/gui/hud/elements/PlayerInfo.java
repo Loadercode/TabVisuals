@@ -74,7 +74,8 @@ public class PlayerInfo extends AbstractDraggable {
         String xyz = hideCoords ? "Xyz: 0, 0, 0" : "Xyz: " + blockPos.getX() + ", " + blockPos.getY() + ", " + blockPos.getZ();
         String text = xyz + " • " + tps + " • " + bps;
 
-        float width = font.getStringWidth(text) + 10;
+        // Округляем вверх: (int) усечение уменьшало панель и текст упирался в край
+        float width = (float) Math.ceil(font.getStringWidth(text)) + 10;
         setWidth((int) width);
         setHeight(14);
 

@@ -2,6 +2,8 @@
 package com.loadercode.tabvisuals.gui.hud.elements.island.impl;
 
 import net.minecraft.client.gui.DrawContext;
+import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.island.IslandStatus;
 import com.loadercode.tabvisuals.render.interfaces.QuickImports;
 import com.loadercode.tabvisuals.util.Network;
@@ -34,11 +36,12 @@ public class TeleportStatus extends IslandStatus implements QuickImports {
         float boxX = x + 4;
         float boxY = y + 2f;
         float timeY = boxY + (boxH - mc.textRenderer.fontHeight) / 2f + 1f;
-        float textY = boxY + boxH + 2f - font7.getStringHeight("A") / 2f;
+        float textY = HudHelper.hud_text_mid_y(font7, text, y, height);
 
-        rectangle.render(ShapeProperties.create(context.getMatrices(), boxX, boxY, boxW, boxH).round(3f).color(TELEPORT_COLOR | 0xFF000000).build());
-        context.drawText(mc.textRenderer, timeStr, (int) (boxX + TIME_BOX_PAD), (int) timeY, ColorAssist.getText(), false);
-        font7.drawString(context.getMatrices(), text, boxX + boxW + 2, textY, ColorAssist.getText());
+        int textColor = UiRender.mulAlpha(ColorAssist.getText(), alpha);
+        rectangle.render(ShapeProperties.create(context.getMatrices(), boxX, boxY, boxW, boxH).round(3f).color(UiRender.mulAlpha(TELEPORT_COLOR, alpha)).build());
+        context.drawText(mc.textRenderer, timeStr, (int) (boxX + TIME_BOX_PAD), (int) timeY, textColor, false);
+        font7.drawStringSnapped(context.getMatrices(), text, boxX + boxW + 2, textY, textColor);
     }
 
     @Override

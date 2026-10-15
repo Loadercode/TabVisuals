@@ -128,8 +128,6 @@ public class Potions extends AbstractDraggable {
         }
 
         String effectCountText = String.valueOf(activeEffectCount);
-        float textWidth = itemsCached.getStringWidth(effectCountText);
-        float boxWidth = textWidth + 6;
 
         int[] gc = ColorAssist.getRectangleGradientColors();
         int blurQuality = com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality();
@@ -157,24 +155,28 @@ public class Potions extends AbstractDraggable {
                     .color(gc[0], gc[1], gc[2], gc[3])
                 .build());
 
-        itemsCached.drawString(matrix, "Active:", getX() + getWidth() - boxWidth - 22, getY() + 7, ColorAssist.getText());
-        itemsCached.drawString(matrix, effectCountText, getX() + getWidth() - boxWidth - 3, getY() + 7, ColorAssist.getText());
+        // Фиксированная колонка справа: подпись и счётчик не смещаются при смене разрядов
+        final float rightEdge = HudHelper.hud_px(getX() + getWidth() - 8f);
+        itemsCached.drawString(matrix, "Active:",
+                HudHelper.hud_text_right(itemsCached, "Active:", rightEdge - 22f), getY() + 7, ColorAssist.getText());
+        itemsCached.drawString(matrix, effectCountText,
+                HudHelper.hud_text_right(itemsCached, effectCountText, rightEdge), getY() + 7, ColorAssist.getText());
 
-        rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 0.5f, 6)
+        rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 1f, 6)
                 .color(ColorAssist.getText(0.5F)).round(0F).build());
 
-        iconCached.drawString(matrix, "C", getX() + 5f, getY() + 6.5f, ColorAssist.getText());
-        fontCached.drawString(matrix, getName(), getX() + 22, getY() + 6.5f, ColorAssist.getText());
+        iconCached.drawString(matrix, "C", getX() + HudHelper.hud_px(5f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
+        fontCached.drawString(matrix, getName(), getX() + HudHelper.hud_px(22f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
 
         float centerX = getX() + getWidth() / 2.0F;
-        int offset = 23;
-        int maxWidth = 95;
+        float offset = 23;
+        float maxWidth = 95;
 
         if (list.isEmpty() && HudHelper.isChat(mc.currentScreen)) {
             if (preview_born_ms == 0) preview_born_ms = now;
             final float rowStagger = stagger_progress(now, preview_born_ms, 0);
             final float rowSlide = (1f - rowStagger) * -12f;
-            float centerY = getY() + offset;
+            float centerY = HudHelper.hud_px(getY() + offset);
             String name = "Example effect";
             String duration = "**:**";
             int textColor = ColorAssist.getText();
@@ -182,19 +184,18 @@ public class Potions extends AbstractDraggable {
             int colorWithAlpha = ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
             int color = ColorAssist.multAlpha(ColorAssist.getText(), rowStagger);
             int colorWithAlphaRectangle = ColorAssist.rgba((textColor >> 16) & 205, (textColor >> 8) & 205, textColor & 205, textAlpha - 125);
-            float durationWidth = fontPotionCache.getStringWidth(duration);
             matrix.push();
             matrix.translate(rowSlide, 0f, 0f);
             Calculate.scale(matrix, centerX, centerY, 1, 1, () -> {
-                Render2D.drawSprite(matrix, mc.getStatusEffectSpriteManager().getSprite(currentRandomEffect), getX() + 3.5F, (int) centerY - 2, 8, 8, colorWithAlpha);
-                rectangle.render(ShapeProperties.create(matrix, getX() + 14, centerY - 1, 0.5F, 7).color(colorWithAlphaRectangle).build());
-                fontPotionCache.drawString(matrix, name, getX() + 18, centerY + 1, colorWithAlpha);
-                fontPotionCache.drawString(matrix, duration, getX() + getWidth() - durationWidth - 8, centerY + 1, color);
+                Render2D.drawSprite(matrix, mc.getStatusEffectSpriteManager().getSprite(currentRandomEffect), getX() + 3.5F, Math.round(centerY) - 2, 8, 8, colorWithAlpha);
+                rectangle.render(ShapeProperties.create(matrix, getX() + 14, centerY - 1, 1F, 7).color(colorWithAlphaRectangle).build());
+                fontPotionCache.drawString(matrix, name, getX() + HudHelper.hud_px(18f), centerY + 1, colorWithAlpha);
+                fontPotionCache.drawString(matrix, duration, HudHelper.hud_text_right(fontPotionCache, duration, HudHelper.hud_px(getX() + getWidth() - 8f)), centerY + 1, color);
             });
             matrix.pop();
-            int width = (int) fontPotionCache.getStringWidth(name + duration) + 30;
+            float width = (float) Math.ceil(fontPotionCache.getStringWidth(name + duration)) + 30;
             maxWidth = Math.max(width, maxWidth);
-            offset += (int) (11 * rowStagger);
+            offset += 11 * rowStagger;
         } else {
             preview_born_ms = 0;
             for (int rowIndex = 0; rowIndex < list.size(); rowIndex++) {
@@ -203,7 +204,7 @@ public class Potions extends AbstractDraggable {
                 final float animation = potion.anim.getOutput().floatValue();
                 final float rowStagger = stagger_progress(now, potion.bornMs(), rowIndex);
                 final float rowSlide = (1f - rowStagger) * -12f;
-                float centerY = getY() + offset;
+                float centerY = HudHelper.hud_px(getY() + offset);
                 int amplifier = effect.getAmplifier();
                 String name = com.loadercode.tabvisuals.gui.hud.HudRenderer.effectName(com.loadercode.tabvisuals.gui.hud.HudRenderer.effectKey(effect.getTranslationKey()));
                 String duration = getDuration(effect);
@@ -221,27 +222,26 @@ public class Potions extends AbstractDraggable {
                 int colorWithAlpha = isBadEffect ? ColorAssist.rgba(255, 85, 75, textAlpha) : ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
                 int color = ColorAssist.multAlpha(ColorAssist.getText(), rowStagger);
                 int colorWithAlphaRectangle = isBadEffect ? ColorAssist.rgba(255, 85, 75, textAlpha - 125) : ColorAssist.rgba((textColor >> 16) & 205, (textColor >> 8) & 205, textColor & 205, textAlpha - 125);
-                float durationWidth = fontPotionCache.getStringWidth(duration);
                 matrix.push();
                 matrix.translate(rowSlide, 0f, 0f);
                 Calculate.scale(matrix, centerX, centerY, 1, animation, () -> {
-                    Render2D.drawSprite(matrix, mc.getStatusEffectSpriteManager().getSprite(effect.getEffectType()), getX() + 3.5F, (int) centerY - 2, 8, 8, colorWithAlpha);
-                    rectangle.render(ShapeProperties.create(matrix, getX() + 14, centerY - 1, 0.5F, 7).color(colorWithAlphaRectangle).build());
-                    fontPotionCache.drawString(matrix, name, getX() + 18, centerY + 1, colorWithAlpha);
+                    Render2D.drawSprite(matrix, mc.getStatusEffectSpriteManager().getSprite(effect.getEffectType()), getX() + 3.5F, Math.round(centerY) - 2, 8, 8, colorWithAlpha);
+                    rectangle.render(ShapeProperties.create(matrix, getX() + 14, centerY - 1, 1F, 7).color(colorWithAlphaRectangle).build());
+                    fontPotionCache.drawString(matrix, name, getX() + HudHelper.hud_px(18f), centerY + 1, colorWithAlpha);
                     if (amplifier > 0) {
                         String level = " " + (amplifier + 1);
-                        fontPotionCache.drawString(matrix, level, getX() + 18 + fontPotionCache.getStringWidth(name), centerY + 1, colorWithAlpha);
+                        fontPotionCache.drawString(matrix, level, HudHelper.hud_px(getX() + 18f + fontPotionCache.getStringWidth(name)), centerY + 1, colorWithAlpha);
                     }
-                    fontPotionCache.drawString(matrix, duration, getX() + getWidth() - durationWidth - 8, centerY + 1, color);
+                    fontPotionCache.drawString(matrix, duration, HudHelper.hud_text_right(fontPotionCache, duration, HudHelper.hud_px(getX() + getWidth() - 8f)), centerY + 1, color);
                 });
                 matrix.pop();
-                int width = (int) fontPotionCache.getStringWidth(name + lvl + duration) + 30;
+                float width = (float) Math.ceil(fontPotionCache.getStringWidth(name + lvl + duration)) + 30;
                 maxWidth = Math.max(width, maxWidth);
-                offset += (int) (11 * animation * rowStagger);
+                offset += 11 * animation * rowStagger;
             }
         }
-        setWidth(maxWidth);
-        setHeight(offset);
+        setWidth((int) Math.ceil(maxWidth));
+        setHeight((int) Math.ceil(offset));
     }
 
     private static float clamp01(float value) {

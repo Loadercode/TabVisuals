@@ -11,6 +11,7 @@ import it.unimi.dsi.fastutil.objects.ObjectList;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.experimental.Accessors;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.ShaderProgramKeys;
 import net.minecraft.client.render.*;
 import net.minecraft.client.util.math.MatrixStack;
@@ -170,8 +171,10 @@ public class FontRenderer implements QuickImports {
         if (applyFactory) {
             text = applyTextFactory(text);
         }
-        // drawGlyphs scales by 0.5, so screen outline → glyph-space offset
-        float g = outline * 2f;
+        // drawGlyphs scales by 0.5, so screen outline → glyph-space offset;
+        // шаг округляется до целого текселя, иначе после посадки глифов на
+        // сетку пикселей левая/правая копии обводки разъезжаются на 0.5 текселя.
+        float g = Math.round(outline * 2f);
         collectString(text, baseDx - g, baseDy, outlineColor);
         collectString(text, baseDx + g, baseDy, outlineColor);
         collectString(text, baseDx, baseDy - g, outlineColor);
@@ -244,7 +247,7 @@ public class FontRenderer implements QuickImports {
                     DrawEntry entry = obtainDrawEntry(xOffset, yOffset, clr, glyph);
                     GLYPH_PAGE_CACHE.computeIfAbsent(i1, integer -> new ObjectArrayList<>()).add(entry);
                 }
-                xOffset += glyph.width();
+                xOffset += glyph.advance();
             }
         }
     }
@@ -310,7 +313,7 @@ public class FontRenderer implements QuickImports {
                     DrawEntry entry = obtainDrawEntry(xOffset, yOffset, color, glyph);
                     GLYPH_PAGE_CACHE.computeIfAbsent(i1, integer -> new ObjectArrayList<>()).add(entry);
                 }
-                xOffset += glyph.width();
+                xOffset += glyph.advance();
             }
         }
 
@@ -319,7 +322,9 @@ public class FontRenderer implements QuickImports {
 
     private void drawGlyphs(MatrixStack matrix, double x, double y) {
         matrix.push();
-        matrix.translate(x, y - 3F, 0);
+        // Перо сажается на сетку физических пикселей (см. translateSnapped);
+        // базовая линия та же, что и была: y - 3.
+        translateSnapped(matrix, x, y - 3F);
         matrix.scale(0.5F, 0.5F, 1);
         Matrix4f matrix4f = matrix.peek().getPositionMatrix();
 
@@ -333,8 +338,10 @@ public class FontRenderer implements QuickImports {
             RenderSystem.setShaderTexture(0, entry.getKey());
             BufferBuilder buffer = Tessellator.getInstance().begin(QUADS, POSITION_TEXTURE_COLOR);
             for (DrawEntry drawEntry : entries) {
-                float x1 = drawEntry.atX();
-                float y1 = drawEntry.atY();
+                // Квад в целых текселях: при scale 0.5 границы глифа тогда
+                // ложатся ровно на пиксели устройства, а не на доли пикселя.
+                float x1 = Math.round(drawEntry.atX());
+                float y1 = Math.round(drawEntry.atY());
 
                 Glyph glyph = drawEntry.toDraw();
                 GlyphMap glyphMap = glyph.owner();
@@ -362,8 +369,75 @@ public class FontRenderer implements QuickImports {
         matrix.pop();
     }
 
+    /** Шаг сетки: одна GUI-единица равна scale физическим пикселям (окно MC). */
+    private static double guiScale() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.getWindow() == null) {
+            return 1.0;
+        }
+        double scale = client.getWindow().getScaleFactor();
+        return scale > 0 ? scale : 1.0;
+    }
+
+    private static double snapCoord(double v, double scale) {
+        return Math.floor(v * scale + 0.5) / scale;
+    }
+
+    /**
+     * Сдвигает перо так, чтобы его начало попало в физический пиксель:
+     * GUI-координата переводится в пиксели устройства (с учётом масштаба и
+     * сдвига матрицы вызывающего кода), округляется и переводится обратно.
+     * Без этого при 0.5-масштабе глифы ложатся на полупиксели и текст мерцает
+     * при движении. Вызывается на каждый flush, поэтому все существующие
+     * места вызова получают посадку на сетку автоматически.
+     */
+    private void translateSnapped(MatrixStack matrix, double x, double y) {
+        Matrix4f current = matrix.peek().getPositionMatrix();
+        float sx = current.m00();
+        float sy = current.m11();
+        boolean axisAligned = Math.abs(current.m10()) < 1e-6f && Math.abs(current.m01()) < 1e-6f;
+        double scale = guiScale();
+        if (!axisAligned || Math.abs(sx) < 1e-6f || Math.abs(sy) < 1e-6f) {
+            // поворот или вырожденный масштаб — привязка в локальных единицах
+            matrix.translate(snapCoord(x, scale), snapCoord(y, scale), 0);
+            return;
+        }
+        double guiX = snapCoord(current.m30() + sx * x, scale);
+        double guiY = snapCoord(current.m31() + sy * y, scale);
+        matrix.translate((guiX - current.m30()) / sx, (guiY - current.m31()) / sy, 0);
+    }
+
     public void drawCenteredString(MatrixStack stack, java.lang.String s, double x, double y, int color) {
-        drawString(stack, s, (int) (x - getStringWidth(s) / 2f), (float) y, color);
+        // без (int)-усечения: дробный центр давал сдвиг центрирования до пикселя
+        drawString(stack, s, x - getStringWidth(s) / 2f, y, color);
+    }
+
+    /** Центрирование по точной ширине: x = cx - getStringWidth(s) / 2, без усечений. */
+    public static void drawCentered(FontRenderer font, MatrixStack m, java.lang.String s, double cx, double y, int argb) {
+        font.drawString(m, s, cx - font.getStringWidth(s) / 2f, y, argb);
+    }
+
+    /** Выравнивание по правому краю: x = rightX - getStringWidth(s), без усечений. */
+    public static void drawRight(FontRenderer font, MatrixStack m, java.lang.String s, double rightX, double y, int argb) {
+        font.drawString(m, s, rightX - font.getStringWidth(s), y, argb);
+    }
+
+    /** Как {@link #drawString}, но координаты заранее приводятся к сетке пикселей. */
+    public void drawStringSnapped(MatrixStack m, java.lang.String s, double x, double y, int argb) {
+        double scale = guiScale();
+        drawString(m, s, snapCoord(x, scale), snapCoord(y, scale), argb);
+    }
+
+    /** Центрирование с посадкой центра и базовой линии на сетку пикселей. */
+    public void drawCenteredSnapped(MatrixStack m, java.lang.String s, double cx, double y, int argb) {
+        double scale = guiScale();
+        drawCentered(this, m, s, snapCoord(cx, scale), snapCoord(y, scale), argb);
+    }
+
+    /** Выравнивание по правому краю с посадкой края и базовой линии на сетку пикселей. */
+    public void drawRightSnapped(MatrixStack m, java.lang.String s, double rightX, double y, int argb) {
+        double scale = guiScale();
+        drawRight(this, m, s, snapCoord(rightX, scale), snapCoord(y, scale), argb);
     }
 
     public float getStringWidth(Text text) {
@@ -406,7 +480,7 @@ public class FontRenderer implements QuickImports {
             }
 
             Glyph glyph = locateGlyph(c);
-            currentLine += glyph == null ? 0 : glyph.width();
+            currentLine += glyph == null ? 0 : glyph.advance();
         }
 
         float width = Math.max(currentLine, maxPreviousLines) / 2;
@@ -461,7 +535,8 @@ public class FontRenderer implements QuickImports {
             char c = text.charAt(i);
             Glyph glyph = locateGlyph(c);
             if (glyph != null) {
-                widthLeft.subtract(glyph.width());
+                // advance в текселях, maxWidth задан в экранных единицах (как getStringWidth)
+                widthLeft.subtract(glyph.advance() / 2f);
                 if (widthLeft.floatValue() < 0) {
                     trimmedLength.setValue(i + 1);
                     break;
@@ -516,7 +591,8 @@ public class FontRenderer implements QuickImports {
         public boolean accept(int index, char c) {
             Glyph glyph = locateGlyph(c);
             if (glyph != null) {
-                widthLeft -= glyph.width();
+                // те же экранные единицы, что и getStringWidth (advance / 2)
+                widthLeft -= glyph.advance() / 2f;
                 if (widthLeft >= 0) {
                     length = index + 1;
                     return true;

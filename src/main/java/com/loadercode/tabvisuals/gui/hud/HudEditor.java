@@ -6,9 +6,6 @@ import com.loadercode.tabvisuals.gui.config.ConfigManager;
 import com.loadercode.tabvisuals.gui.hud.draggable.AbstractDraggable;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
-import com.loadercode.tabvisuals.render.interfaces.QuickImports;
-import com.loadercode.tabvisuals.render.shape.ShapeProperties;
-import com.loadercode.tabvisuals.render.shape.implement.Blur;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;
@@ -30,11 +27,11 @@ import java.util.Map;
  * right-click menu ("Сбросить позицию" / "Закрыть"). Active only while the
  * chat screen is open and the HUD module's "Interactive editor" is on.
  *
- * <p>The overlay itself follows the LoxeDLC look: a translucent dark scrim
- * (fade + blur ramp), a subtle grid, a rounded outline box with a name label
- * over every element, hover highlight and a lift/scale pop when a box is
- * grabbed. All of that motion is FPS-independent exponential easing
- * ({@code 1 - exp(-dt * k)}, see {@link #ease_exp}) written for this file.
+ * <p>The overlay is intentionally light — no full-screen scrim or grid, just
+ * a thin rounded outline and a name label over every element, a hover
+ * highlight and a lift/scale pop when a box is grabbed. All of that motion is
+ * FPS-independent exponential easing ({@code 1 - exp(-dt * k)}, see
+ * {@link #ease_exp}) written for this file.
  *
  * <p>Opening is drawn from {@link #overlay} (called by HudRenderer only while
  * chat is open); the closing tail is drawn from a private HUD callback,
@@ -72,10 +69,6 @@ public final class HudEditor {
     private static final float K_HOVER = 18f;   // подсветка бокса
     private static final float K_GUIDE = 16f;   // проявление направляющих
     private static final float K_MENU = 22f;    // всплывающее меню
-    /** Шаг сетки в scaled-пикселях. */
-    private static final float GRID = 16f;
-    /** Ниже этой альфы скрим/сетка не рисуются вообще (не видно — не тратим draw). */
-    private static final float MIN_VISIBLE = 0.05f;
     private static final float LABEL_H = 13f;
     private static final float BADGE_H = 14f;
 
@@ -480,9 +473,9 @@ public final class HudEditor {
     }
 
     /**
-     * Скрим + сетка + боксы + направляющие + меню. {@code interactive} = false
-     * на хвосте закрытия: там hover/drag/guides/gaps уже не имеют смысла и
-     * вся геометрия просто растворяется.
+     * Боксы + направляющие + меню, без заливки всего экрана. {@code interactive}
+     * = false на хвосте закрытия: там hover/drag/guides/gaps уже не имеют
+     * смысла и вся геометрия просто растворяется.
      */
     private static void draw_editor(MatrixStack m, float sw, float sh, boolean interactive) {
         float dt = frame_dt();
@@ -495,7 +488,6 @@ public final class HudEditor {
         m.push();
         try {
             m.translate(0.0, 0.0, 10.0);   // свой слой поверх элементов HUD (z=400)
-            draw_scrim(m, sw, sh);
 
             // контент проявляется чуть «крупнее» и оседает на место
             float scale = 0.975f + 0.025f * open;
@@ -505,7 +497,6 @@ public final class HudEditor {
                 m.scale(scale, scale, 1f);
                 m.translate(-sw / 2.0, -sh / 2.0, 0.0);
 
-                draw_grid(m, sw, sh);
                 draw_boxes(m, sh, interactive, dt);
                 draw_guides(m, sw, sh, dt);
                 draw_menu(m, interactive, dt);
@@ -514,52 +505,6 @@ public final class HudEditor {
             }
         } finally {
             m.pop();
-        }
-    }
-
-    /**
-     * Тёмный скрим LoxeDLC ({@link HudTheme#scrimColor()}) с fade-ramp'ом;
-     * при включённом Blur фон ещё и размывается — альфа цвета формы
-     * переключает смесь «резкий кадр ↔ размытый», поэтому blur проявляется
-     * синхронно с затемнением (это и есть blur ramp).
-     */
-    private static void draw_scrim(MatrixStack m, float sw, float sh) {
-        if (open < MIN_VISIBLE) {
-            return;
-        }
-        int scrim = HudTheme.multAlpha(HudTheme.scrimColor(), open);
-        if (!HudRenderer.blurEnabled()) {
-            UiRender.rect(m, 0, 0, sw, sh, 0, scrim);
-            return;
-        }
-        int quality = Math.max(6, HudRenderer.blurSamples());
-        // Скриму нужен обычный blur: стеклянный шейдер анимирован (блики по Time)
-        // и на полноэкранный заливке выглядит мерцанием. Статус возвращается
-        // сразу после вызова, внутри того же кадра других draw-вызовов нет.
-        boolean glass = Blur.glassMode;
-        Blur.glassMode = false;
-        try {
-            QuickImports.blur.renderSmooth(ShapeProperties.create(m, 0, 0, sw, sh)
-                    .round(0f)
-                    .quality(quality)
-                    .color(scrim, scrim, scrim, scrim)
-                    .build(), quality);
-        } finally {
-            Blur.glassMode = glass;
-        }
-    }
-
-    /** Едва заметная сетка: тот же фиолетовый акцент, что у направляющих. */
-    private static void draw_grid(MatrixStack m, float sw, float sh) {
-        int c = HudTheme.multAlpha(GUIDE_C, 0.085f * open);
-        if (((c >>> 24) & 0xFF) == 0) {
-            return;
-        }
-        for (float x = GRID; x < sw - 0.5f; x += GRID) {
-            UiRender.rect(m, x, 0, 1, sh, 0, c);
-        }
-        for (float y = GRID; y < sh - 0.5f; y += GRID) {
-            UiRender.rect(m, 0, y, sw, 1, 0, c);
         }
     }
 
@@ -609,8 +554,9 @@ public final class HudEditor {
             UiRender.rect(m, bx, by, bw, bh, HudTheme.PANEL_ROUND,
                     UiRender.mulAlpha(HOVER_C, 0.12f * hover * open));
         }
+        // в покое еле заметная обводка, при наведении — во всю силу
         UiRender.outline(m, bx, by, bw, bh, HudTheme.PANEL_ROUND,
-                UiRender.mulAlpha(HOVER_C, (0.32f + 0.68f * hover) * open), 1f);
+                UiRender.mulAlpha(HOVER_C, (0.18f + 0.82f * hover) * open), 1f);
 
         draw_label(m, id, bx, by, hover, lift);
         if (hover > 0.02f) {

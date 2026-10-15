@@ -2,6 +2,7 @@
 package com.loadercode.tabvisuals.gui.hud.elements;
 
 import com.loadercode.tabvisuals.render.color.ColorAssist;
+import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.interfaces.QuickImports;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.entity.LivingEntity;
@@ -111,5 +112,42 @@ public final class HudHelper implements QuickImports {
             return current;
         }
         return target + (current - target) * (float) Math.exp(-speed * Math.min(dt, 0.1f));
+    }
+
+    // ------------------------------------------------------------------
+    //  ADDITIVE: text/line pixel helpers. FontRenderer.getStringWidth завышает
+    //  ширину (ширины глифов округляются вверх при генерации атласа), а
+    //  drawCenteredString усекает x до int — оба источника дробных/смещённых
+    //  позиций и мылящегося текста.
+    // ------------------------------------------------------------------
+
+    /** Привязка к пиксельной сетке 0.5 — дробные координаты дают мылящиеся глифы. */
+    public static float hud_px(float value) {
+        return Math.round(value * 2f) / 2f;
+    }
+
+    /** Экранная высота строки: getStringHeight возвращает глиф-пространство (в 2 раза больше экранного). */
+    public static float hud_text_height(FontRenderer font, String text) {
+        return font.getStringHeight(text) / 2f;
+    }
+
+    /** y отрисовки, чтобы верх строки совпал с screenTop (drawString смещает глифы на -3). */
+    public static float hud_text_top(float screenTop) {
+        return screenTop + 3f;
+    }
+
+    /** y, центрирующий строку по высоте бокса [boxTop; boxTop + boxH]. */
+    public static float hud_text_mid_y(FontRenderer font, String text, float boxTop, float boxH) {
+        return hud_text_top(boxTop + (boxH - hud_text_height(font, text)) / 2f);
+    }
+
+    /** x текста, прижатого правым краем к rightEdge (снимает дробность измерений). */
+    public static float hud_text_right(FontRenderer font, String text, float rightEdge) {
+        return hud_px(rightEdge - font.getStringWidth(text));
+    }
+
+    /** x центрированного текста: округление вместо усечения в drawCenteredString. */
+    public static float hud_text_center_x(FontRenderer font, String text, float centerX) {
+        return hud_px(centerX - font.getStringWidth(text) / 2f);
     }
 }

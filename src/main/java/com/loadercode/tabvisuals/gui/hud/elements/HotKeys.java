@@ -138,8 +138,6 @@ public class HotKeys extends AbstractDraggable {
         }
 
         java.lang.String moduleCountText = java.lang.String.valueOf(activeBindCount);
-        float textWidth = items.getStringWidth(moduleCountText);
-        float boxWidth = textWidth + 6;
 
         int[] gc = ColorAssist.getRectangleGradientColors();
         int blurQuality = com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality();
@@ -167,14 +165,18 @@ public class HotKeys extends AbstractDraggable {
                     .color(gc[0], gc[1], gc[2], gc[3])
                 .build());
 
-        items.drawString(matrix, "Active:", getX() + getWidth() - boxWidth - 21, getY() + 7, ColorAssist.getText());
-        items.drawString(matrix, moduleCountText, getX() + getWidth() - boxWidth - 2, getY() + 7, ColorAssist.getText());
+        // Фиксированная колонка справа: подпись и счётчик не смещаются при смене разрядов
+        final float rightEdge = HudHelper.hud_px(getX() + getWidth() - 8f);
+        items.drawString(matrix, "Active:",
+                HudHelper.hud_text_right(items, "Active:", rightEdge - 22f), getY() + 7, ColorAssist.getText());
+        items.drawString(matrix, moduleCountText,
+                HudHelper.hud_text_right(items, moduleCountText, rightEdge), getY() + 7, ColorAssist.getText());
 
-        rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 0.5f, 6)
+        rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 1f, 6)
                 .color(ColorAssist.getText(0.5F)).round(0F).build());
 
-        icon.drawString(matrix, "B", getX() + 4f, getY() + 5f, ColorAssist.getText());
-        font.drawString(matrix, getName(), getX() + 22, getY() + 6.5f, ColorAssist.getText());
+        icon.drawString(matrix, "B", getX() + HudHelper.hud_px(4f), getY() + HudHelper.hud_px(5f), ColorAssist.getText());
+        font.drawString(matrix, getName(), getX() + HudHelper.hud_px(22f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
 
         float centerX = getX() + getWidth() / 2F;
         int offset = 23;
@@ -200,19 +202,18 @@ public class HotKeys extends AbstractDraggable {
             int bindColor = ColorAssist.lerp(highlight, textColor, ColorAssist.getClientColor());
             int textAlpha = 255;
             int colorWithAlpha = ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
-            float bindWidth = fontModule.getStringWidth(bind);
             matrix.push();
             // Скольжение строки из-под шапки: 8px слева при enter=0
             matrix.translate((enter - 1f) * 8f, 0f, 0f);
             Calculate.scale(matrix, centerX, centerY, 1, enter, () -> {
                 draw_row_highlight(matrix, centerY, highlight);
-                categoryIcon.drawString(matrix, iconChar, getX() + 4.5f, centerY + 1.5f, textColor);
-                rectangle.render(ShapeProperties.create(matrix, getX() + 15F, centerY - 1, 0.5F, 7).color(ColorAssist.getOutline(1, 0.5F)).build());
-                fontModule.drawString(matrix, name, getX() + 19, centerY + 1, colorWithAlpha);
-                fontModule.drawString(matrix, bind, getX() + getWidth() - bindWidth - 8, centerY + 1, bindColor);
+                categoryIcon.drawString(matrix, iconChar, getX() + HudHelper.hud_px(4.5f), centerY + HudHelper.hud_px(1.5f), textColor);
+                rectangle.render(ShapeProperties.create(matrix, getX() + 15F, centerY - 1, 1F, 7).color(ColorAssist.getOutline(1, 0.5F)).build());
+                fontModule.drawString(matrix, name, getX() + HudHelper.hud_px(19f), centerY + 1, colorWithAlpha);
+                fontModule.drawString(matrix, bind, HudHelper.hud_text_right(fontModule, bind, HudHelper.hud_px(getX() + getWidth() - 8f)), centerY + 1, bindColor);
             });
             matrix.pop();
-            int width = (int) fontModule.getStringWidth(name + bind) + 25;
+            int width = (int) Math.ceil(fontModule.getStringWidth(name + bind)) + 25;
             maxWidth = Math.max(width, maxWidth);
             offset += 11;
         } else {
@@ -236,19 +237,18 @@ public class HotKeys extends AbstractDraggable {
                 int bindColor = ColorAssist.lerp(highlight, textColor, ColorAssist.getClientColor());
                 int textAlpha = 255;
                 int colorWithAlpha = ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
-                float bindWidth = fontModule.getStringWidth(bind);
                 matrix.push();
                 // Скольжение строки из-под шапки: 8px слева при enter=0
                 matrix.translate((enter - 1f) * 8f, 0f, 0f);
                 Calculate.scale(matrix, centerX, centerY, 1, enter, () -> {
                     draw_row_highlight(matrix, centerY, highlight);
-                    categoryIcon.drawString(matrix, iconChar, getX() + 4.5f, centerY + 1.5f, textColor);
-                    rectangle.render(ShapeProperties.create(matrix, getX() + 15F, centerY - 1, 0.5F, 7).color(ColorAssist.getOutline(1, 0.5F)).build());
-                    fontModule.drawString(matrix, module.name(), getX() + 19, centerY + 1, colorWithAlpha);
-                    fontModule.drawString(matrix, bind, getX() + getWidth() - bindWidth - 8, centerY + 1, bindColor);
+                    categoryIcon.drawString(matrix, iconChar, getX() + HudHelper.hud_px(4.5f), centerY + HudHelper.hud_px(1.5f), textColor);
+                    rectangle.render(ShapeProperties.create(matrix, getX() + 15F, centerY - 1, 1F, 7).color(ColorAssist.getOutline(1, 0.5F)).build());
+                    fontModule.drawString(matrix, module.name(), getX() + HudHelper.hud_px(19f), centerY + 1, colorWithAlpha);
+                    fontModule.drawString(matrix, bind, HudHelper.hud_text_right(fontModule, bind, HudHelper.hud_px(getX() + getWidth() - 8f)), centerY + 1, bindColor);
                 });
                 matrix.pop();
-                float width = fontModule.getStringWidth(module.name() + bind) + 25;
+                float width = (float) Math.ceil(fontModule.getStringWidth(module.name() + bind)) + 25;
                 maxWidth = (int) Math.max(width, maxWidth);
                 offset += 11;
             }
@@ -269,8 +269,8 @@ public class HotKeys extends AbstractDraggable {
                 .color(ColorAssist.multAlpha(accent, 0.16f * highlight))
                 .build());
         // Тонкая слева-акцентная черта, ярче основной подложки
-        rectangle.render(ShapeProperties.create(matrix, getX() + 2f, centerY - 3.5f, 1.25f, 8f)
-                .round(0.6f)
+        rectangle.render(ShapeProperties.create(matrix, getX() + 2f, centerY - 3.5f, 1f, 8f)
+                .round(0.5f)
                 .color(ColorAssist.multAlpha(accent, 0.85f * highlight))
                 .build());
     }

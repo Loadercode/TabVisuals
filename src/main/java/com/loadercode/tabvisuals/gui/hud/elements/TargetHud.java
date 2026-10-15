@@ -249,7 +249,8 @@ public class TargetHud extends AbstractDraggable {
                 ? TotemStats.getInstance().getPopCount(player)
                 : 0;
         displayedDistance = MathHelper.clamp(smooth_exp(displayedDistance, roundedDistance, DISTANCE_TAU, frameDt), 0f, 100f);
-        String distanceText = String.format("%.1f", displayedDistance);
+        // Locale.ROOT: запятая как десятичный разделитель ломала ширину/выравнивание
+        String distanceText = String.format(java.util.Locale.ROOT, "%.1f", displayedDistance);
 
         float nameWidth = font.getStringWidth(lastTarget.getName().getString());
 
@@ -304,9 +305,12 @@ public class TargetHud extends AbstractDraggable {
             distancefont.drawString(matrix, "Distance: " + distanceText, getX() + 29, getY() + 19f, ColorAssist.getText());
         }
 
-        float arcCenterX = getX() + getWidth() - 30.5f / 2.0F;
-        float arcCenterY = getY() + 30 / 2.0F;
-        Fonts.getSize(11, Fonts.Type.BOLD).drawCenteredString(matrix, stringHp, arcCenterX, arcCenterY, ColorAssist.getText(225 / 255f));
+        // Центр дуги: x округляем (drawCenteredString усекал до int), y менять нельзя —
+        // там же рисуется ванильная текстура сердечек
+        FontRenderer hpFont = Fonts.getSize(11, Fonts.Type.BOLD);
+        float arcCenterX = HudHelper.hud_text_center_x(hpFont, stringHp, HudHelper.hud_px(getX() + getWidth() - 30.5f / 2.0F));
+        float arcCenterY = getY() + 15;
+        hpFont.drawString(matrix, stringHp, arcCenterX, arcCenterY, ColorAssist.getText(225 / 255f));
 
         if (poppedTotems > 0) {
             String popText = String.valueOf(poppedTotems);
@@ -318,9 +322,9 @@ public class TargetHud extends AbstractDraggable {
             float blockWidth = iconWidth + gap + textWidth;
             float leftBound = getX() + 31.0f;
             float rightBound = getX() + getWidth() - 35.0f;
-            float totemX = MathHelper.clamp(getX() + 56.0f, leftBound, rightBound - blockWidth);
+            float totemX = HudHelper.hud_px(MathHelper.clamp(getX() + 56.0f, leftBound, rightBound - blockWidth));
             float totemY = getY() + 21.5f;
-            float countX = totemX + iconWidth + gap;
+            float countX = HudHelper.hud_px(totemX + iconWidth + gap);
             float countY = totemY + 0.5f;
             Render2D.defaultDrawStack(context, Items.TOTEM_OF_UNDYING.getDefaultStack(), totemX, totemY, false, false, iconScale);
             totemCountFont.drawString(matrix, popText, countX, countY, ColorAssist.getText());
@@ -361,11 +365,11 @@ public class TargetHud extends AbstractDraggable {
             } else {
                 String xText = "x";
                 FontRenderer font = Fonts.getSize(12, Fonts.Type.DEFAULT);
-                float textWidth = font.getStringWidth(xText);
-                float textHeight = font.getStringHeight(xText);
-                float textX = currentX + (slotSize - textWidth) / 2.0F;
-                float textY = 15.5F + (slotSize - textHeight) / 2.0F;
-                font.drawString(matrix, xText, textX, textY + 6.25f, ColorAssist.getText());
+                // Центр слота: getStringHeight в глиф-пространстве (в 2 раза больше экранного)
+                font.drawString(matrix, xText,
+                        HudHelper.hud_text_center_x(font, xText, HudHelper.hud_px(currentX + slotSize / 2.0F)),
+                        HudHelper.hud_text_mid_y(font, xText, 15.5F, slotSize),
+                        ColorAssist.getText());
             }
         }
         matrix.pop();

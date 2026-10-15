@@ -76,15 +76,20 @@ public class GlyphMap {
         List<Glyph> glyphs1 = new ArrayList<>();
         AffineTransform affineTransform = new AffineTransform();
         FontRenderContext fontRenderContext = new FontRenderContext(affineTransform, true, false);
+        // Дробные метрики — только для advance пера: целочисленные Java2D
+        // округляют шаг вверх и накапливают ошибку по строке.
+        FontRenderContext exactRenderContext = new FontRenderContext(affineTransform, true, true);
 
         while (generatedChars <= range) {
             char currentChar = (char) (fromIncl + generatedChars);
             Font font = getFontForGlyph(currentChar);
 
             Rectangle2D stringBounds = font.getStringBounds(String.valueOf(currentChar), fontRenderContext);
+            Rectangle2D exactBounds = font.getStringBounds(String.valueOf(currentChar), exactRenderContext);
 
             int width = (int) Math.ceil(stringBounds.getWidth());
             int height = (int) Math.ceil(stringBounds.getHeight());
+            float advance = Math.max(0f, (float) exactBounds.getWidth());
             generatedChars++;
 
             maxX = Math.max(maxX, currentX + width);
@@ -98,7 +103,7 @@ public class GlyphMap {
             }
 
             currentRowMaxY = Math.max(currentRowMaxY, height);
-            glyphs1.add(new Glyph(currentX, currentY, width, height, currentChar, this));
+            glyphs1.add(new Glyph(currentX, currentY, width, height, advance, currentChar, this));
 
             currentX += width + pixelPadding;
             charNX++;
