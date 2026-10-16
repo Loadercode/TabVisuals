@@ -2,6 +2,8 @@
 package com.loadercode.tabvisuals.gui.hud.elements;
 
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
+import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.item.ItemStack;
@@ -32,7 +34,6 @@ public class Inventory extends AbstractDraggable {
     /** Плавно догоняющий itemCount счётчик — ощущение "намотки" числа */
     private float shownCount;
     private FontRenderer fontCached;
-    private FontRenderer iconCached;
     private FontRenderer itemsCached;
 
     private long animLastNs;
@@ -72,7 +73,6 @@ public class Inventory extends AbstractDraggable {
         MatrixStack matrix = context.getMatrices();
         if (fontCached == null) {
             fontCached    = Fonts.getSize(14, Fonts.Type.DEFAULT);
-            iconCached    = Fonts.getSize(20, Fonts.Type.ICONS);
             itemsCached   = Fonts.getSize(12, Fonts.Type.DEFAULT);
         }
 
@@ -125,7 +125,10 @@ public class Inventory extends AbstractDraggable {
         // Маркер и линии сетки: целые координаты + толщина 1, без полупиксельных волосяных линий
         rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 1f, 6).color(ColorAssist.getText(0.5F * enter)).round(0F).build());
 
-        iconCached.drawString(matrix, "F", getX() + HudHelper.hud_px(4.5f), getY() + 6, ColorAssist.getText(enter));
+        // Старая "F" рисовала EYE_OFF; настоящая иконка инвентаря — INVENTORY
+        Icons.draw(matrix, Icons.INVENTORY, getX() + HudHelper.hud_px(4.5f),
+                UiRender.iconLineY(fontCached, Icons.INVENTORY, 17f, getY() + HudHelper.hud_px(6.5f)),
+                17f, ColorAssist.getText(enter));
         fontCached.drawString(matrix, getName(), getX() + HudHelper.hud_px(22f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText(enter));
 
         int offsetY = 20;

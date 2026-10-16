@@ -3,6 +3,7 @@ package com.loadercode.tabvisuals.gui.hud.elements.island.impl;
 
 import com.loadercode.tabvisuals.gui.Theme;
 import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 import com.loadercode.tabvisuals.gui.music.MusicManager;
@@ -71,15 +72,7 @@ public class MusicStatus extends IslandStatus implements QuickImports {
         return t;
     });
 
-    // Иконки управления (PNG) только для островка
-    private static final Identifier ICON_FORWARD =
-            Identifier.of("tabvisuals", "textures/island/media_forward.png");
-    private static final Identifier ICON_BACK =
-            Identifier.of("tabvisuals", "textures/island/media_back.png");
-    private static final Identifier ICON_PAUSE =
-            Identifier.of("tabvisuals", "textures/island/media_pause.png");
-    private static final Identifier ICON_PLAY =
-            Identifier.of("tabvisuals", "textures/island/media_play.png");
+    // Транспорт островка — те же Icons.Glyph, что у MediaPlayer (раньше были 4 PNG)
 
     @Override
     public boolean canShow() {
@@ -413,15 +406,12 @@ public class MusicStatus extends IslandStatus implements QuickImports {
             }
         }
 
-        // ================= 3. НИЖНИЙ БЛОК: КНОПКИ (PNG ТОЛЬКО ДЛЯ ОСТРОВКА) =================
+        // ================= 3. НИЖНИЙ БЛОК: КНОПКИ ТРАНСПОРТА (Icons, как у MediaPlayer) ==
         float iconSize = 14f;
         // Центруем иконки по одной линии и гарантированно внутри окна
         float controlsY = y + height - padding - iconSize + 2f;
         float centerX = x + width / 2f;
         float spacing = 24f;
-
-        // Текстуры 256x256 — используем полный размер, иначе берётся только 16x16 и иконки пиксельные
-        int texSize = 256;
 
         // Выбираем цвет иконок по теме: белые на тёмной/прозрачной, чёрные на светлой
         int iconColor = 0xFFFFFFFF;
@@ -431,23 +421,28 @@ public class MusicStatus extends IslandStatus implements QuickImports {
         iconColor = UiRender.mulAlpha(iconColor, fadeAlpha);
 
         float iconCenterY = controlsY + iconSize / 2f;
-        draw_control_icon(m, ICON_BACK, centerX - spacing, iconCenterY, iconSize, texSize, iconColor, pressAnim[0]);
-        draw_control_icon(m, playing ? ICON_PAUSE : ICON_PLAY, centerX, iconCenterY, iconSize, texSize, iconColor, pressAnim[1]);
-        draw_control_icon(m, ICON_FORWARD, centerX + spacing, iconCenterY, iconSize, texSize, iconColor, pressAnim[2]);
+        draw_control_icon(m, Icons.SKIP_PREV, centerX - spacing, iconCenterY, iconSize, iconColor, pressAnim[0]);
+        // кнопка показывает действие: играет — PAUSE, стоит — PLAY (та же логика, что у MediaPlayer)
+        draw_control_icon(m, playing ? Icons.PAUSE : Icons.PLAY, centerX, iconCenterY, iconSize, iconColor, pressAnim[1]);
+        draw_control_icon(m, Icons.SKIP_NEXT, centerX + spacing, iconCenterY, iconSize, iconColor, pressAnim[2]);
 
         scissor.pop(); // Снимаем главный Scissor
     }
 
     /** Иконка транспорта с отжатием после клика — та же схема pressScale, что у UiRender.button. */
-    private static void draw_control_icon(MatrixStack m, Identifier icon, float cx, float cy,
-                                          float size, int texSize, int color, float press) {
+    private static void draw_control_icon(MatrixStack m, Icons.Glyph glyph, float cx, float cy,
+                                          float size, int color, float press) {
         float s = UiRender.pressScale(press);
         m.push();
         m.translate(cx, cy, 0f);
         m.scale(s, s, 1f);
         m.translate(-cx, -cy, 0f);
-        Render2D.drawTexture(m, icon, cx - size / 2f, cx + size / 2f, cy - size / 2f, cy + size / 2f,
-                0f, texSize, texSize, 0f, 0f, texSize, texSize, color);
+        // PAUSE векторный (два бара) — у него своя центровка, у глифов — baseline-коррекция
+        if (glyph == Icons.PAUSE) {
+            Icons.drawCentered(m, glyph, cx, cy, size, color);
+        } else {
+            UiRender.iconCentered(m, glyph, cx, cy, size, color);
+        }
         m.pop();
     }
 

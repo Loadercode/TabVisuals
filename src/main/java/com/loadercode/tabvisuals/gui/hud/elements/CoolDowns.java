@@ -3,6 +3,8 @@ package com.loadercode.tabvisuals.gui.hud.elements;
 
 import lombok.Getter;
 import lombok.Setter;
+import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.util.math.MatrixStack;
@@ -45,7 +47,6 @@ public class CoolDowns extends AbstractDraggable {
     private long lastItemChange = 0;
     private Object lastPlayer;
     private FontRenderer fontCached;
-    private FontRenderer iconCached;
     private FontRenderer itemsCached;
     private int activeCooldownCount = 0;
     /** Кадровая развязка для въезда панели и пульса счётчика. */
@@ -185,7 +186,6 @@ public class CoolDowns extends AbstractDraggable {
         MatrixStack matrix = context.getMatrices();
       if(fontCached == null){
          fontCached = Fonts.getSize(13,Fonts.Type.DEFAULT);
-         iconCached = Fonts.getSize(21,Fonts.Type.ICONS);
          itemsCached = Fonts.getSize(12,Fonts.Type.DEFAULT);
 
       }
@@ -235,11 +235,11 @@ public class CoolDowns extends AbstractDraggable {
                 .color(gc[0], gc[1], gc[2], gc[3])
                 .build());
             blur.render(ShapeProperties.create(matrix, getX(), getY() + 16.5F, getWidth(), getHeight() - 17)
-                    .round(4f).quality(com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality())
+                    .round(0,4,0,4).quality(com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality())
                     .color(ColorAssist.getBlurColor())
                     .build());
             rectangle.render(ShapeProperties.create(matrix, getX(), getY() + 16.5F, getWidth(), getHeight() - 17)
-                    .round(4f)
+                    .round(0,4,0,4)
                     .thickness(0.1f)
                     .outlineColor(ColorAssist.getOutlineColor())
                     .color(gc[0], gc[1], gc[2], gc[3])
@@ -256,7 +256,9 @@ public class CoolDowns extends AbstractDraggable {
         rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 1f, 6)
                 .color(ColorAssist.getText(0.5F)).round(0F).build());
 
-        iconCached.drawString(matrix, "D", getX() + HudHelper.hud_px(4f), getY() + HudHelper.hud_px(5.5f), ColorAssist.getText());
+        Icons.draw(matrix, Icons.CLOCK, getX() + HudHelper.hud_px(4.5f),
+                UiRender.iconLineY(fontCached, Icons.CLOCK, 17f, getY() + HudHelper.hud_px(6.5f)),
+                17f, ColorAssist.getText());
         fontCached.drawString(matrix, "CoolDowns", getX() + HudHelper.hud_px(22f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
 
         // Показываем инфо что каждый кулдаун теперь можно двигать отдельно;

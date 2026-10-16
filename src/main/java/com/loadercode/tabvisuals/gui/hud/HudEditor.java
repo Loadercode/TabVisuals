@@ -601,9 +601,19 @@ public final class HudEditor {
             UiRender.rect(m, bx, by, bw, bh, HudTheme.PANEL_ROUND,
                     UiRender.mulAlpha(HOVER_C, 0.12f * hover * open));
         }
-        // в покое еле заметная обводка, при наведении — во всю силу
-        UiRender.outline(m, bx, by, bw, bh, HudTheme.PANEL_ROUND,
-                UiRender.mulAlpha(HOVER_C, (0.18f + 0.82f * hover) * open), 1f);
+        // Обводка сидит на полупиксельной сетке (толщина 0.5): дробные координаты
+        // бокса после scale-анимации редактора давали «плывущую» линию. У элемента,
+        // который тащат, — акцентная рамка, у остальных — привычная фиолетовая.
+        boolean grabbed = id.equals(dragging);
+        float ox = Math.round(bx * 2f) / 2f;
+        float oy = Math.round(by * 2f) / 2f;
+        float ow = Math.round(bw * 2f) / 2f;
+        float oh = Math.round(bh * 2f) / 2f;
+        float outlineA = grabbed
+                ? (0.55f + 0.45f * hover) * open
+                : (0.18f + 0.82f * hover) * open;
+        UiRender.outline(m, ox, oy, ow, oh, HudTheme.PANEL_ROUND,
+                UiRender.mulAlpha(grabbed ? HudTheme.clientColor() : HOVER_C, outlineA), 0.5f);
 
         draw_label(m, id, bx, by, hover, lift);
         if (hover > 0.02f) {
@@ -622,13 +632,15 @@ public final class HudEditor {
         if (ly < 2f) {
             ly = by + 3f;
         }
-        float a = open * (0.55f + 0.45f * hover);
+        float a = open * (0.75f + 0.25f * hover);
         UiRender.rect(m, bx, ly, lw, LABEL_H, 3.5f, UiRender.mulAlpha(BADGE_BG, a));
         UiRender.outline(m, bx, ly, lw, LABEL_H, 3.5f, UiRender.mulAlpha(BADGE_BORDER, a), 1f);
-        // x фиксирован: getStringWidth для коротких строк завышает ширину
+        // x фиксирован: getStringWidth для коротких строк завышает ширину.
+        // Цвет фиксированный светлый: плашка тёмная (BADGE_BG), а HudTheme.text()
+        // в светлой теме даёт тёмный текст — метка переставала читаться
         UiRender.text(F_BADGE, m, text, bx + 5f,
                 ly + (LABEL_H - F_BADGE.getStringHeight(text)) / 2f + 1f,
-                HudTheme.multAlpha(HudTheme.text(), a * 0.95f));
+                HudTheme.multAlpha(0xFFF5F5F8, a));
     }
 
     /** X/Y badge под боксом — для подсвеченного или схваченного элемента. */

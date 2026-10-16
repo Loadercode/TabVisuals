@@ -67,6 +67,9 @@ public final class ConfigManager {
     private static boolean dirty;
     private static long lastWriteAt;
 
+    /** Last ClickGUI window position (scaled px); null until the window was first placed. */
+    private static Float guiX, guiY;
+
     /** Serialized GUI state. Public fields for Gson. */
     public static final class GuiState {
         public String themeId = Theme.ALL[0].id();
@@ -75,6 +78,9 @@ public final class ConfigManager {
         public Map<String, float[]> hud = new HashMap<>();
         /** Custom theme colours: slot name → ARGB int. */
         public Map<String, Integer> customTheme = new HashMap<>();
+        /** ClickGUI window position (scaled px); null = never moved — Gson omits nulls. */
+        public Float guiX;
+        public Float guiY;
     }
 
     public static final class ModuleState {
@@ -131,7 +137,28 @@ public final class ConfigManager {
         }
         state.hud.putAll(HudEditor.positions());
         state.customTheme.putAll(Theme.customColors());
+        state.guiX = guiX;
+        state.guiY = guiY;
         return state;
+    }
+
+    /**
+     * Запоминает позицию окна ClickGUI (scaled px) и помечает автосейв грязным —
+     * запись троттлится общим {@link #flush_if_due}, так что drag-шторм дёргает
+     * диск не чаще раза в AUTOSAVE_MIN_INTERVAL_MS.
+     */
+    public static void rememberGuiPosition(float x, float y) {
+        if (!Float.isFinite(x) || !Float.isFinite(y)) {
+            return;
+        }
+        guiX = x;
+        guiY = y;
+        autosave();
+    }
+
+    /** Сохранённая позиция окна {x, y} или null — экран центрирует окно сам. */
+    public static float[] guiPosition() {
+        return guiX == null || guiY == null ? null : new float[]{guiX, guiY};
     }
 
     public static void apply(GuiState state) {
@@ -141,6 +168,14 @@ public final class ConfigManager {
         // custom colours first: the theme id below may point at the Custom slot
         if (state.customTheme != null) {
             Theme.loadCustom(state.customTheme);
+        }
+        // окно ClickGUI: позиция применяется при следующем открытии экрана
+        // (там же зажимается под текущее разрешение — старый конфиг не должен
+        // выкидывать окно за пределы меньшего экрана)
+        if (state.guiX != null && state.guiY != null
+                && Float.isFinite(state.guiX) && Float.isFinite(state.guiY)) {
+            guiX = state.guiX;
+            guiY = state.guiY;
         }
         if (state.themeId != null) {
             Theme target = Theme.byId(state.themeId);
@@ -349,7 +384,8 @@ public final class ConfigManager {
             TabVisualsClient.LOGGER.error("Config save failed: {}", file, e);
             try {
                 Files.deleteIfExists(tmp);
-            } catch (IOException ignored) {
+            } catch (IOException | RuntimeException cleanup) {
+                TabVisualsClient.LOGGER.debug("config tmp cleanup failed: {}", file, cleanup);
             }
             return false;
         }
@@ -361,7 +397,9 @@ public final class ConfigManager {
             String json = Files.readString(file, StandardCharsets.UTF_8);
             JsonParser.parseString(json);
             Files.copy(file, backup_of(file), StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException | RuntimeException ignored) {
+        } catch (IOException | RuntimeException e) {
+            // сбой бэкапа не должен прерывать сохранение — основной файл уже валиден
+            TabVisualsClient.LOGGER.debug("config backup skipped: {}", file, e);
         }
     }
 
@@ -409,7 +447,25 @@ public final class ConfigManager {
         read_modules(root, state);
         read_hud(root, state);
         read_custom_theme(root, state);
+        read_gui_position(root, state);
         return state;
+    }
+
+    /** guiX/guiY из файла: два примитива, битое/нефинитное значение пропускается. */
+    private static void read_gui_position(JsonObject root, GuiState state) {
+        try {
+            if (root.has("guiX") && root.has("guiY")
+                    && root.get("guiX").isJsonPrimitive() && root.get("guiY").isJsonPrimitive()) {
+                float x = root.get("guiX").getAsFloat();
+                float y = root.get("guiY").getAsFloat();
+                if (Float.isFinite(x) && Float.isFinite(y)) {
+                    state.guiX = x;
+                    state.guiY = y;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // битая позиция не должна сбрасывать остальной конфиг
+        }
     }
 
     private static void read_modules(JsonObject root, GuiState state) {

@@ -1,6 +1,8 @@
 // language: Java, file: NotificationManager.java, target: Minecraft 1.21.4 Fabric, JDK 21
 package com.loadercode.tabvisuals.gui.hud;
 
+import com.loadercode.tabvisuals.gui.icon.Icons;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -44,6 +46,8 @@ public final class NotificationManager {
         public final String middle;
         public final String status;
         public final int statusColor;
+        /** Иконка карточки по типу уведомления: info → INFO, ошибка → NODE, музыка → PLAY. */
+        public final Icons.Glyph glyph;
         public final long bornAt = System.nanoTime();
 
         /** Authored enter curve; may briefly exceed 1 (soft overshoot pop). */
@@ -58,11 +62,26 @@ public final class NotificationManager {
         public float progress = 1f;
 
         Toast(String prefix, String name, String middle, String status, int statusColor) {
+            this(infer_glyph(statusColor), prefix, name, middle, status, statusColor);
+        }
+
+        Toast(Icons.Glyph glyph, String prefix, String name, String middle, String status, int statusColor) {
+            this.glyph = glyph != null ? glyph : Icons.INFO;
             this.prefix = prefix;
             this.name = name;
             this.middle = middle;
             this.status = status;
             this.statusColor = statusColor;
+        }
+
+        /**
+         * Тип по цвету статуса: красный (ошибка/удаление/выключение) — NODE,
+         * всё остальное — INFO. Внешние пушеры (ClickGuiScreen) цвет задают сами,
+         * поэтому правило работает и без правки их кода.
+         */
+        private static Icons.Glyph infer_glyph(int statusColor) {
+            int r = (statusColor >> 16) & 0xFF, g = (statusColor >> 8) & 0xFF, b = statusColor & 0xFF;
+            return r > g && r > b ? Icons.NODE : Icons.INFO;
         }
 
         public boolean expired() {
@@ -78,10 +97,18 @@ public final class NotificationManager {
 
     /** Generic four-segment toast: prefix + name (bold) + middle + status (bold, colored). */
     public static void push(String prefix, String name, String middle, String status, int statusColor) {
+        push(null, prefix, name, middle, status, statusColor);
+    }
+
+    /**
+     * Тот же тост с явной иконкой ({@code null} — вывести по типу из цвета
+     * статуса). Музыкальные уведомления приходят с {@code Icons.PLAY}.
+     */
+    public static void push(Icons.Glyph glyph, String prefix, String name, String middle, String status, int statusColor) {
         if (QUEUE.size() >= MAX_QUEUE) {
             QUEUE.remove(QUEUE.size() - 1); // drop the oldest (bottom-most)
         }
-        QUEUE.add(0, new Toast(prefix, name, middle, status, statusColor));
+        QUEUE.add(0, new Toast(glyph, prefix, name, middle, status, statusColor));
     }
 
     public static void moduleToggle(String moduleName, boolean enabled) {

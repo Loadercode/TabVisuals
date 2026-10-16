@@ -4,6 +4,8 @@ package com.loadercode.tabvisuals.gui.title;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.account.AccountManager;
 import com.loadercode.tabvisuals.gui.account.AccountRenderer;
+import com.loadercode.tabvisuals.gui.anim.Easing;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.loadercode.tabvisuals.gui.module.ModuleRegistry;
 import com.loadercode.tabvisuals.gui.module.ModuleStub;
 import com.loadercode.tabvisuals.gui.music.MusicManager;
@@ -27,18 +29,16 @@ import net.minecraft.util.Util;
 import org.lwjgl.glfw.GLFW;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * TabVisuals title flow per ТЗ + reference photos:
- * splash (gradient, centered logo + TABVISUALS slogan, low lyrics, pulsing
- * hint, compact profile row, inline socials) → zoom-in transition → main menu
- * (violet-white gradient backdrop with an aspect-correct album cover, top-left
- * mark, left icon nav, right lyric block), plus the account manager modal with
- * a rotatable full-body 3D skin preview opened from "Аккаунты".
+ * splash (gradient + starfield, centered logo + TABVISUALS slogan, low
+ * lyrics, pulsing hint, compact profile row, inline socials) → eased
+ * zoom-in transition → main menu (violet-white gradient backdrop with an
+ * aspect-correct album cover, top-left mark, left icon nav with a sliding
+ * glass pill, right lyric block), plus the account manager modal with a
+ * rotatable full-body 3D skin preview opened from "Аккаунты".
  */
 public final class TabVisualsTitleScreen extends Screen {
 
@@ -64,6 +64,23 @@ public final class TabVisualsTitleScreen extends Screen {
     private static final String URL_TELEGRAM = "https://t.me/tabvisuals";
     private static final String URL_GITHUB = "https://github.com/Loadercode/TabVisuals";
 
+    // --- prebuilt text (spaced() used to build a StringBuilder every frame) ---
+    private static final String MARK_TXT = spaced("TABVISUALS");
+    private static final String HINT_TXT = spaced("НАЖМИТЕ ЛЮБУЮ КЛАВИШУ");
+    private static final String COPY_TXT = "© 2026 TabVisuals";
+
+    // --- nav data: label + unified icon per item ---
+    private static final String[] NAV_LABELS = {"Одиночная игра", "Мультиплейер", "Настройки", "Аккаунты", "Выход"};
+    private static final Icons.Glyph[] NAV_GLYPHS = {
+            Icons.CUBE, Icons.LINK, Icons.GEAR, Icons.USER, Icons.LOGOUT};
+
+    // --- socials data (brand glyphs are not in the Icons set — PNG textures) ---
+    private static final Identifier TG_ICON = Identifier.of("tabvisuals", "textures/menu/icon_telegram.png");
+    private static final Identifier GH_ICON = Identifier.of("tabvisuals", "textures/menu/icon_github.png");
+    private static final String[] SOC_LABELS = {"Telegram", "GitHub"};
+    private static final String[] SOC_HANDLES = {"@tabvisuals", "Loadercode"};
+    private static final Identifier[] SOC_ICONS = {TG_ICON, GH_ICON};
+
     // --- fonts ---
     private static final FontRenderer F_LOGO = Fonts.getSize(46, Fonts.Type.BOLD);
     private static final FontRenderer F_MARK = Fonts.getSize(14, Fonts.Type.BOLD);
@@ -82,8 +99,24 @@ public final class TabVisualsTitleScreen extends Screen {
     private static final FontRenderer F_BTN = Fonts.getSize(11, Fonts.Type.SEMI);
 
     // --- timings ---
-    private static final long TRANS_MS = 450;
+    private static final long TRANS_MS = 520;
     private static final long MENU_IN_MS = 350;
+
+    // --- starfield: deterministic positions (golden-ratio sequences), no RNG ---
+    private static final int STAR_N = 18;
+    private static final float[] STAR_X = new float[STAR_N];
+    private static final float[] STAR_Y = new float[STAR_N];
+    private static final float[] STAR_R = new float[STAR_N];
+    private static final float[] STAR_PH = new float[STAR_N];
+
+    static {
+        for (int i = 0; i < STAR_N; i++) {
+            STAR_X[i] = (float) ((i + 0.5) * 0.618033988749895 % 1.0);
+            STAR_Y[i] = (float) ((i + 0.5) * 0.7548776662466927 % 1.0);
+            STAR_R[i] = 1.2f + (i % 4) * 0.45f;
+            STAR_PH[i] = i * 1.37f;
+        }
+    }
 
     private enum State {SPLASH, TRANSITION, MENU}
 
@@ -100,6 +133,9 @@ public final class TabVisualsTitleScreen extends Screen {
     private final float[] navHover = new float[5];
     private final float[] navPress = new float[5];
     private int navPressed = -1;
+    /** The single nav glass pill: eased y-centre / width / alpha. */
+    private float navPillY, navPillW, navPillA;
+    private boolean navPillInit;
     /** Per-social-entry hover easing, 0..1. */
     private final float[] socHover = new float[2];
     /** Frame delta (seconds) for FPS-independent animation smoothing. */
@@ -132,33 +168,72 @@ public final class TabVisualsTitleScreen extends Screen {
     /** Row click pin — the preview stays on the clicked account. */
     private String pinnedNick;
 
-    // --- smooth-button animation state (id → eased hover/press) ---
+    // --- smooth-button animation state (no string ids — pooled states) ---
     private static final class BtnState {
         float hover, press;
     }
 
-    private final Map<String, BtnState> btnStates = new HashMap<>();
-    private String pressedId;
+    private static BtnState[] newBtnPool(int n) {
+        BtnState[] a = new BtnState[n];
+        for (int i = 0; i < n; i++) {
+            a[i] = new BtnState();
+        }
+        return a;
+    }
+
+    private final BtnState closeBtn = new BtnState();
+    private final BtnState createBtn = new BtnState();
+    private final BtnState[] rowLoginBtn = newBtnPool(64);
+    private final BtnState[] rowEditBtn = newBtnPool(64);
+    private final BtnState[] rowDelBtn = newBtnPool(64);
+    /** The button currently held down (cleared on release / focus loss). */
+    private BtnState pressedBtn;
 
     /** 3D skin preview — full body, drag-rotatable, nick-driven. */
     private final AccountRenderer skinRenderer = new AccountRenderer();
 
-    // --- hit caches (filled during render) ---
-    private record R(float x, float y, float w, float h) {
+    // --- hit caches (filled during render, pooled — no per-frame records) ---
+    private static final class R {
+        float x, y, w, h;
+
+        R set(float x, float y, float w, float h) {
+            this.x = x;
+            this.y = y;
+            this.w = w;
+            this.h = h;
+            return this;
+        }
     }
 
-    private record NavHit(int action, R box) {
+    private static R[] newRPool(int n) {
+        R[] a = new R[n];
+        for (int i = 0; i < n; i++) {
+            a[i] = new R();
+        }
+        return a;
     }
 
-    private record RowHit(int index, R box, R login, R edit, R del) {
-    }
-
-    private final List<NavHit> navHits = new ArrayList<>();
-    private final List<RowHit> rowHits = new ArrayList<>();
-    private R tgHit, ghHit, closeHit, inputHit, createHit, previewHit;
+    private final R[] navBox = newRPool(5);
+    private final R[] socBox = newRPool(2);
+    private final R[] rowBox = newRPool(64);
+    private final R[] rowLogin = newRPool(64);
+    private final R[] rowEdit = newRPool(64);
+    private final R[] rowDel = newRPool(64);
+    /** Which row boxes hold THIS frame's geometry (scrolled-out rows stay stale). */
+    private final boolean[] rowRec = new boolean[64];
+    private final R closeHit = new R();
+    private final R inputHit = new R();
+    private final R createHit = new R();
+    private R previewHit;
     private float panelX, panelY, panelW, panelH;
     /** DrawContext of the current frame — used for the cover/avatar textures. */
     private DrawContext ctx;
+
+    /** "Title — Artist" label cache — trackLabel() rebuilt it every frame. */
+    private String tlTitle = " ", tlArtist = " ", tlCache = "";
+
+    /** First-letter chip cache for the profile row. */
+    private String initNick = " ", initChar = "?";
 
     public TabVisualsTitleScreen() {
         super(Text.literal("TabVisuals"));
@@ -178,50 +253,115 @@ public final class TabVisualsTitleScreen extends Screen {
         this.mouseX = mouseX;
         this.mouseY = mouseY;
         long now = System.currentTimeMillis();
+        // clamped harder than before: a long hitch must not "teleport" every
+        // eased control to its end state in one frame
         if (lastFrameMs != 0) {
-            frameDt = Math.min(0.1f, (now - lastFrameMs) / 1000f);
+            frameDt = Math.min(0.05f, (now - lastFrameMs) / 1000f);
         }
         lastFrameMs = now;
 
+        // the cursor position freezes when the window loses focus — without
+        // this every hover state sticks on the last item under the parked mouse
+        if (!windowFocused()) {
+            this.mouseX = -9999f;
+            this.mouseY = -9999f;
+        }
+
         // a press can be "lost" when a click opens another screen before the
         // release — poll the real button state so eased press never sticks
-        if (pressedId != null || navPressed >= 0) {
-            if (GLFW.glfwGetMouseButton(MinecraftClient.getInstance().getWindow().getHandle(),
+        if (pressedBtn != null || navPressed >= 0) {
+            MinecraftClient mc0 = MinecraftClient.getInstance();
+            if (mc0 == null || mc0.getWindow() == null
+                    || GLFW.glfwGetMouseButton(mc0.getWindow().getHandle(),
                     GLFW.GLFW_MOUSE_BUTTON_LEFT) != GLFW.GLFW_PRESS) {
-                pressedId = null;
+                pressedBtn = null;
                 navPressed = -1;
             }
         }
 
         // lyric line change drives the fade/slide-in of the new line
         String curLine = mediaOn() && MusicManager.hasLyrics() ? MusicManager.currentLine() : "";
+        if (curLine == null) {
+            curLine = "";
+        }
         if (!curLine.isEmpty() && !curLine.equals(lastLine)) {
             lastLine = curLine;
             lineChangedAt = now;
         }
 
         MenuBackground.render(m, width, height, 1f, now);
+        renderStarfield(m, 1f, now);
 
         switch (state) {
-            case SPLASH -> renderSplash(m, mouseX, mouseY, now, 1f, 1f);
+            case SPLASH -> renderSplash(m, now, 1f, 1f);
             case TRANSITION -> {
                 float p = clamp01((now - animStart) / (float) TRANS_MS);
-                float e = easeOut(p);
-                renderSplash(m, mouseX, mouseY, now, 1f + 0.30f * e, 1f - e);
+                // zoom leads (expo-out: fast start, long settle), the fade
+                // trails it (quad-out) — the logo never pops out early
+                float zoom = (float) Easing.apply(Easing.EXPO_OUT, p);
+                float fade = (float) Easing.apply(Easing.QUAD_OUT, p);
+                renderSplash(m, now, 1f + 0.28f * zoom, 1f - fade);
+                // soft violet bloom peaking mid-transition — a premium flash
+                // that never reaches full white
+                float flash = (float) Math.sin(Math.PI * Math.min(1.0, p * 1.2));
+                if (flash > 0.02f) {
+                    UiRender.glow(m, width / 2f, height * 0.42f,
+                            Math.max(width, height) * 0.26f, 0xFFB8A6FF, 0.09f * flash, 1f);
+                }
                 if (p >= 1f) {
                     state = State.MENU;
                     menuStart = now;
+                    navPillA = 0f;
+                    navPillInit = false;
                 }
             }
-            case MENU -> renderMenu(m, mouseX, mouseY, now);
+            case MENU -> renderMenu(m, now);
         }
 
         if (modal) {
-            renderModal(m, mouseX, mouseY, now);
+            renderModal(m, now);
         }
     }
 
-    private void renderSplash(MatrixStack m, float mx, float my, long now, float scale, float alpha) {
+    /** Cheap focused-window poll — one JNI attr read per frame. */
+    private static boolean windowFocused() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc == null || mc.getWindow() == null) {
+            return false;
+        }
+        return GLFW.glfwGetWindowAttrib(mc.getWindow().getHandle(), GLFW.GLFW_FOCUSED) == GLFW.GLFW_TRUE;
+    }
+
+    /**
+     * The premium backdrop touch: 18 slow-breathing dots over the shader
+     * gradient — deterministic positions, violet/white mix, the few larger
+     * ones carry a faint halo. One rect each, halo layers early-out at this
+     * alpha — cheap even on a GTX 770.
+     */
+    private void renderStarfield(MatrixStack m, float alpha, long now) {
+        if (alpha <= 0.01f) {
+            return;
+        }
+        float t = now * 0.001f;
+        for (int i = 0; i < STAR_N; i++) {
+            float breath = 0.5f + 0.5f * (float) Math.sin(t * (0.30f + (i % 5) * 0.05f) + STAR_PH[i]);
+            float a = alpha * (0.08f + 0.34f * breath * breath);
+            if (a <= 0.012f) {
+                continue;
+            }
+            float x = STAR_X[i] * width + (float) Math.sin(t * 0.09f + STAR_PH[i]) * 6f;
+            float y = (0.04f + STAR_Y[i] * 0.66f) * height
+                    + (float) Math.cos(t * 0.07f + STAR_PH[i] * 1.7f) * 5f;
+            float d = STAR_R[i];
+            int rgb = i % 3 == 0 ? 0xFFC4B5FD : 0xFFFFFFFF;
+            UiRender.rect(m, x, y, d, d, d / 2f, mulAlpha(rgb, a));
+            if (d > 2.0f) {
+                UiRender.glow(m, x + d / 2f, y + d / 2f, d * 5.5f, rgb, 0.10f * a, 1f);
+            }
+        }
+    }
+
+    private void renderSplash(MatrixStack m, long now, float scale, float alpha) {
         m.push();
         if (Math.abs(scale - 1f) > 0.001f) {
             float cx = width / 2f, cy = height / 2f;
@@ -231,8 +371,8 @@ public final class TabVisualsTitleScreen extends Screen {
         }
 
         // staggered entry: logo → slogan → lyrics → hint (slide-up + fade)
-        float aLogo = enter(splashStart, 0, 480);
-        float aSlogan = enter(splashStart, 120, 480);
+        float aLogo = enter(now, splashStart, 0, 480);
+        float aSlogan = enter(now, splashStart, 120, 480);
 
         // photo 1: brand logo image when the asset exists, text mark otherwise
         Identifier logo = LogoManager.texture();
@@ -247,13 +387,13 @@ public final class TabVisualsTitleScreen extends Screen {
         } else {
             F_LOGO.drawCenteredString(m, "TabVisuals", width / 2.0, height * 0.415 + (1f - aLogo) * 8f,
                     mulAlpha(TEXT, alpha * aLogo));
-            F_SLOGAN.drawCenteredString(m, spaced("TABVISUALS"), width / 2.0, height * 0.545f + (1f - aSlogan) * 6f,
+            F_SLOGAN.drawCenteredString(m, MARK_TXT, width / 2.0, height * 0.545f + (1f - aSlogan) * 6f,
                     mulAlpha(TEXT_2, alpha * aSlogan));
         }
 
         // lyrics low on the screen: big current line + small next one
         // (hidden until SMTC reports a track — no placeholder text)
-        float aLyric = enter(splashStart, 240, 520);
+        float aLyric = enter(now, splashStart, 240, 520);
         if (mediaOn() && MusicManager.hasTrack() && aLyric > 0.01f) {
             float lineA = lyricAnim(now) * alpha * aLyric;
             float lineY = height * 0.785f;
@@ -280,22 +420,22 @@ public final class TabVisualsTitleScreen extends Screen {
         }
 
         // pulsing hint near the bottom edge
-        float aHint = enter(splashStart, 380, 520);
+        float aHint = enter(now, splashStart, 380, 520);
         float pulse = 0.45f + 0.55f * (0.5f + 0.5f * (float) Math.sin(now / 360.0));
-        F_HINT.drawCenteredString(m, spaced("НАЖМИТЕ ЛЮБУЮ КЛАВИШУ"), width / 2.0, height * 0.915,
+        F_HINT.drawCenteredString(m, HINT_TXT, width / 2.0, height * 0.915,
                 mulAlpha(TEXT, alpha * aHint * pulse));
 
-        renderProfileRow(m, alpha * enter(splashStart, 180, 480));
-        renderSocials(m, alpha * enter(splashStart, 440, 480));
-        F_COPY.drawCenteredString(m, "© 2026 TabVisuals", width / 2.0, height * 0.968,
-                mulAlpha(0x997E84A6, alpha * enter(splashStart, 500, 480)));
+        renderProfileRow(m, alpha * enter(now, splashStart, 180, 480));
+        renderSocials(m, alpha * enter(now, splashStart, 440, 480));
+        F_COPY.drawCenteredString(m, COPY_TXT, width / 2.0, Math.round(height * 0.968),
+                mulAlpha(0x997E84A6, alpha * enter(now, splashStart, 500, 480)));
 
         m.pop();
     }
 
     /** Eased 0..1 entry factor with a per-element delay — staggered intro. */
-    private static float enter(long start, long delay, long dur) {
-        return easeOut(clamp01((System.currentTimeMillis() - start - delay) / (float) dur));
+    private static float enter(long now, long start, long delay, long dur) {
+        return (float) Easing.apply(Easing.QUINT_OUT, (now - start - delay) / (float) dur);
     }
 
     /**
@@ -306,12 +446,12 @@ public final class TabVisualsTitleScreen extends Screen {
         if (!mediaSetting("Animated lyrics")) {
             return 1f;
         }
-        return easeOut(clamp01((now - lineChangedAt) / 320f));
+        return (float) Easing.apply(Easing.CUBIC_OUT, (now - lineChangedAt) / 320.0);
     }
 
-    private void renderMenu(MatrixStack m, float mx, float my, long now) {
+    private void renderMenu(MatrixStack m, long now) {
         float p = clamp01((now - menuStart) / (float) MENU_IN_MS);
-        float e = easeOut(p);
+        float e = (float) Easing.apply(Easing.QUINT_OUT, p);
 
         // photo 2: violet-white gradient backdrop + aspect-correct album cover
         renderCoverGlow(m, e, now);
@@ -324,13 +464,13 @@ public final class TabVisualsTitleScreen extends Screen {
         m.translate(-cx, -cy, 0f);
 
         // staggered chrome entry: mark → profile → nav → lyrics → socials
-        renderMark(m, enter(menuStart, 0, 420));
-        renderProfileRow(m, enter(menuStart, 70, 420));
-        renderNav(m, mx, my, e);
-        renderMenuLyrics(m, enter(menuStart, 240, 460), now);
-        renderSocials(m, enter(menuStart, 310, 460));
-        F_COPY.drawCenteredString(m, "© 2026 TabVisuals", width / 2.0, height * 0.968,
-                mulAlpha(0x997E84A6, enter(menuStart, 360, 460)));
+        renderMark(m, enter(now, menuStart, 0, 420));
+        renderProfileRow(m, enter(now, menuStart, 70, 420));
+        renderNav(m, now, e);
+        renderMenuLyrics(m, enter(now, menuStart, 240, 460), now);
+        renderSocials(m, enter(now, menuStart, 310, 460));
+        F_COPY.drawCenteredString(m, COPY_TXT, width / 2.0, Math.round(height * 0.968),
+                mulAlpha(0x997E84A6, enter(now, menuStart, 360, 460)));
 
         m.pop();
     }
@@ -400,21 +540,29 @@ public final class TabVisualsTitleScreen extends Screen {
         return true;
     }
 
-    /** "Title — Artist" label used when the track has no synced lyrics. */
-    private static String trackLabel() {
+    /** "Title — Artist" label, cached — only rebuilt when the track changes. */
+    private String trackLabel() {
         String title = MusicManager.trackTitle();
         String artist = MusicManager.artist();
-        if (artist.isEmpty()) {
-            return title;
+        if (title == null) {
+            title = "";
         }
-        return title.isEmpty() ? artist : title + " — " + artist;
+        if (artist == null) {
+            artist = "";
+        }
+        if (!title.equals(tlTitle) || !artist.equals(tlArtist)) {
+            tlTitle = title;
+            tlArtist = artist;
+            tlCache = artist.isEmpty() ? title : title.isEmpty() ? artist : title + " — " + artist;
+        }
+        return tlCache;
     }
 
     /** Top-left logo tile + letterspaced wordmark — main menu only (photo 2). */
     private void renderMark(MatrixStack m, float alpha) {
         // compact badge so the mark fits neatly in the top-left chrome
         float tile = Math.max(15f, width * 0.0165f);
-        float lx = width * 0.0325f, ly = height * 0.038f;
+        float lx = hp(width * 0.0325f), ly = hp(height * 0.038f);
         Identifier logo = LogoManager.texture();
         if (logo != null && ctx != null) {
             // subtle breathing keeps the mark feeling alive; text optically centred on it
@@ -422,18 +570,16 @@ public final class TabVisualsTitleScreen extends Screen {
             float lh = tile * breathe;
             float lw = lh * markAspect();
             drawLogo(m, logo, lx, ly + (tile - lh) / 2f, lh, alpha);
-            String mark0 = spaced("TABVISUALS");
-            F_SLOGAN.drawString(m, mark0, lx + lw + width * 0.010f,
-                    centerTextY(F_SLOGAN, mark0, ly + tile / 2f), mulAlpha(TEXT, alpha));
+            F_SLOGAN.drawString(m, MARK_TXT, lx + lw + width * 0.010f,
+                    centerTextY(F_SLOGAN, MARK_TXT, ly + tile / 2f), mulAlpha(TEXT, alpha));
             return;
         }
         UiRender.rect(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x1AFFFFFF, alpha));
         UiRender.outline(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x30FFFFFF, alpha), 1f);
         F_MARK.drawCenteredString(m, "T", lx + tile / 2.0,
                 ly + (tile - F_MARK.getStringHeight("T")) / 2f + 1, mulAlpha(TEXT, alpha));
-        String mark = spaced("TABVISUALS");
-        F_SLOGAN.drawString(m, mark, lx + tile + width * 0.010f,
-                ly + (tile - F_SLOGAN.getStringHeight(mark)) / 2f + 1, mulAlpha(TEXT, alpha));
+        F_SLOGAN.drawString(m, MARK_TXT, lx + tile + width * 0.010f,
+                ly + (tile - F_SLOGAN.getStringHeight(MARK_TXT)) / 2f + 1, mulAlpha(TEXT, alpha));
     }
 
     /** Top-right compact profile row: version, status, nickname, round avatar (photo 1/2). */
@@ -459,9 +605,12 @@ public final class TabVisualsTitleScreen extends Screen {
         } else {
             UiRender.rect(m, ax, top, av, av, av / 2f, mulAlpha(ACCENT, alpha));
             String nick0 = AccountManager.current();
-            String init0 = nick0.isEmpty() ? "?" : String.valueOf(Character.toUpperCase(nick0.charAt(0)));
-            F_BTN.drawCenteredString(m, init0, ax + av / 2.0,
-                    top + (av - F_BTN.getStringHeight(init0)) / 2f + 1, mulAlpha(INK, alpha));
+            if (!nick0.equals(initNick)) {
+                initNick = nick0;
+                initChar = nick0.isEmpty() ? "?" : String.valueOf(Character.toUpperCase(nick0.charAt(0)));
+            }
+            F_BTN.drawCenteredString(m, initChar, ax + av / 2.0,
+                    top + (av - F_BTN.getStringHeight(initChar)) / 2f + 1, mulAlpha(INK, alpha));
         }
 
         // nickname: the Discord nick when connected, the account otherwise
@@ -490,16 +639,9 @@ public final class TabVisualsTitleScreen extends Screen {
         }
     }
 
-    /** Bottom-right inline socials row (photo 1/2): badge, platform, handle — clickable. */
-    private static final Identifier TG_ICON = Identifier.of("tabvisuals", "textures/menu/icon_telegram.png");
-    private static final Identifier GH_ICON = Identifier.of("tabvisuals", "textures/menu/icon_github.png");
-
+    /** Socials row (photo 1/2): glowing glass badge, platform, handle — clickable. */
     private void renderSocials(MatrixStack m, float alpha) {
-        String[] labels = {"Telegram", "GitHub"};
-        String[] handles = {"@tabvisuals", "Loadercode"};
-        Identifier[] icons = {TG_ICON, GH_ICON};
-
-        float y = height * 0.93f;
+        float y = hp(height * 0.93f);
         float rowH = 13;
         float gap = width * 0.016f;   // between the two entries
         float badge = 12;
@@ -508,8 +650,8 @@ public final class TabVisualsTitleScreen extends Screen {
         // dropped so the row never runs into the nav/lyric block
         float full = 0, shortW = 0;
         for (int i = 0; i < 2; i++) {
-            full += badge + 5 + F_TINY.getStringWidth(labels[i]) + 5 + F_TINY.getStringWidth(handles[i]);
-            shortW += badge + 5 + F_TINY.getStringWidth(labels[i]);
+            full += badge + 5 + F_TINY.getStringWidth(SOC_LABELS[i]) + 5 + F_TINY.getStringWidth(SOC_HANDLES[i]);
+            shortW += badge + 5 + F_TINY.getStringWidth(SOC_LABELS[i]);
             if (i == 0) {
                 full += gap;
                 shortW += gap;
@@ -520,150 +662,142 @@ public final class TabVisualsTitleScreen extends Screen {
         float x = width - width * 0.026f - total;
 
         float kH = 1f - (float) Math.exp(-frameDt * 14.0);
-        R[] hits = new R[2];
         for (int i = 0; i < 2; i++) {
             float itemW = showHandles
-                    ? badge + 5 + F_TINY.getStringWidth(labels[i]) + 5 + F_TINY.getStringWidth(handles[i])
-                    : badge + 5 + F_TINY.getStringWidth(labels[i]);
-            boolean hover = UiRender.inside(mouseX, mouseY, x, y - 1, itemW, rowH);
+                    ? badge + 5 + F_TINY.getStringWidth(SOC_LABELS[i]) + 5 + F_TINY.getStringWidth(SOC_HANDLES[i])
+                    : badge + 5 + F_TINY.getStringWidth(SOC_LABELS[i]);
+            socBox[i].set(x, y - 1, itemW, rowH);
+            boolean hover = UiRender.inside(mouseX, mouseY, socBox[i].x, socBox[i].y, socBox[i].w, socBox[i].h);
             socHover[i] += ((hover ? 1f : 0f) - socHover[i]) * kH;
             float hv = socHover[i];
 
-            UiRender.rect(m, x, y, badge, badge, 3.5f, mulAlpha(UiRender.mix(0x18FFFFFF, 0x2AFFFFFF, hv), alpha));
+            // soft violet halo behind the badge on hover — the button glow
+            if (hv > 0.02f && alpha > 0.01f) {
+                UiRender.glow(m, x + badge / 2f, y + badge / 2f, badge * 1.7f, ACCENT, 0.16f * hv, alpha);
+            }
+            UiRender.rect(m, x, y, badge, badge, badge / 2f,
+                    mulAlpha(UiRender.mix(GLASS_FILL, 0x33FFFFFF, hv), alpha));
             // white glyph texture tinted to match the text colors;
             // blend back on — UiRender.rect left the pipeline with blend disabled
             float iconSz = badge - 4;
             RenderSystem.enableBlend();
             RenderSystem.defaultBlendFunc();
-            Render2D.drawTexture(m, icons[i], Math.round(x + 2), Math.round(y + 2), iconSz, iconSz,
+            Render2D.drawTexture(m, SOC_ICONS[i], Math.round(x + 2), Math.round(y + 2), iconSz, iconSz,
                     0, 0, 128, 128, 128, 128, mulAlpha(UiRender.mix(TEXT_2, TEXT, hv), alpha));
             RenderSystem.disableBlend();
 
             float tx = x + badge + 5;
-            F_TINY.drawString(m, labels[i], tx, y + (rowH - F_TINY.getStringHeight(labels[i])) / 2f + 1,
+            F_TINY.drawString(m, SOC_LABELS[i], tx, y + (rowH - F_TINY.getStringHeight(SOC_LABELS[i])) / 2f + 1,
                     mulAlpha(UiRender.mix(TEXT_2, TEXT, hv), alpha));
             if (showHandles) {
-                tx += F_TINY.getStringWidth(labels[i]) + 5;
-                F_TINY.drawString(m, handles[i], tx, y + (rowH - F_TINY.getStringHeight(handles[i])) / 2f + 1,
+                tx += F_TINY.getStringWidth(SOC_LABELS[i]) + 5;
+                F_TINY.drawString(m, SOC_HANDLES[i], tx, y + (rowH - F_TINY.getStringHeight(SOC_HANDLES[i])) / 2f + 1,
                         mulAlpha(UiRender.mix(TEXT_3, TEXT_2, hv), alpha));
             }
-
-            hits[i] = new R(x, y - 1, itemW, rowH);
             x += itemW + gap;
         }
-        tgHit = hits[0];
-        ghHit = hits[1];
     }
 
-    /** Left navigation column: even glass-pill rows that grow on hover and sink on press. */
-    private void renderNav(MatrixStack m, float mx, float my, float alpha) {
-        String[] labels = {"Одиночная игра", "Мультиплейер", "Настройки", "Аккаунты", "Выход"};
+    /**
+     * Left navigation column: unified Icons glyphs before each label and ONE
+     * glass pill that slides/morphs to the hovered item; the icon lifts to
+     * violet and the label to white on hover, press sinks the whole row. The
+     * hit rect is exactly the drawn item rect (slide included).
+     */
+    private void renderNav(MatrixStack m, long now, float alpha) {
         float iconX = width * 0.0325f;
         float iconSz = Math.max(11f, width * 0.014f);
         float textX = iconX + iconSz + width * 0.007f;
         float step = height * 0.051f;
         float firstCy = height * 0.392f;
         float extraGap = height * 0.014f;   // wider break before "Выход", like the photo
+        float pad = step * 0.22f;
+        float kH = 1f - (float) Math.exp(-frameDt * 14.0);
+        float kP = 1f - (float) Math.exp(-frameDt * 24.0);
 
-        navHits.clear();
+        // pass 1: geometry + hit rects (the drawn rect, incl. entry slide)
         float cy = firstCy;
-        for (int i = 0; i < labels.length; i++) {
+        int hovered = -1;
+        for (int i = 0; i < NAV_LABELS.length; i++) {
             if (i == 4) {
                 cy += extraGap;
             }
-            String label = labels[i];
-            float itemA = enter(menuStart, 110 + i * 55, 420) * alpha;
-            float slide = (1f - itemA) * 5f;
-            float textW = F_NAV.getStringWidth(label);
-            float boxW = textX + textW - iconX;
-            // hit = the full hover-pill extent (incl. padding + entry slide),
-            // so the clickable area is exactly what the glass pill can cover
-            float pad = step * 0.22f;
-            R box = new R(iconX - pad, cy - step / 2f + slide, boxW + pad * 2f, step);
-            boolean hover = UiRender.inside(mx, my, box.x(), box.y(), box.w(), box.h());
-
-            // eased hover (k≈14) / press (k≈24) — FPS-independent, same recipe
-            // as UiRender.button everywhere else in the client
-            float kH = 1f - (float) Math.exp(-frameDt * 14.0);
-            float kP = 1f - (float) Math.exp(-frameDt * 24.0);
-            float hv = navHover[i] + ((hover ? 1f : 0f) - navHover[i]) * kH;
-            if (hv < 0.004f) hv = 0f;
-            navHover[i] = hv;
-            float pv = navPress[i] + ((hover && i == navPressed ? 1f : 0f) - navPress[i]) * kP;
-            if (pv < 0.004f) pv = 0f;
-            navPress[i] = pv;
-
-            // press sinks the whole row toward 0.96 — the shared button feel
-            float ps = UiRender.pressScale(pv);
-            m.push();
-            float ccx = iconX + boxW / 2f, ccy = cy + slide;
-            m.translate(ccx, ccy, 0f);
-            m.scale(ps, ps, 1f);
-            m.translate(-ccx, -ccy, 0f);
-
-            if (hv > 0.01f) {
-                // glass pill grows in from the left over ~150ms (pad matches
-                // the hit box computed above)
-                float grow = 0.82f + 0.18f * hv;
-                float pillX = iconX - pad;
-                float pillW = (boxW + pad * 2f) * grow;
-                float pillY = cy - step / 2f + pad * 0.6f;
-                float pillH = step - pad * 1.2f;
-                UiRender.rect(m, pillX, pillY + slide, pillW, pillH, 7f,
-                        mulAlpha(UiRender.mix(GLASS_FILL, 0x22FFFFFF, hv), itemA * hv));
-                UiRender.outline(m, pillX, pillY + slide, pillW, pillH, 7f,
-                        mulAlpha(GLASS_LINE, itemA * hv), 1f);
-                UiRender.rect(m, pillX + 1, pillY + slide + 1, pillW - 2, 1f, 0.5f,
-                        mulAlpha(GLASS_SHEEN, itemA * hv));
-                // violet marker inside the pill's left padding, never past its edge
-                UiRender.rect(m, pillX + 2f, cy - 1.5f + slide, 2f, 3f, 1f,
-                        mulAlpha(ACCENT_DEEP, itemA * hv));
+            float itemA = enter(now, menuStart, 110 + i * 55, 420);
+            float slideX = (1f - itemA) * 6f;
+            float slideY = (1f - itemA) * 4f;
+            float boxW = textX + F_NAV.getStringWidth(NAV_LABELS[i]) - iconX;
+            navBox[i].set(iconX - pad + slideX, cy - step / 2f + slideY, boxW + pad * 2f, step);
+            if (UiRender.inside(mouseX, mouseY, navBox[i].x, navBox[i].y, navBox[i].w, navBox[i].h)) {
+                hovered = i;
             }
-
-            int col = mulAlpha(UiRender.mix(NAV_IDLE, NAV_HOVER, hv), itemA);
-            drawNavIcon(m, i, iconX + iconSz / 2f, cy + slide, iconSz, col);
-            F_NAV.drawString(m, label, textX, centerTextY(F_NAV, label, cy) + slide, col);
-            m.pop();
-            navHits.add(new NavHit(i, box));
             cy += step;
         }
-    }
 
-    private void drawNavIcon(MatrixStack m, int idx, float cx, float cy, float sz, int col) {
-        float r = sz / 2f;
-        float t = Math.max(1.1f, sz * 0.10f);   // line thickness
-        switch (idx) {
-            case 0 -> { // globe: ring reads first, meridians stay inside it
-                UiRender.outline(m, cx - r, cy - r, sz, sz, r, col, Math.max(1.5f, t * 1.35f));
-                float inset = Math.max(1.2f, t);
-                UiRender.rect(m, cx - t / 2f, cy - r + inset, t, sz - inset * 2f, t / 2f, col);
-                UiRender.rect(m, cx - r + inset, cy - t / 2f, sz - inset * 2f, t, t / 2f, col);
+        // pass 2: the single glass pill eases to the hovered item
+        if (!navPillInit && hovered >= 0) {
+            navPillY = navBox[hovered].y + step / 2f;
+            navPillW = navBox[hovered].w;
+            navPillInit = true;
+        }
+        float kS = 1f - (float) Math.exp(-frameDt * 18.0);
+        float targetY = hovered >= 0 ? navBox[hovered].y + step / 2f : navPillY;
+        float targetW = hovered >= 0 ? navBox[hovered].w : navPillW;
+        navPillY += (targetY - navPillY) * kS;
+        navPillW += (targetW - navPillW) * kS;
+        navPillA += ((hovered >= 0 ? 1f : 0f) - navPillA) * kH;
+        if (navPillA < 0.004f) {
+            navPillA = 0f;
+        }
+        if (navPillA > 0.01f && alpha > 0.01f) {
+            float pillH = step - pad * 1.2f;
+            float pillW = navPillW * (0.88f + 0.12f * navPillA);   // grows in as it fades in
+            float pillX = iconX - pad;
+            float pillY = navPillY - pillH / 2f;
+            float pa = alpha * navPillA;
+            UiRender.rect(m, pillX, pillY, pillW, pillH, pillH / 2f, mulAlpha(0x22FFFFFF, pa));
+            UiRender.outline(m, pillX, pillY, pillW, pillH, pillH / 2f, mulAlpha(GLASS_LINE, pa), 1f);
+            UiRender.rect(m, pillX + 2, pillY + 1, pillW - 4, 1f, 0.5f, mulAlpha(GLASS_SHEEN, pa));
+            // violet marker inside the pill's left padding
+            UiRender.rect(m, pillX + 4f, navPillY - 2f, 2f, 4f, 1f, mulAlpha(ACCENT_DEEP, pa));
+        }
+
+        // pass 3: items — icon + label colour lift, press sink
+        cy = firstCy;
+        for (int i = 0; i < NAV_LABELS.length; i++) {
+            if (i == 4) {
+                cy += extraGap;
             }
-            case 1 -> { // connection bars — bounds run cy-0.75r..cy+0.9r, re-centre optically
-                float cyy = cy - r * 0.075f;
-                float bw = Math.max(1.6f, sz * 0.18f);
-                UiRender.rect(m, cx - r, cyy + r * 0.1f, bw, r * 0.8f, bw / 2f, col);
-                UiRender.rect(m, cx - bw / 2f, cyy - r * 0.35f, bw, r * 1.25f, bw / 2f, col);
-                UiRender.rect(m, cx + r - bw, cyy - r * 0.75f, bw, r * 1.65f, bw / 2f, col);
+            R box = navBox[i];
+            float itemA = enter(now, menuStart, 110 + i * 55, 420) * alpha;
+            boolean hover = UiRender.inside(mouseX, mouseY, box.x, box.y, box.w, box.h);
+            float hv = navHover[i] + ((hover ? 1f : 0f) - navHover[i]) * kH;
+            if (hv < 0.004f) {
+                hv = 0f;
             }
-            case 2 -> { // sliders
-                UiRender.rect(m, cx - r, cy - r * 0.7f, sz, t, t / 2f, col);
-                UiRender.rect(m, cx - r, cy - t / 2f, sz, t, t / 2f, col);
-                UiRender.rect(m, cx - r, cy + r * 0.7f - t, sz, t, t / 2f, col);
-                float kd = Math.max(2.6f, sz * 0.26f);
-                UiRender.rect(m, cx - r * 0.55f, cy - r * 0.7f - (kd - t) / 2f, kd, kd, kd / 2f, col);
-                UiRender.rect(m, cx + r * 0.15f, cy - t / 2f - (kd - t) / 2f, kd, kd, kd / 2f, col);
-                UiRender.rect(m, cx - r * 0.2f, cy + r * 0.7f - t - (kd - t) / 2f, kd, kd, kd / 2f, col);
+            navHover[i] = hv;
+            float pv = navPress[i] + ((hover && i == navPressed ? 1f : 0f) - navPress[i]) * kP;
+            if (pv < 0.004f) {
+                pv = 0f;
             }
-            case 3 -> { // person — head+body span cy-r..cy+1.1r, re-centre optically
-                float cyy = cy - r * 0.05f;
-                float hd = sz * 0.42f;
-                UiRender.rect(m, cx - hd / 2f, cyy - r, hd, hd, hd / 2f, col);
-                UiRender.rect(m, cx - r * 0.85f, cyy + hd * 0.15f, r * 1.7f, r * 0.95f, r * 0.48f, col);
-            }
-            default -> { // exit arrow
-                F_NAV.drawCenteredString(m, "→", cx, cy - F_NAV.getStringHeight("→") / 2f + 1, col);
-            }
+            navPress[i] = pv;
+
+            float itemCy = box.y + box.h / 2f;
+            float ps = UiRender.pressScale(pv);
+            m.push();
+            float ccx = box.x + box.w / 2f;
+            m.translate(ccx, itemCy, 0f);
+            m.scale(ps, ps, 1f);
+            m.translate(-ccx, -itemCy, 0f);
+
+            // icon lifts toward violet, label toward white — two-tone, not flat
+            int iconCol = mulAlpha(UiRender.mix(NAV_IDLE, ACCENT_HOVER, hv), itemA);
+            int textCol = mulAlpha(UiRender.mix(NAV_IDLE, NAV_HOVER, hv), itemA);
+            Icons.Glyph glyph = NAV_GLYPHS[i];
+            float gx = box.x + pad;
+            Icons.draw(m, glyph, gx, UiRender.iconY(glyph, iconSz, itemCy), iconSz, iconCol);
+            F_NAV.drawString(m, NAV_LABELS[i], gx + iconSz + width * 0.007f,
+                    centerTextY(F_NAV, NAV_LABELS[i], itemCy), textCol);
+            m.pop();
         }
     }
 
@@ -715,7 +849,10 @@ public final class TabVisualsTitleScreen extends Screen {
 
     // -------------------------------------------------------------- modal
 
-    private void renderModal(MatrixStack m, float mx, float my, long now) {
+    private void renderModal(MatrixStack m, long now) {
+        if (ctx == null) {
+            return;
+        }
         // open/close easing: the panel settles in and out instead of popping
         float kV = 1f - (float) Math.exp(-frameDt * 16.0);
         modalVis += ((modalClosing ? 0f : 1f) - modalVis) * kV;
@@ -725,18 +862,20 @@ public final class TabVisualsTitleScreen extends Screen {
             modalVis = 0f;
             return;
         }
-        float ap = modalVis;
+        // visuals settle on quint-out while input stays gated on the raw value
+        float ap = (float) Easing.apply(Easing.QUINT_OUT, modalVis);
         // dimming scrim over the dark menu
         UiRender.rect(m, 0, 0, width, height, 0, mulAlpha(0x66000000, ap));
 
         // fit any GUI scale: 580x400 is a max, never larger than the screen
         panelW = Math.min(580, width - 20);
         panelH = Math.min(400, height - 20);
-        panelX = (width - panelW) / 2f;
-        panelY = (height - panelH) / 2f;
+        // whole-pixel origin — a .5 offset blurs the 1px hairline
+        panelX = Math.round((width - panelW) / 2f);
+        panelY = Math.round((height - panelH) / 2f);
 
         // scale/fade entry around the panel centre
-        float s = 0.95f + 0.05f * ap;
+        float s = 0.94f + 0.06f * ap;
         m.push();
         float pcx = width / 2f, pcy = height / 2f;
         m.translate(pcx, pcy, 0f);
@@ -748,9 +887,9 @@ public final class TabVisualsTitleScreen extends Screen {
         boolean wide = panelW >= 450;
 
         // dark indigo glass panel with a top hairline and a soft drop shadow
-        UiRender.shadow(m, panelX, panelY, panelW, panelH, 14, 0.55f * ap);
-        UiRender.rect(m, panelX, panelY, panelW, panelH, 14, 0xF212142E);
-        UiRender.outline(m, panelX, panelY, panelW, panelH, 14, 0x33FFFFFF, 1f);
+        UiRender.shadow(m, panelX, panelY, panelW, panelH, 12, 0.55f * ap);
+        UiRender.rect(m, panelX, panelY, panelW, panelH, 12, 0xF212142E);
+        UiRender.outline(m, panelX, panelY, panelW, panelH, 12, 0x33FFFFFF, 1f);
         UiRender.rect(m, panelX + 1, panelY + 1, panelW - 2, 1, 0.5f, 0x14FFFFFF);
 
         // header: title, subtitle, count pill, close button
@@ -767,8 +906,9 @@ public final class TabVisualsTitleScreen extends Screen {
         F_TINY.drawString(m, countLabel, countX + 7, panelY + 14 + (16 - F_TINY.getStringHeight(countLabel)) / 2f + 1,
                 TEXT_2);
 
-        closeHit = new R(panelX + panelW - 34, panelY + 10, 24, 24);
-        drawButton(m, "close", closeHit, "×", F_MODAL_T, 0x1AFFFFFF, TEXT);
+        // close: icon-only button carrying the unified CLOSE glyph
+        closeHit.set(panelX + panelW - 34, panelY + 10, 24, 24);
+        drawIconButton(m, closeBtn, closeHit, Icons.CLOSE, 11f, 0x1AFFFFFF, TEXT_2, ap);
 
         // ----- left column: rotatable full-body skin preview -----
         boolean preview = tall && wide;
@@ -778,12 +918,12 @@ public final class TabVisualsTitleScreen extends Screen {
             float prevW = Math.min(146f, panelW * 0.30f);
             float prevH = panelY + panelH - 16 - headerBottom;
             float prevX = panelX + 18, prevY = headerBottom;
-            previewHit = new R(prevX, prevY, prevW, prevH);
+            previewHit = previewHitOrSet(prevX, prevY, prevW, prevH);
             rightX = prevX + prevW + 16;
             rightW = panelX + panelW - 18 - rightX;
 
             // violet-white gradient card behind the model
-            boolean hovPrev = UiRender.inside(mx, my, prevX, prevY, prevW, prevH);
+            boolean hovPrev = UiRender.inside(mouseX, mouseY, prevX, prevY, prevW, prevH);
             float kH = 1f - (float) Math.exp(-frameDt * 14.0);
             previewHoverT += ((hovPrev ? 1f : 0f) - previewHoverT) * kH;
             UiRender.shadow(m, prevX, prevY, prevW, prevH, 12, 0.4f * ap);
@@ -795,9 +935,10 @@ public final class TabVisualsTitleScreen extends Screen {
                     UiRender.withAlpha(0xFFFFFFFF, 40));                         // tr: white
             UiRender.outline(m, prevX, prevY, prevW, prevH, 12,
                     UiRender.mix(0x33FFFFFF, 0x66FFFFFF, previewHoverT), 1f);
-            // soft violet pool under the model
+            // soft violet pool under the model — the renderer draws its own
+            // pedestal glow, so the screen pool is kept faint to avoid over-glow
             UiRender.glow(m, prevX + prevW / 2f, prevY + prevH * 0.42f, prevW * 0.62f,
-                    ACCENT, 0.16f, ap);
+                    ACCENT, 0.06f, ap);
 
             // the model + the nick it belongs to
             String want = previewNick();
@@ -815,11 +956,10 @@ public final class TabVisualsTitleScreen extends Screen {
 
         // ----- right column: input row + account list -----
         float rowH30 = 30;
-        float createW = 92;
         float inputY = headerBottom;
         // tiny windows: the input keeps a clickable minimum, never a negative box
-        inputHit = new R(rightX, inputY, Math.max(24f, rightW - 6 - createW), rowH30);
-        createHit = new R(inputHit.x() + inputHit.w() + 6, inputY, createW, rowH30);
+        inputHit.set(rightX, inputY, Math.max(24f, rightW - 6 - rowH30), rowH30);
+        createHit.set(inputHit.x + inputHit.w + 6, inputY, rowH30, rowH30);
 
         // invalid submit shakes the field and fades a red ring
         if (inputErrorT > 0f) {
@@ -827,14 +967,19 @@ public final class TabVisualsTitleScreen extends Screen {
         }
         float shake = inputErrorT > 0f
                 ? (float) Math.sin(now * 0.045) * 5f * inputErrorT : 0f;
-        UiRender.rect(m, inputHit.x() + shake, inputHit.y(), inputHit.w(), inputHit.h(), 8, 0x18000000);
+        float pr = inputHit.h / 2f;   // pill field
+        UiRender.rect(m, inputHit.x + shake, inputHit.y, inputHit.w, inputHit.h, pr, 0x18000000);
         float focusK = 1f - (float) Math.exp(-frameDt * 16.0);
         focusT += ((focus == 1 ? 1f : 0f) - focusT) * focusK;
         int ring = UiRender.mix(0x2AFFFFFF, ACCENT_DEEP, Math.max(focusT, inputErrorT));
         if (inputErrorT > 0.01f) {
             ring = UiRender.mix(ring, 0xFFE05B5B, inputErrorT);
         }
-        UiRender.outline(m, inputHit.x() + shake, inputHit.y(), inputHit.w(), inputHit.h(), 8, ring, 1f);
+        UiRender.outline(m, inputHit.x + shake, inputHit.y, inputHit.w, inputHit.h, pr, ring, 1f);
+        // ADD glyph at the field's left edge — accent-lifts while focused
+        Icons.draw(m, Icons.ADD, inputHit.x + 10 + shake,
+                UiRender.iconY(Icons.ADD, 11f, inputHit.y + inputHit.h / 2f), 11f,
+                mulAlpha(UiRender.mix(TEXT_3, ACCENT_HOVER, Math.max(focusT, inputErrorT)), ap));
         String shown;
         int shownCol;
         if (input.isEmpty() && focus != 1) {
@@ -844,10 +989,11 @@ public final class TabVisualsTitleScreen extends Screen {
             shown = input + (focus == 1 && blink ? "_" : "");
             shownCol = TEXT;
         }
-        F_INPUT.drawString(m, shown, inputHit.x() + 12 + shake,
-                inputHit.y() + (inputHit.h() - F_INPUT.getStringHeight(shown)) / 2f + 1, shownCol);
+        F_INPUT.drawString(m, shown, inputHit.x + 30 + shake,
+                inputHit.y + (inputHit.h - F_INPUT.getStringHeight(shown)) / 2f + 1, shownCol);
 
-        drawAccentButton(m, "create", createHit, "Создать", F_BTN, ACCENT, INK);
+        // confirm: accent icon-only button carrying the LOGIN glyph
+        drawAccentIconButton(m, createBtn, createHit, Icons.LOGIN, 13f, ACCENT, INK);
 
         // account list
         List<String> names = AccountManager.names();
@@ -863,7 +1009,7 @@ public final class TabVisualsTitleScreen extends Screen {
         if (Math.abs(scrollTarget - listScroll) < 0.1f) {
             listScroll = scrollTarget;
         }
-        rowHits.clear();
+        java.util.Arrays.fill(rowRec, false);
 
         if (names.isEmpty()) {
             F_INPUT.drawCenteredString(m, "Пока пусто — создайте первый профиль",
@@ -887,10 +1033,15 @@ public final class TabVisualsTitleScreen extends Screen {
             }
             String name = names.get(i);
             // staggered row entry: fade + slide from the right
-            float rowA = enter(modalStart, 60 + i * 35, 380) * ap;
+            float rowA = enter(now, modalStart, 60 + i * 35, 380) * ap;
             float rowSlide = (1f - rowA) * 6f;
-            R row = new R(rightX + rowSlide, ry, listW, rowH);
-            boolean rowHover = UiRender.inside(mx, my, row.x(), row.y(), row.w(), row.h());
+
+            // hover is tested against last frame's lifted rect, so the hit
+            // rect IS the drawn rect even mid-lift
+            float rhPrev = i < rowHoverT.length ? rowHoverT[i] : 0f;
+            float lift = rhPrev * 1.5f;
+            R row = rowBox[i].set(rightX + rowSlide, ry - lift, listW, rowH);
+            boolean rowHover = UiRender.inside(mouseX, mouseY, row.x, row.y, row.w, row.h);
             boolean isActiveRow = name.equals(AccountManager.current());
 
             // dwell hover: after 250ms the preview follows the hovered row
@@ -906,24 +1057,28 @@ public final class TabVisualsTitleScreen extends Screen {
 
             // eased row hover — the bg lifts instead of snapping
             float kH = 1f - (float) Math.exp(-frameDt * 14.0);
-            float rh = i < rowHoverT.length ? rowHoverT[i] : 0f;
-            rh += ((rowHover ? 1f : 0f) - rh) * kH;
-            if (i < rowHoverT.length) rowHoverT[i] = rh;
-
-            UiRender.rect(m, row.x(), row.y(), row.w(), row.h(), 8,
-                    mulAlpha(UiRender.mix(0x0AFFFFFF, 0x18FFFFFF, rh), rowA));
-            if (isActiveRow) {
-                UiRender.outline(m, row.x(), row.y(), row.w(), row.h(), 8, mulAlpha(0x448B5CF6, rowA), 1f);
-                UiRender.rect(m, row.x(), row.y() + 6, 2f, rowH - 12, 1f, mulAlpha(ACCENT_DEEP, rowA));
+            float rh = rhPrev + ((rowHover ? 1f : 0f) - rhPrev) * kH;
+            if (i < rowHoverT.length) {
+                rowHoverT[i] = rh;
             }
 
-            // three even buttons on the right, consistent radius and padding
-            float delW = 58, editW = 46, loginW = 52, btnGap = 6;
-            R del = new R(row.x() + row.w() - 10 - delW, ry + 3, delW, 24);
-            R edit = new R(del.x() - btnGap - editW, ry + 3, editW, 24);
-            R login = new R(edit.x() - btnGap - loginW, ry + 3, loginW, 24);
+            UiRender.rect(m, row.x, row.y, row.w, row.h, 10,
+                    mulAlpha(UiRender.mix(0x0AFFFFFF, 0x18FFFFFF, rh), rowA));
+            if (isActiveRow) {
+                // accent ring + bar = the current-account marker
+                UiRender.outline(m, row.x, row.y, row.w, row.h, 10, mulAlpha(0x558B5CF6, rowA), 1f);
+                UiRender.rect(m, row.x, row.y + 6, 2f, rowH - 12, 1f, mulAlpha(ACCENT_DEEP, rowA));
+            }
+
+            // three even buttons on the right; delete collapses to an icon
+            // button that materialises with the row hover
+            float delS = 24, editW = 46, loginW = 52, btnGap = 6;
+            R del = rowDel[i].set(row.x + row.w - 10 - delS, row.y + 3, delS, 24);
+            R edit = rowEdit[i].set(del.x - btnGap - editW, row.y + 3, editW, 24);
+            R login = rowLogin[i].set(edit.x - btnGap - loginW, row.y + 3, loginW, 24);
 
             boolean editing = focus == 2 && editIndex == i;
+            editFocusT += ((editing ? 1f : 0f) - editFocusT) * focusK;
             if (editing) {
                 // a failed rename shakes THIS field (the input field is a
                 // different one — its shake would point at the wrong box)
@@ -932,43 +1087,57 @@ public final class TabVisualsTitleScreen extends Screen {
                 }
                 float eshake = editErrorT > 0f
                         ? (float) Math.sin(now * 0.045) * 5f * editErrorT : 0f;
-                float fw = Math.max(70f, login.x() - 16 - row.x());
-                UiRender.rect(m, row.x() + 10 + eshake, ry + 3, fw, 24, 6, 0x18FFFFFF);
-                int ering = UiRender.mix(ACCENT_DEEP, 0xFFE05B5B, editErrorT);
-                UiRender.outline(m, row.x() + 10 + eshake, ry + 3, fw, 24, 6, ering, 1f);
+                float fw = Math.max(70f, login.x - 16 - row.x);
+                UiRender.rect(m, row.x + 10 + eshake, row.y + 3, fw, 24, 12, 0x18FFFFFF);
+                int ering = UiRender.mix(0x2AFFFFFF, ACCENT_DEEP, Math.max(editFocusT, editErrorT));
+                if (editErrorT > 0.01f) {
+                    ering = UiRender.mix(ering, 0xFFE05B5B, editErrorT);
+                }
+                UiRender.outline(m, row.x + 10 + eshake, row.y + 3, fw, 24, 12, ering, 1f);
                 String shownEdit = editText + (blink ? "_" : "");
-                F_ROW.drawString(m, shownEdit, row.x() + 20 + eshake,
-                        ry + 3 + (24 - F_ROW.getStringHeight(shownEdit)) / 2f + 1, TEXT);
+                F_ROW.drawString(m, shownEdit, row.x + 22 + eshake,
+                        row.y + 3 + (24 - F_ROW.getStringHeight(shownEdit)) / 2f + 1, TEXT);
             } else {
+                // row icon: solid USER for the current account, outline otherwise
+                Icons.Glyph rowGlyph = isActiveRow ? Icons.USER : Icons.USER_OUTLINE;
+                UiRender.iconCentered(m, rowGlyph, row.x + 22, row.y + rowH / 2f, 12f,
+                        mulAlpha(isActiveRow ? ACCENT_HOVER : UiRender.mix(TEXT_2, TEXT, rh * 0.5f), rowA));
                 // name + optional "Активен" tag, never overlapping the buttons
                 String tag = isActiveRow ? "Активен" : null;
                 float tagW = tag == null ? 0 : F_TINY.getStringWidth(tag) + 12;
-                float nameMax = Math.max(4f, login.x() - 10 - (row.x() + 14) - tagW);
+                float nameMax = Math.max(4f, login.x - 10 - (row.x + 38) - tagW);
                 float nameH = F_ROW.getStringHeight(name);
                 String shownName = F_ROW.getStringWidth(name) > nameMax
                         ? F_ROW.trimToWidth(name, (int) nameMax) + "…" : name;
-                F_ROW.drawString(m, shownName, row.x() + 14,
-                        ry + (rowH - nameH) / 2f + 1, mulAlpha(TEXT, rowA));
+                F_ROW.drawString(m, shownName, row.x + 38,
+                        row.y + (rowH - nameH) / 2f + 1, mulAlpha(TEXT, rowA));
                 if (tag != null) {
-                    float tagX = login.x() - 10 - tagW + 4;
-                    UiRender.rect(m, tagX, ry + (rowH - 14) / 2f, tagW, 14, 7, mulAlpha(0x1A8B5CF6, rowA));
+                    float tagX = login.x - 10 - tagW + 4;
+                    UiRender.rect(m, tagX, row.y + (rowH - 14) / 2f, tagW, 14, 7, mulAlpha(0x1A8B5CF6, rowA));
                     F_TINY.drawString(m, tag, tagX + 6,
-                            ry + (rowH - F_TINY.getStringHeight(tag)) / 2f + 1, mulAlpha(ACCENT_DEEP, rowA));
+                            row.y + (rowH - F_TINY.getStringHeight(tag)) / 2f + 1, mulAlpha(ACCENT_DEEP, rowA));
                 }
             }
 
-            drawAccentButton(m, "login#" + i, login, "Войти", F_BTN, ACCENT, INK);
+            drawAccentButton(m, rowLoginBtn[i], login, "Войти", F_BTN, ACCENT, INK);
             if (editing) {
-                drawAccentButton(m, "edit#" + i, edit, "OK", F_BTN, ACCENT, INK);
+                drawAccentButton(m, rowEditBtn[i], edit, "OK", F_BTN, ACCENT, INK);
             } else {
-                drawButton(m, "edit#" + i, edit, "Изм.", F_BTN, 0x16FFFFFF, TEXT);
+                drawButton(m, rowEditBtn[i], edit, "Изм.", F_BTN, 0x16FFFFFF, TEXT);
             }
-            drawButton(m, "del#" + i, del, "Удалить", F_BTN, 0x6B3A45, 0xFFFF7B7B);
+            // TRASH icon button materialises with the row hover, red halo on top
+            if (rh > 0.02f) {
+                drawIconButton(m, rowDelBtn[i], del, Icons.TRASH, 10f, 0x14FFFFFF, 0xFFFF7B7B, rh * rowA);
+                if (rowDelBtn[i].hover > 0.03f) {
+                    UiRender.glow(m, del.x + del.w / 2f, del.y + del.h / 2f, del.w * 1.6f, 0xFFE05B5B,
+                            0.20f * rowDelBtn[i].hover, rh * rowA);
+                }
+            }
 
             // a partially clipped row keeps its looks but loses its buttons:
             // otherwise clicks would land on the part scrolled out of the band
-            if (ry + 3 >= listY && ry + 27 <= listY + visible) {
-                rowHits.add(new RowHit(i, row, login, edit, del));
+            if (row.y + 3 >= listY && row.y + 27 <= listY + visible) {
+                rowRec[i] = true;
             }
         }
         ctx.disableScissor();
@@ -979,13 +1148,28 @@ public final class TabVisualsTitleScreen extends Screen {
 
         // slim scrollbar pill on the list's right edge
         if (maxScroll > 0f && visible > 0f) {
-            float trackX = panelX + panelW - 18 - 1;
+            float trackX = hp(panelX + panelW - 18 - 1);
             float thumbH = Math.max(18f, visible * (visible / total));
             float thumbY = listY + (visible - thumbH) * (listScroll / maxScroll);
             UiRender.rect(m, trackX, thumbY, 3f, thumbH, 1.5f, mulAlpha(0x3AFFFFFF, ap));
+            // scroll affordance: chevrons fade in when there is somewhere to go
+            float upA = clamp01(listScroll / 12f);
+            float downA = clamp01((maxScroll - listScroll) / 12f);
+            UiRender.iconCentered(m, Icons.CHEVRON_UP, rightX + rightW - 8, listY - 8, 8f,
+                    mulAlpha(TEXT_3, upA * ap));
+            UiRender.iconCentered(m, Icons.CHEVRON_DOWN, rightX + rightW - 8, listY + visible + 2, 8f,
+                    mulAlpha(TEXT_3, downA * ap));
         }
 
         m.pop();
+    }
+
+    /** Tiny helper keeping the preview hit rect in the shared R pool. */
+    private R previewHitOrSet(float x, float y, float w, float h) {
+        if (previewHit == null) {
+            previewHit = new R();
+        }
+        return previewHit.set(x, y, w, h);
     }
 
     /** Preview nick priority: typed nick > pinned row > hovered row > active. */
@@ -1006,31 +1190,72 @@ public final class TabVisualsTitleScreen extends Screen {
     /** Per-row hover easing for the list (fixed capacity — rows are small). */
     private final float[] rowHoverT = new float[64];
     private float focusT;
+    /** Eased focus ring for the row rename field (0..1). */
+    private float editFocusT;
     private float previewHoverT;
 
     /**
-     * Shared smooth button: eased hover (k≈14) / press (k≈24) state per id,
-     * drawn through the UiRender helpers so every button sinks and lifts the
-     * same way.
+     * Shared smooth button: eased hover (k≈14) / press (k≈24) state, drawn
+     * through the UiRender helpers so every button sinks and lifts the same
+     * way. Round is always pill (h/2) per the client's button language.
      */
-    private void drawButton(MatrixStack m, String id, R box, String label, FontRenderer font, int bg, int fg) {
-        BtnState st = btnStates.computeIfAbsent(id, k -> new BtnState());
-        easeButton(st, id, box);
-        UiRender.button(m, font, box.x(), box.y(), box.w(), box.h(), 6f, label, st.hover, st.press, bg, fg);
+    private void drawButton(MatrixStack m, BtnState st, R box, String label, FontRenderer font, int bg, int fg) {
+        easeButton(st, box);
+        UiRender.button(m, font, box.x, box.y, box.w, box.h, box.h / 2f, label, st.hover, st.press, bg, fg);
     }
 
-    private void drawAccentButton(MatrixStack m, String id, R box, String label, FontRenderer font, int bg, int fg) {
-        BtnState st = btnStates.computeIfAbsent(id, k -> new BtnState());
-        easeButton(st, id, box);
-        UiRender.accentButton(m, font, box.x(), box.y(), box.w(), box.h(), 6f, label, st.hover, st.press, bg, fg);
+    private void drawAccentButton(MatrixStack m, BtnState st, R box, String label, FontRenderer font, int bg, int fg) {
+        easeButton(st, box);
+        UiRender.accentButton(m, font, box.x, box.y, box.w, box.h, box.h / 2f, label, st.hover, st.press, bg, fg);
     }
 
-    private void easeButton(BtnState st, String id, R box) {
+    /** Icon-only glass button: rect + hairline + centred glyph, press sinks. */
+    private void drawIconButton(MatrixStack m, BtnState st, R box, Icons.Glyph glyph, float size,
+                                int bg, int fg, float alpha) {
+        if (alpha <= 0.01f || box.w <= 0f || box.h <= 0f) {
+            return;
+        }
+        easeButton(st, box);
+        float s = UiRender.pressScale(st.press);
+        float cx = box.x + box.w / 2f, cy = box.y + box.h / 2f;
+        m.push();
+        m.translate(cx, cy, 0f);
+        m.scale(s, s, 1f);
+        m.translate(-cx, -cy, 0f);
+        int body = UiRender.lighten(bg, 0.08f * UiRender.clamp01(st.hover));
+        UiRender.rect(m, box.x, box.y, box.w, box.h, box.h / 2f, mulAlpha(body, alpha));
+        UiRender.outline(m, box.x, box.y, box.w, box.h, box.h / 2f,
+                mulAlpha(UiRender.mix(GLASS_LINE, 0x66FFFFFF, st.hover), alpha), 1f);
+        UiRender.iconCentered(m, glyph, cx, cy, size,
+                mulAlpha(UiRender.lighten(fg, 0.35f * st.hover), alpha));
+        m.pop();
+    }
+
+    /** Icon-only accent button (confirm actions): gradient border + glyph. */
+    private void drawAccentIconButton(MatrixStack m, BtnState st, R box, Icons.Glyph glyph, float size,
+                                      int bg, int fg) {
+        if (box.w <= 0f || box.h <= 0f) {
+            return;
+        }
+        easeButton(st, box);
+        float s = UiRender.pressScale(st.press);
+        float cx = box.x + box.w / 2f, cy = box.y + box.h / 2f;
+        m.push();
+        m.translate(cx, cy, 0f);
+        m.scale(s, s, 1f);
+        m.translate(-cx, -cy, 0f);
+        UiRender.gradientBorder(m, box.x, box.y, box.w, box.h, box.h / 2f,
+                UiRender.lighten(bg, 0.08f * UiRender.clamp01(st.hover)));
+        UiRender.iconCentered(m, glyph, cx, cy, size, fg);
+        m.pop();
+    }
+
+    private void easeButton(BtnState st, R box) {
         float kH = 1f - (float) Math.exp(-frameDt * 14.0);
         float kP = 1f - (float) Math.exp(-frameDt * 24.0);
-        boolean hov = UiRender.inside(mouseX, mouseY, box.x(), box.y(), box.w(), box.h());
+        boolean hov = UiRender.inside(mouseX, mouseY, box.x, box.y, box.w, box.h);
         st.hover += ((hov ? 1f : 0f) - st.hover) * kH;
-        st.press += ((hov && id.equals(pressedId) ? 1f : 0f) - st.press) * kP;
+        st.press += ((hov && st == pressedBtn ? 1f : 0f) - st.press) * kP;
     }
 
     // ------------------------------------------------------------- input
@@ -1044,11 +1269,11 @@ public final class TabVisualsTitleScreen extends Screen {
             return clickModal(mouseX, mouseY);
         }
         if (state == State.SPLASH) {
-            if (tgHit != null && UiRender.inside(mouseX, mouseY, tgHit.x(), tgHit.y(), tgHit.w(), tgHit.h())) {
+            if (UiRender.inside(mouseX, mouseY, socBox[0].x, socBox[0].y, socBox[0].w, socBox[0].h)) {
                 openUrl(URL_TELEGRAM);
                 return true;
             }
-            if (ghHit != null && UiRender.inside(mouseX, mouseY, ghHit.x(), ghHit.y(), ghHit.w(), ghHit.h())) {
+            if (UiRender.inside(mouseX, mouseY, socBox[1].x, socBox[1].y, socBox[1].w, socBox[1].h)) {
                 openUrl(URL_GITHUB);
                 return true;
             }
@@ -1064,18 +1289,19 @@ public final class TabVisualsTitleScreen extends Screen {
         if (System.currentTimeMillis() - menuStart < MENU_IN_MS) {
             return true;
         }
-        if (tgHit != null && UiRender.inside(mouseX, mouseY, tgHit.x(), tgHit.y(), tgHit.w(), tgHit.h())) {
+        if (UiRender.inside(mouseX, mouseY, socBox[0].x, socBox[0].y, socBox[0].w, socBox[0].h)) {
             openUrl(URL_TELEGRAM);
             return true;
         }
-        if (ghHit != null && UiRender.inside(mouseX, mouseY, ghHit.x(), ghHit.y(), ghHit.w(), ghHit.h())) {
+        if (UiRender.inside(mouseX, mouseY, socBox[1].x, socBox[1].y, socBox[1].w, socBox[1].h)) {
             openUrl(URL_GITHUB);
             return true;
         }
-        for (NavHit nh : navHits) {
-            if (UiRender.inside(mouseX, mouseY, nh.box().x(), nh.box().y(), nh.box().w(), nh.box().h())) {
-                navPressed = nh.action();
-                runNav(nh.action());
+        for (int i = 0; i < navBox.length; i++) {
+            R box = navBox[i];
+            if (UiRender.inside(mouseX, mouseY, box.x, box.y, box.w, box.h)) {
+                navPressed = i;
+                runNav(i);
                 return true;
             }
         }
@@ -1090,51 +1316,56 @@ public final class TabVisualsTitleScreen extends Screen {
         if (modalVis < 0.9f) {
             return true;
         }
-        if (closeHit != null && UiRender.inside(mouseX, mouseY, closeHit.x(), closeHit.y(), closeHit.w(), closeHit.h())) {
-            pressedId = "close";
+        if (UiRender.inside(mouseX, mouseY, closeHit.x, closeHit.y, closeHit.w, closeHit.h)) {
+            pressedBtn = closeBtn;
             closeModal();
             return true;
         }
         // the preview card captures the drag — rotate the 3D skin
         if (previewHit != null && UiRender.inside(mouseX, mouseY,
-                previewHit.x(), previewHit.y(), previewHit.w(), previewHit.h())) {
+                previewHit.x, previewHit.y, previewHit.w, previewHit.h)) {
             skinRenderer.beginDrag(mouseX, mouseY);
             return true;
         }
-        if (UiRender.inside(mouseX, mouseY, inputHit.x(), inputHit.y(), inputHit.w(), inputHit.h())) {
+        if (UiRender.inside(mouseX, mouseY, inputHit.x, inputHit.y, inputHit.w, inputHit.h)) {
             focus = 1;
             editIndex = -1;
             pinnedNick = null;
             return true;
         }
-        if (UiRender.inside(mouseX, mouseY, createHit.x(), createHit.y(), createHit.w(), createHit.h())) {
-            pressedId = "create";
+        if (UiRender.inside(mouseX, mouseY, createHit.x, createHit.y, createHit.w, createHit.h)) {
+            pressedBtn = createBtn;
             submitNew();
             return true;
         }
-        for (RowHit rh : rowHits) {
-            if (UiRender.inside(mouseX, mouseY, rh.login().x(), rh.login().y(), rh.login().w(), rh.login().h())) {
-                pressedId = "login#" + rh.index();
-                AccountManager.apply(AccountManager.names().get(rh.index()));
+        List<String> names = AccountManager.names();
+        for (int i = 0; i < names.size() && i < rowRec.length; i++) {
+            if (!rowRec[i]) {
+                continue;   // scrolled out / never drawn this frame
+            }
+            R login = rowLogin[i], edit = rowEdit[i], del = rowDel[i], box = rowBox[i];
+            if (UiRender.inside(mouseX, mouseY, login.x, login.y, login.w, login.h)) {
+                pressedBtn = rowLoginBtn[i];
+                AccountManager.apply(names.get(i));
                 closeModal();
                 return true;
             }
-            if (UiRender.inside(mouseX, mouseY, rh.edit().x(), rh.edit().y(), rh.edit().w(), rh.edit().h())) {
-                pressedId = "edit#" + rh.index();
-                if (focus == 2 && editIndex == rh.index()) {
+            if (UiRender.inside(mouseX, mouseY, edit.x, edit.y, edit.w, edit.h)) {
+                pressedBtn = rowEditBtn[i];
+                if (focus == 2 && editIndex == i) {
                     commitEdit();
                 } else {
                     focus = 2;
-                    editIndex = rh.index();
-                    editOldName = AccountManager.names().get(rh.index());
+                    editIndex = i;
+                    editOldName = names.get(i);
                     editText = editOldName;
                 }
                 return true;
             }
-            if (UiRender.inside(mouseX, mouseY, rh.del().x(), rh.del().y(), rh.del().w(), rh.del().h())) {
-                pressedId = "del#" + rh.index();
-                String removed = AccountManager.names().get(rh.index());
-                AccountManager.delete(rh.index());
+            if (UiRender.inside(mouseX, mouseY, del.x, del.y, del.w, del.h)) {
+                pressedBtn = rowDelBtn[i];
+                String removed = names.get(i);
+                AccountManager.delete(i);
                 if (removed.equals(pinnedNick)) {
                     pinnedNick = null;
                 }
@@ -1142,17 +1373,17 @@ public final class TabVisualsTitleScreen extends Screen {
                     hoverNick = null;
                     hoverCandidate = null;
                 }
-                if (editIndex == rh.index()) {
+                if (editIndex == i) {
                     focus = 0;
                     editIndex = -1;
-                } else if (editIndex > rh.index()) {
+                } else if (editIndex > i) {
                     editIndex--;
                 }
                 return true;
             }
             // clicking the row body pins its nick in the preview
-            if (UiRender.inside(mouseX, mouseY, rh.box().x(), rh.box().y(), rh.box().w(), rh.box().h())) {
-                pinnedNick = AccountManager.names().get(rh.index());
+            if (UiRender.inside(mouseX, mouseY, box.x, box.y, box.w, box.h)) {
+                pinnedNick = names.get(i);
                 focus = 0;
                 editIndex = -1;
                 return true;
@@ -1179,7 +1410,7 @@ public final class TabVisualsTitleScreen extends Screen {
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        pressedId = null;
+        pressedBtn = null;
         navPressed = -1;
         if (modal) {
             skinRenderer.endDrag();
@@ -1282,7 +1513,7 @@ public final class TabVisualsTitleScreen extends Screen {
                 return true;
             }
             List<String> names = AccountManager.names();
-            float listY = inputHit.y() + inputHit.h() + 12;
+            float listY = inputHit.y + inputHit.h + 12;
             float visible = Math.max(0f, panelY + panelH - 14 - listY);
             float total = names.size() * 36f - 6;
             float maxScroll = Math.max(0f, total - visible);
@@ -1300,6 +1531,8 @@ public final class TabVisualsTitleScreen extends Screen {
             state = State.SPLASH;
             animStart = System.currentTimeMillis();
             splashStart = animStart;
+            navPillA = 0f;
+            navPillInit = false;
         }
         // SPLASH: the title screen never closes on ESC
     }
@@ -1310,6 +1543,8 @@ public final class TabVisualsTitleScreen extends Screen {
         if (state == State.SPLASH) {
             state = State.TRANSITION;
             animStart = System.currentTimeMillis();
+            navPillA = 0f;
+            navPillInit = false;
         }
     }
 
@@ -1402,6 +1637,7 @@ public final class TabVisualsTitleScreen extends Screen {
         font.drawString(m, s, x, y, argb);
         return x;
     }
+
     /** Right-aligned, but never drawn left of the nav column. */
     private void rightTextClamped(FontRenderer font, MatrixStack m, String s, float rightX, float limit, float y, int argb) {
         float x = rightX - font.getStringWidth(s);
@@ -1434,9 +1670,9 @@ public final class TabVisualsTitleScreen extends Screen {
         return v < min ? min : v > max ? max : v;
     }
 
-    private static float easeOut(float p) {
-        float inv = 1f - p;
-        return 1f - inv * inv * inv;
+    /** Snap a static chrome coordinate to the half-pixel grid (crisp edges). */
+    private static float hp(float v) {
+        return Math.round(v * 2f) / 2f;
     }
 
     /**
@@ -1444,7 +1680,7 @@ public final class TabVisualsTitleScreen extends Screen {
      * The font renders at 0.5 scale with a -3 translate, so a plain {@code cy - h/2}
      * sits the text too high against a centred icon/avatar; this compensates.
      */
-    private static float centerTextY(FontRenderer f, java.lang.String s, float cy) {
+    private static float centerTextY(FontRenderer f, String s, float cy) {
         return cy + 3f - f.getStringHeight(s) * 0.25f;
     }
 

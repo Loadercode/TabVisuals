@@ -2,7 +2,9 @@
 package com.loadercode.tabvisuals.gui.hud.elements;
 
 import com.google.common.base.Suppliers;
+import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.hud.draggable.AbstractDraggable;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.loadercode.tabvisuals.render.atlasfont.msdf.MsdfFont;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
@@ -23,7 +25,8 @@ public class Watermark extends AbstractDraggable {
     private static final Supplier<MsdfFont> ICONS_FONT_1 = Suppliers.memoize(() -> MsdfFont.builder().atlas("clienticon1").data("clienticon1").build());
     private FontRenderer default12;
     private FontRenderer default13;
-    private FontRenderer iconNew17;
+    /** Размер бейджа часов в центре бара — тот же, что в расчёте ширины. */
+    private static final float CLOCK_SIZE = 11f;
     private String cachedServerIp = "";
     private long lastServerIpUpdate;
 
@@ -72,7 +75,6 @@ public class Watermark extends AbstractDraggable {
         if (default12 == null) {
             default12 = Fonts.getSize(12, Fonts.Type.DEFAULT);
             default13 = Fonts.getSize(13, Fonts.Type.DEFAULT);
-            iconNew17 = Fonts.getSize(17, Fonts.Type.ICONSTYPENEW);
         }
 
         float iconWidth = 11f;
@@ -83,9 +85,11 @@ public class Watermark extends AbstractDraggable {
         float titleWidth = default13.getStringWidth(title);
         float fpsWidth = default13.getStringWidth(fps);
         float serverIpWidth = default13.getStringWidth(serverIp);
-        float icon2Width = ICONS_FONT_1.get().getWidth("D", 11);
-        float totalWidth = iconWidth + 7 + 4 + titleWidth + 9 + 5 + fpsWidth + 2 + 10 + 5
-                + serverIpWidth + 2.5f + icon2Width;
+        // иконка часов рисуется через Icons — ширина берётся оттуда же, а не «на глаз 10px»
+        float clockWidth = Icons.width(Icons.Glyph.CLOCK, CLOCK_SIZE);
+        float trailingWidth = ICONS_FONT_1.get().getWidth("D", 11);
+        float totalWidth = iconWidth + 7 + 4 + titleWidth + 9 + 5 + fpsWidth + 2 + clockWidth + 4 + 5
+                + serverIpWidth + 2.5f + trailingWidth;
         float finalWidth = totalWidth + 9;
         // getHeight()+4 росло бы на 4px каждый кадр, стоило лишь где-то вызвать
         // setHeight; заодно хитбокс редактора совпадает с нарисованной панелью
@@ -163,10 +167,12 @@ public class Watermark extends AbstractDraggable {
         currentX += fpsWidth + 2;
 
         // icon2 'n' = clock badge; 'w' was the chart glyph and rendered as an
-        // odd blob at 17px (dj's photo)
-        iconNew17.drawString(matrix, "n", currentX, getY() + 9f, ColorAssist.multAlpha(0xFFFFFFFF, alpha));
+        // odd blob at 17px (dj's photo) — теперь единый Icons.CLOCK
+        Icons.draw(matrix, Icons.Glyph.CLOCK, currentX,
+                UiRender.iconY(Icons.Glyph.CLOCK, CLOCK_SIZE, getY() + finalHeight / 2f),
+                CLOCK_SIZE, ColorAssist.multAlpha(0xFFFFFFFF, alpha));
 
-        currentX += 10;
+        currentX += clockWidth + 4;
 
         rectangle.render(ShapeProperties.create(matrix, currentX, getY() + 6.5f, 0.5F, getHeight() - 8)
                 .round(0)

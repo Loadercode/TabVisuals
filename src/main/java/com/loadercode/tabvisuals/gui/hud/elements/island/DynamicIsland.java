@@ -7,6 +7,8 @@ import net.minecraft.util.Identifier;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.island.impl.*;
+import com.loadercode.tabvisuals.gui.Theme;
+import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.hud.Hud;
 import com.loadercode.tabvisuals.gui.hud.compat.Instance;
 import com.loadercode.tabvisuals.gui.hud.draggable.AbstractDraggable;
@@ -111,6 +113,15 @@ public class DynamicIsland extends AbstractDraggable {
         }
         statusAlpha = HudHelper.hud_anim_approach(statusAlpha, 1f, 12f, dt);  // появление статуса
         slideAnim = HudHelper.hud_anim_approach(slideAnim, 1f, 10f, dt);      // слайд
+
+        // Единственный новый штрих: мягкое акцентное свечение под островком,
+        // пока активен не-default статус. Рисуется ДО панели (за ней) и гаснет
+        // вместе с alpha статуса.
+        if (activeStatus != null && statusAlpha > 0.02f && !(activeStatus instanceof DefaultStatus)) {
+            UiRender.glow(matrix, x + currentWidth / 2f, y + currentHeight / 2f,
+                    Math.max(currentWidth, currentHeight) * 0.32f,
+                    Theme.get().accent(), 0.16f * statusAlpha, 1f);
+        }
 
         int[] gradientColors = ColorAssist.getRectangleGradientColors();
         blur.render(ShapeProperties.create(matrix, x, y, currentWidth, currentHeight)

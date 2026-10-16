@@ -7,17 +7,18 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
 import com.mojang.authlib.yggdrasil.ProfileResult;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.client.network.ClientConnectionState;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.OtherClientPlayerEntity;
 import net.minecraft.client.network.PlayerListEntry;
+import net.minecraft.client.render.DiffuseLighting;
 import net.minecraft.client.render.entity.EntityRenderDispatcher;
 import net.minecraft.client.session.Session;
 import net.minecraft.client.session.telemetry.TelemetrySender;
@@ -49,27 +50,36 @@ import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Full-body 3D player skin preview for the account manager: the whole model
- * (head to feet) rendered via the vanilla inventory entity pass, rotatable by
- * mouse drag (drag spins yaw / tilts the model, release eases back to a
- * neutral angle). The skin follows a nickname — the session profile by
- * default, any typed/hovered nick resolved through the Mojang session servers
- * (profile → textures property → textures.minecraft.net); resolved profiles
- * are cached in memory and on disk, and a nick without a skin falls back to
- * the default steve/alex model.
+ * (head to feet) rendered through the vanilla inventory entity pass, rotatable by
+ * mouse drag (drag spins yaw / tilts the model, release keeps angular momentum,
+ * then eases back to a neutral front-facing angle). The skin follows a nickname —
+ * the session profile by default, any typed nick resolved through the Mojang
+ * session servers (profile → textures property → textures.minecraft.net);
+ * resolved profiles are cached in memory and on disk, a nick without a skin falls
+ * back to the default steve/alex model, and a nick that cannot be fetched shows a
+ * placeholder (pulsing USER glyph, NODE badge when the fetch failed) that
+ * crossfades out as soon as the model is ready.
  */
 public final class AccountRenderer {
 
@@ -80,6 +90,24 @@ public final class AccountRenderer {
     /** Neutral angle: the model faces the viewer (vanilla inventory pose). */
     private static final float NEUTRAL_YAW = 180f;
     private static final float MAX_TILT = 28f;
+    /** Release spin cap, deg/s — one violent flick must not become a top. */
+    private static final float MAX_SPIN = 1440f;
+    /** Idle seconds before the model eases back to front-facing (inertia runs first). */
+    private static final float SNAP_AFTER = 1.2f;
+    /** Idle breathing: one slow cycle, a couple of pixels. */
+    private static final float BOB_PERIOD = 8f;
+    private static final float BOB_PX = 1.6f;
+    private static final float SWAY_DEG = 1.5f;
+    private static final float BREATH_TILT_DEG = 0.9f;
+    /** A typed nick must sit still this long before it is fetched (typing skips prefixes). */
+    private static final float RESOLVE_DELAY = 0.6f;
+
+    /** Violet pedestal palette (alpha byte ignored by glow). */
+    private static final int ACCENT = 0xFF8B5CF6;
+    /** Veil colour: reads as the preview card while the model fades. */
+    private static final int PANEL_VEIL = 0x181434;
+    /** Entities past this size leave the LRU (their skins stay in the shared provider cache). */
+    private static final int ENTITY_CACHE_MAX = 12;
 
     // ------------------------------------------------- profile resolution
 
@@ -89,36 +117,76 @@ public final class AccountRenderer {
     private static final Set<String> RESOLVING = ConcurrentHashMap.newKeySet();
     /** Epoch ms of the last failed fetch per nick — drives the retry backoff. */
     private static final Map<String, Long> RESOLVE_FAILED = new ConcurrentHashMap<>();
+    /** Nicks Mojang answered 404 for: settled on the default skin, never refetched. */
+    private static final Set<String> MISSING = ConcurrentHashMap.newKeySet();
     /** One shared client — a new HttpClient per fetch leaks selector threads. */
     private static final HttpClient HTTP =
             HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     /** Retry a failed nick resolve after this long (the nick stays selected). */
     private static final long RESOLVE_RETRY_MS = 15_000L;
-    /** Disk cache, lazily loaded once: lowercase nick → json entry. */
-    private static volatile JsonObject diskCache;
+    /**
+     * Bounded daemon pool instead of one thread per nick: a burst of typed
+     * prefixes can queue work, never spawn unbounded threads, and a rejected
+     * task falls into the normal failure backoff.
+     */
+    private static final ExecutorService RESOLVE_EXEC = new_resolve_executor();
+
+    /** Disk cache, filled once by a daemon thread; the render thread reads it only when ready. */
+    private static volatile JsonObject disk_cache;
+    private static volatile boolean disk_ready;
+    private static volatile boolean disk_load_started;
 
     // ------------------------------------------------------ runtime state
 
-    /** Volatile: resolve worker threads read it to decide the pending swap. */
+    /** Volatile: resolve workers read it to decide the pending swap. */
     private volatile String nick = "";
     private GameProfile profile;
     /** Freshly resolved profile waiting for the render thread to swap it in. */
-    private volatile GameProfile pendingProfile;
-    private final Map<String, OtherClientPlayerEntity> entities = new HashMap<>();
+    private volatile GameProfile pending_profile;
+    /** LRU of preview entities, keyed by profile uuid — one model, many frames. */
+    private final Map<String, OtherClientPlayerEntity> entities =
+            new LinkedHashMap<String, OtherClientPlayerEntity>(8, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, OtherClientPlayerEntity> eldest) {
+            return size() > ENTITY_CACHE_MAX;
+        }
+    };
     /** Profiles whose entity creation threw once — never retried (no log spam). */
-    private final Set<String> entityFailed = ConcurrentHashMap.newKeySet();
+    private final Set<String> entity_failed = ConcurrentHashMap.newKeySet();
     /** Sticky: the fake world failed to build — the preview stays off. */
-    private static volatile boolean previewWorldFailed;
+    private static volatile boolean preview_world_failed;
+    /** Fake world/handler may only be built on this thread (set on first use). */
+    private static volatile Thread preview_thread;
     /** Log the preview render failure once, not once per frame. */
-    private boolean renderErrorLogged;
+    private boolean render_error_logged;
+
+    // resolution bookkeeping (render thread only)
+    /** Nicks whose disk entry was already looked up — checked exactly once per nick. */
+    private final Set<String> disk_checked = ConcurrentHashMap.newKeySet();
+    /** Debounce: the key the stability timer is running for, and how long it held. */
+    private String stable_key = "";
+    private float stable_time;
 
     // rotation / animation state
     private float yaw = NEUTRAL_YAW;
     private float tilt;
+    /** Angular velocity left over from a drag — decays after release (inertia). */
+    private float yaw_vel;
     private boolean dragging;
-    private double lastDragX, lastDragY;
-    /** Crossfade 0..1 — fades the model in after a nick switch. */
-    private float switchT = 1f;
+    private double last_drag_x, last_drag_y;
+    private long last_drag_nanos;
+    private float idle_time = SNAP_AFTER + 1f;
+    private float anim_time;
+    /** 0..1 blends for the idle bob and the at-rest breathing rotation. */
+    private float idle_blend = 1f;
+    private float rest_blend = 1f;
+    /** Crossfade 0..1: 0 = placeholder, 1 = skin fully shown. */
+    private float skin_a;
+
+    // per-frame frame state (render thread)
+    private OtherClientPlayerEntity render_entity;
+    private boolean show_placeholder;
+    private boolean show_error;
 
     // ------------------------------------------------------------ profile
 
@@ -142,87 +210,155 @@ public final class AccountRenderer {
             return;
         }
         nick = n;
-        switchT = 0f;
+        skin_a = 0f;   // placeholder first, the model crossfades in when ready
         if (n.isEmpty()) {
             profile = null;
-            pendingProfile = null;
-            return;
-        }
-        MinecraftClient mc = MinecraftClient.getInstance();
-        Session session = mc.getSession();
-        if (session != null && session.getUsername().equalsIgnoreCase(n)) {
-            // the real session account — its profile already carries the textures
-            profile = sessionProfile(mc);
-            pendingProfile = null;
+            pending_profile = null;
             return;
         }
         String key = n.toLowerCase(Locale.ROOT);
-        GameProfile cached = PROFILE_CACHE.get(key);
-        if (cached == null) {
-            // profiles persisted by a previous session — instant, no refetch
-            GameProfile disk = fromDisk(key);
-            if (disk != null) {
-                cached = disk;
-                PROFILE_CACHE.put(key, disk);
-            }
-        }
-        if (cached != null) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        Session session = mc.getSession();
+        boolean is_session = session != null && session.getUsername().equalsIgnoreCase(n);
+
+        GameProfile session_p = is_session ? session_profile(mc) : null;
+        GameProfile cached = cache_get(key);
+        if (session_p != null && has_textures(session_p)) {
+            profile = session_p;                     // online session: textures already in hand
+        } else if (cached != null && has_textures(cached)) {
+            profile = cached;                        // resolved skin beats a plain session identity
+        } else if (session_p != null) {
+            profile = session_p;
+        } else if (cached != null) {
             profile = cached;
-            pendingProfile = null;
-            return;
+        } else {
+            // unknown nick — show the offline (default-skin) model right away and
+            // resolve the Mojang profile in the background
+            profile = offline_profile(n);
         }
-        // unknown nick — show the offline (default-skin) model right away and
-        // resolve the Mojang profile in the background
-        profile = offlineProfile(n);
-        pendingProfile = null;
-        Long failedAt = RESOLVE_FAILED.get(key);
-        // no attempt yet, or the last one failed long enough ago to retry
-        if (failedAt == null || System.currentTimeMillis() - failedAt >= RESOLVE_RETRY_MS) {
-            startResolve(n, key);
+        pending_profile = null;
+        if (!has_textures(profile)) {
+            stable_key = "";
+            stable_time = 0f;   // sync_resolve restarts the fetch debounce for this key
         }
     }
 
-    /** Spawns one background resolve for the nick (deduped via RESOLVING). */
-    private void startResolve(String name, String key) {
-        if (!RESOLVING.add(key)) {
-            return;
+    private static boolean has_textures(GameProfile p) {
+        return p != null && p.getProperties().containsKey("textures");
+    }
+
+    private String nick_key() {
+        String n = nick;
+        return n.isEmpty() ? "" : n.toLowerCase(Locale.ROOT);
+    }
+
+    /** Cached profile for the key: memory first, disk once the loader finished. */
+    private static GameProfile cache_get(String key) {
+        GameProfile p = PROFILE_CACHE.get(key);
+        if (p != null) {
+            return p;
         }
-        Thread t = new Thread(() -> resolveRemote(name), "tabvisuals-skin");
-        t.setDaemon(true);
-        t.start();
+        if (!disk_ready()) {
+            return null;   // render thread never waits for the cache file
+        }
+        p = from_disk(key);
+        if (p != null) {
+            PROFILE_CACHE.put(key, p);
+        }
+        return p;
     }
 
     /**
-     * Re-requests a nick whose fetch failed (offline launch, rate limit): the
-     * offline model stays until a retry succeeds. Called per frame; the backoff
-     * + RESOLVING gate keep it to at most one request per RESOLVE_RETRY_MS.
+     * Per-frame resolution step: adopts a disk entry that arrived after
+     * setNick, restarts failed fetches on the backoff, and debounces the fetch
+     * of a nick that is still being typed.
      */
-    private void retryResolve() {
-        String n = nick;
-        if (n.isEmpty() || PROFILE_CACHE.containsKey(n.toLowerCase(Locale.ROOT))) {
+    private void sync_resolve(float dt) {
+        if (nick.isEmpty()) {
             return;
         }
-        Session s = MinecraftClient.getInstance().getSession();
-        if (s != null && s.getUsername().equalsIgnoreCase(n)) {
-            return;   // the session account renders from its own profile
+        String key = nick_key();
+        if (has_textures(profile) || MISSING.contains(key)) {
+            return;
         }
-        String key = n.toLowerCase(Locale.ROOT);
-        Long failedAt = RESOLVE_FAILED.get(key);
-        if (failedAt != null && System.currentTimeMillis() - failedAt >= RESOLVE_RETRY_MS) {
-            RESOLVE_FAILED.remove(key, failedAt);
-            startResolve(n, key);
+        if (disk_ready() && disk_checked.add(key)) {
+            GameProfile disk = from_disk(key);
+            if (disk != null) {
+                PROFILE_CACHE.put(key, disk);
+                if (has_textures(disk)) {
+                    profile = disk;
+                    pending_profile = null;
+                    return;
+                }
+            }
+        }
+        if (!disk_ready() || PROFILE_CACHE.containsKey(key) || RESOLVING.contains(key)) {
+            return;   // nothing fetched before the local cache is known / while in flight
+        }
+        long now = System.currentTimeMillis();
+        Long failed = RESOLVE_FAILED.get(key);
+        if (failed != null) {
+            if (now - failed < RESOLVE_RETRY_MS) {
+                return;
+            }
+            RESOLVE_FAILED.remove(key, failed);
+        }
+        if (!key.equals(stable_key)) {
+            stable_key = key;
+            stable_time = 0f;
+            return;
+        }
+        stable_time += dt;
+        if (stable_time < RESOLVE_DELAY) {
+            return;
+        }
+        start_resolve(nick, key);
+    }
+
+    /** Spawns one queued resolve for the nick (deduped via RESOLVING). */
+    private void start_resolve(String name, String key) {
+        if (!RESOLVING.add(key)) {
+            return;
+        }
+        try {
+            RESOLVE_EXEC.execute(() -> resolve_remote(name));
+        } catch (RejectedExecutionException rejected) {
+            // queue full: back off instead of spinning a task per frame
+            RESOLVING.remove(key);
+            RESOLVE_FAILED.put(key, System.currentTimeMillis());
         }
     }
 
+    private static ExecutorService new_resolve_executor() {
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 2, 30L, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(8),
+                r -> {
+                    Thread t = new Thread(r, "tabvisuals-skin");
+                    t.setDaemon(true);
+                    return t;
+                });
+        pool.allowCoreThreadTimeOut(true);
+        return pool;
+    }
+
+    private static void mark_failed(String key) {
+        RESOLVE_FAILED.put(key, System.currentTimeMillis());
+    }
+
+    private static void mark_missing(String key) {
+        RESOLVE_FAILED.remove(key);
+        MISSING.add(key);
+    }
+
     /** Offline-steve profile for a nick — the degradation path. */
-    private static GameProfile offlineProfile(String name) {
+    private static GameProfile offline_profile(String name) {
         UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8));
         return new GameProfile(uuid, name);
     }
 
     /** MinecraftClient.gameProfileFuture, located once by its generic type. */
-    private static Field profileFutureField;
-    private static boolean profileFutureFieldFailed;
+    private static Field profile_future_field;
+    private static boolean profile_future_field_failed;
 
     /**
      * Non-blocking stand-in for MinecraftClient.getGameProfile(): that one
@@ -233,14 +369,14 @@ public final class AccountRenderer {
      * session, the stale future keeps the old account); otherwise builds a
      * plain uuid+name profile from the session — same fallback as vanilla.
      */
-    private static GameProfile sessionProfile(MinecraftClient mc) {
+    private static GameProfile session_profile(MinecraftClient mc) {
         Session s = mc.getSession();
         if (s == null) {
             return null;
         }
         UUID uuid = s.getUuidOrNull();
         try {
-            Field f = profileFutureField();
+            Field f = profile_future_field();
             if (f != null) {
                 Object done = ((CompletableFuture<?>) f.get(mc)).getNow(null);
                 if (done instanceof ProfileResult r && r.profile() != null
@@ -255,9 +391,9 @@ public final class AccountRenderer {
     }
 
     /** CompletableFuture&lt;ProfileResult&gt; field of MinecraftClient, or null. */
-    private static Field profileFutureField() {
-        Field f = profileFutureField;
-        if (f == null && !profileFutureFieldFailed) {
+    private static Field profile_future_field() {
+        Field f = profile_future_field;
+        if (f == null && !profile_future_field_failed) {
             for (Field declared : MinecraftClient.class.getDeclaredFields()) {
                 if (declared.getType() != CompletableFuture.class) {
                     continue;
@@ -266,94 +402,110 @@ public final class AccountRenderer {
                 if (generic instanceof ParameterizedType pt
                         && pt.getActualTypeArguments()[0] == ProfileResult.class) {
                     declared.setAccessible(true);
-                    profileFutureField = f = declared;
+                    profile_future_field = f = declared;
                     break;
                 }
             }
             if (f == null) {
-                profileFutureFieldFailed = true;
+                profile_future_field_failed = true;
             }
         }
         return f;
     }
 
+    /** One structured GET: 0 = transport failure, else the HTTP status. */
+    private record Fetch(int status, JsonObject obj) {
+    }
+
+    private static Fetch fetch_json(HttpClient http, String url) {
+        try {
+            HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofSeconds(5)).GET().build();
+            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            String body = resp.body();
+            if (resp.statusCode() != 200 || body == null || body.isBlank()) {
+                return new Fetch(resp.statusCode(), null);
+            }
+            JsonElement el = GSON.fromJson(body, JsonElement.class);
+            return new Fetch(200, el != null && el.isJsonObject() ? el.getAsJsonObject() : null);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return new Fetch(0, null);
+        } catch (Throwable ignored) {
+            return new Fetch(0, null);   // offline / DNS / timeout
+        }
+    }
+
     /**
      * api.mojang.com name→uuid → sessionserver profile (textures property) →
-     * memory + disk cache. Runs on a worker thread; the render thread picks
-     * the result up through {@link #pendingProfile}.
+     * memory + disk cache. Runs on the bounded worker pool; the render thread
+     * picks the result up through {@link #pending_profile}, and only while the
+     * nick is still the one this fetch was started for.
      */
-    private void resolveRemote(String name) {
+    private void resolve_remote(String name) {
         String key = name.toLowerCase(Locale.ROOT);
         try {
-            String uuidHex = fetchJson(HTTP,
-                    "https://api.mojang.com/users/profiles/minecraft/" + name, "id");
-            if (uuidHex == null || uuidHex.length() != 32) {
-                RESOLVE_FAILED.put(key, System.currentTimeMillis());
+            Fetch uuid_resp = fetch_json(HTTP,
+                    "https://api.mojang.com/users/profiles/minecraft/" + name);
+            if (uuid_resp.status() == 404) {
+                mark_missing(key);
                 return;
             }
-            JsonObject sessionJson = fetchJsonObj(HTTP,
-                    "https://sessionserver.mojang.com/session/minecraft/profile/" + uuidHex + "?unsigned=false");
-            if (sessionJson == null) {
-                RESOLVE_FAILED.put(key, System.currentTimeMillis());
+            if (uuid_resp.status() != 200 || uuid_resp.obj() == null) {
+                mark_failed(key);
                 return;
             }
-            String realName = sessionJson.has("name") && sessionJson.get("name").isJsonPrimitive()
-                    ? sessionJson.get("name").getAsString() : name;
-            GameProfile p = new GameProfile(uuidFromHex(uuidHex), realName);
-            String texValue = null, texSignature = null;
-            if (sessionJson.has("properties") && sessionJson.get("properties").isJsonArray()) {
-                for (JsonElement el : sessionJson.getAsJsonArray("properties")) {
+            String uuid_hex = uuid_resp.obj().has("id")
+                    && uuid_resp.obj().get("id").isJsonPrimitive()
+                    ? uuid_resp.obj().get("id").getAsString() : null;
+            if (uuid_hex == null || uuid_hex.length() != 32) {
+                mark_missing(key);
+                return;
+            }
+            Fetch prof_resp = fetch_json(HTTP,
+                    "https://sessionserver.mojang.com/session/minecraft/profile/" + uuid_hex + "?unsigned=false");
+            if (prof_resp.status() == 404) {
+                mark_missing(key);
+                return;
+            }
+            if (prof_resp.status() != 200 || prof_resp.obj() == null) {
+                mark_failed(key);
+                return;
+            }
+            JsonObject session_json = prof_resp.obj();
+            String real_name = session_json.has("name") && session_json.get("name").isJsonPrimitive()
+                    ? session_json.get("name").getAsString() : name;
+            GameProfile p = new GameProfile(uuid_from_hex(uuid_hex), real_name);
+            String tex_value = null, tex_signature = null;
+            if (session_json.has("properties") && session_json.get("properties").isJsonArray()) {
+                for (JsonElement el : session_json.getAsJsonArray("properties")) {
                     if (!el.isJsonObject()) continue;
                     JsonObject prop = el.getAsJsonObject();
                     if (prop.has("name") && "textures".equals(prop.get("name").getAsString())) {
-                        texValue = prop.has("value") ? prop.get("value").getAsString() : null;
-                        texSignature = prop.has("signature") ? prop.get("signature").getAsString() : null;
+                        tex_value = prop.has("value") ? prop.get("value").getAsString() : null;
+                        tex_signature = prop.has("signature") ? prop.get("signature").getAsString() : null;
                     }
                 }
             }
-            if (texValue != null) {
-                p.getProperties().put("textures", new Property("textures", texValue, texSignature));
+            if (tex_value != null) {
+                p.getProperties().put("textures", new Property("textures", tex_value, tex_signature));
             }
             PROFILE_CACHE.put(key, p);
             RESOLVE_FAILED.remove(key);
-            storeDisk(name, uuidHex, realName, texValue, texSignature);
-            if (name.equalsIgnoreCase(nick)) {
-                pendingProfile = p;
+            store_disk(name, uuid_hex, real_name, tex_value, tex_signature);
+            if (key.equals(nick_key())) {
+                pending_profile = p;   // only the nick still shown may swap in
             }
         } catch (Throwable t) {
             TabVisualsClient.LOGGER.warn("Skin resolve failed for {}: {}", name, t.toString());
-            RESOLVE_FAILED.put(key, System.currentTimeMillis());
+            mark_failed(key);
         } finally {
             RESOLVING.remove(key);   // a failed fetch must not pin the nick offline forever
         }
     }
 
-    private static String fetchJson(HttpClient http, String url, String field) {
-        JsonObject obj = fetchJsonObj(http, url);
-        return obj != null && obj.has(field) && obj.get(field).isJsonPrimitive()
-                ? obj.get(field).getAsString() : null;
-    }
-
-    private static JsonObject fetchJsonObj(HttpClient http, String url) {
-        try {
-            HttpRequest req = HttpRequest.newBuilder(URI.create(url))
-                    .timeout(Duration.ofSeconds(5)).GET().build();
-            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() != 200 || resp.body() == null || resp.body().isBlank()) {
-                return null;
-            }
-            JsonElement el = GSON.fromJson(resp.body(), JsonElement.class);
-            return el != null && el.isJsonObject() ? el.getAsJsonObject() : null;
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            return null;
-        } catch (Throwable ignored) {
-            return null;
-        }
-    }
-
     /** Hex uuid (32 chars) → dashed UUID. */
-    private static UUID uuidFromHex(String hex) {
+    private static UUID uuid_from_hex(String hex) {
         String d = hex.substring(0, 8) + "-" + hex.substring(8, 12) + "-" + hex.substring(12, 16)
                 + "-" + hex.substring(16, 20) + "-" + hex.substring(20);
         return UUID.fromString(d);
@@ -361,43 +513,72 @@ public final class AccountRenderer {
 
     // --------------------------------------------------------- disk cache
 
-    private static JsonObject diskCache() {
-        JsonObject root = diskCache;
-        if (root == null) {
-            synchronized (AccountRenderer.class) {
-                if (diskCache == null) {
-                    JsonObject loaded = null;
-                    if (Files.exists(CACHE_FILE)) {
-                        try {
-                            loaded = GSON.fromJson(Files.readString(CACHE_FILE, StandardCharsets.UTF_8), JsonObject.class);
-                        } catch (Throwable ignored) {
-                            // corrupt cache — rebuild from scratch
-                        }
-                    }
-                    diskCache = loaded != null ? loaded : new JsonObject();
-                    // a hand-edited/corrupt "entries" node must not throw on
-                    // every later read (getAsJsonObject is type-checked)
-                    if (!(diskCache.get("entries") instanceof JsonObject)) {
-                        diskCache.add("entries", new JsonObject());
-                    }
-                }
-                root = diskCache;
-            }
+    private static void ensure_disk_load() {
+        if (disk_load_started) {
+            return;
         }
-        return root;
+        synchronized (AccountRenderer.class) {
+            if (disk_load_started) {
+                return;
+            }
+            disk_load_started = true;
+            Thread t = new Thread(AccountRenderer::load_disk, "tabvisuals-skin-cache");
+            t.setDaemon(true);
+            t.start();
+        }
+    }
+
+    /** True once the cache file was read; the render thread polls this instead of blocking. */
+    private static boolean disk_ready() {
+        ensure_disk_load();
+        return disk_ready;
+    }
+
+    private static void load_disk() {
+        JsonObject root = null;
+        try {
+            if (Files.exists(CACHE_FILE)) {
+                String text = Files.readString(CACHE_FILE, StandardCharsets.UTF_8);
+                JsonElement el = GSON.fromJson(text, JsonElement.class);
+                // a hand-edited/corrupt file just means "empty cache"
+                if (el instanceof JsonObject o) {
+                    root = o;
+                }
+            }
+        } catch (Throwable ignored) {
+            root = null;
+        }
+        if (root == null) {
+            root = new JsonObject();
+        }
+        // a hand-edited/corrupt "entries" node must not throw on every later read
+        if (!(root.get("entries") instanceof JsonObject)) {
+            root.add("entries", new JsonObject());
+        }
+        synchronized (AccountRenderer.class) {
+            disk_cache = root;
+            disk_ready = true;   // publish last: readers that see it never wait for file IO
+            AccountRenderer.class.notifyAll();
+        }
     }
 
     /** Reads a cached profile for the nick, if the session stored one. */
-    static GameProfile fromDisk(String name) {
+    static GameProfile from_disk(String name) {
+        if (!disk_ready) {
+            return null;   // render thread: no read before the loader published the tree
+        }
         try {
             // the tree is shared with resolve workers — read under the class lock
             synchronized (AccountRenderer.class) {
-                JsonElement entry = diskCache().getAsJsonObject("entries")
+                if (disk_cache == null) {
+                    return null;
+                }
+                JsonElement entry = disk_cache.getAsJsonObject("entries")
                         .get(name.toLowerCase(Locale.ROOT));
                 if (entry == null || !entry.isJsonObject()) return null;
                 JsonObject o = entry.getAsJsonObject();
                 if (!o.has("uuid")) return null;
-                GameProfile p = new GameProfile(uuidFromHex(o.get("uuid").getAsString()),
+                GameProfile p = new GameProfile(uuid_from_hex(o.get("uuid").getAsString()),
                         o.has("name") ? o.get("name").getAsString() : name);
                 if (o.has("textures")) {
                     p.getProperties().put("textures", new Property("textures", o.get("textures").getAsString(),
@@ -410,28 +591,60 @@ public final class AccountRenderer {
         }
     }
 
-    private static void storeDisk(String name, String uuidHex, String realName, String tex, String sig) {
+    /** Worker-only: wait (bounded) for the initial cache read, never the render thread. */
+    private static void await_disk_load() {
+        ensure_disk_load();
+        if (disk_ready) {
+            return;
+        }
+        synchronized (AccountRenderer.class) {
+            long deadline = System.currentTimeMillis() + 3_000L;
+            while (!disk_ready && System.currentTimeMillis() < deadline) {
+                try {
+                    AccountRenderer.class.wait(200L);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
+    private static void store_disk(String name, String uuid_hex, String real_name, String tex, String sig) {
         try {
-            // read-modify-write of the shared tree must stay atomic vs fromDisk
+            await_disk_load();
+            String json;
+            // read-modify-write of the shared tree stays atomic vs from_disk,
+            // and the file write happens outside the lock (readers never wait on IO)
             synchronized (AccountRenderer.class) {
-                JsonObject cache = diskCache();
+                if (disk_cache == null) {
+                    return;
+                }
                 JsonObject entry = new JsonObject();
-                entry.addProperty("uuid", uuidHex);
-                entry.addProperty("name", realName);
+                entry.addProperty("uuid", uuid_hex);
+                entry.addProperty("name", real_name);
                 if (tex != null) entry.addProperty("textures", tex);
                 if (sig != null) entry.addProperty("signature", sig);
-                cache.getAsJsonObject("entries").add(name.toLowerCase(Locale.ROOT), entry);
-                saveDisk(cache);
+                disk_cache.getAsJsonObject("entries").add(name.toLowerCase(Locale.ROOT), entry);
+                json = GSON.toJson(disk_cache);
             }
+            write_atomic(CACHE_FILE, json);
         } catch (Throwable ignored) {
             // cache write is best-effort
         }
     }
 
-    private static synchronized void saveDisk(JsonObject cache) {
+    /** tmp + rename: a crash mid-write must not leave a truncated cache behind. */
+    private static void write_atomic(Path target, String json) {
         try {
-            Files.createDirectories(CACHE_FILE.getParent());
-            Files.writeString(CACHE_FILE, GSON.toJson(cache), StandardCharsets.UTF_8);
+            Files.createDirectories(target.getParent());
+            Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
+            Files.writeString(tmp, json, StandardCharsets.UTF_8);
+            try {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (Throwable ignored) {
             // cache write is best-effort
         }
@@ -440,22 +653,30 @@ public final class AccountRenderer {
     // ------------------------------------------------------ fake world
 
     /** Standalone world/handler so entities render on the title screen. */
-    private static volatile ClientWorld previewWorld;
+    private static volatile ClientWorld preview_world;
 
-    private static ClientWorld previewWorld() {
-        ClientWorld w = previewWorld;
+    private static ClientWorld preview_world() {
+        ClientWorld w = preview_world;
         if (w != null) {
             return w;
         }
-        if (previewWorldFailed) {
+        if (preview_world_failed) {
+            return null;
+        }
+        // the fake world builds connection state objects: render thread only
+        Thread here = Thread.currentThread();
+        Thread owner = preview_thread;
+        if (owner == null) {
+            preview_thread = owner = here;
+        } else if (owner != here) {
             return null;
         }
         synchronized (AccountRenderer.class) {
-            if (previewWorld != null) {
-                return previewWorld;
+            if (preview_world != null) {
+                return preview_world;
             }
             MinecraftClient mc = MinecraftClient.getInstance();
-            GameProfile session = sessionProfile(mc);
+            GameProfile session = session_profile(mc);
             try {
                 ClientConnection conn = new ClientConnection(NetworkSide.CLIENTBOUND);
                 ClientConnectionState state = new ClientConnectionState(
@@ -473,14 +694,14 @@ public final class AccountRenderer {
                         TagKey.of(RegistryKeys.BLOCK, Identifier.of("infiniburn_overworld")),
                         Identifier.of("overworld"), 0.0f,
                         new DimensionType.MonsterSettings(true, false, ConstantIntProvider.create(0), 0));
-                previewWorld = new ClientWorld(handler,
+                preview_world = new ClientWorld(handler,
                         new ClientWorld.Properties(Difficulty.NORMAL, false, false),
                         World.OVERWORLD, RegistryEntry.of(overworld),
                         10, 0, mc.worldRenderer, false, 0L, 16777216);
-                return previewWorld;
+                return preview_world;
             } catch (Throwable t) {
                 // sticky: a retry per frame would rebuild-and-throw forever
-                previewWorldFailed = true;
+                preview_world_failed = true;
                 TabVisualsClient.LOGGER.error("Preview world creation failed", t);
                 return null;
             }
@@ -490,12 +711,14 @@ public final class AccountRenderer {
     // --------------------------------------------------------- entity
 
     /**
-     * Player entity for the profile, cached per profile. The overrides keep
-     * the title screen safe: no tab list to query (the vanilla path NPEs on a
-     * null network handler) and the skin comes from the profile's textures
-     * property through the vanilla provider (async fetch + disk cache).
+     * Player entity for the profile, cached per profile (LRU, render thread
+     * only). The overrides keep the title screen safe: no tab list to query
+     * (the vanilla path NPEs on a null network handler) and the skin comes
+     * from the profile's textures property through the vanilla provider —
+     * which caches textures per uuid, so evicted entities do not pile up GL
+     * textures either.
      */
-    private OtherClientPlayerEntity entityFor(GameProfile p) {
+    private OtherClientPlayerEntity entity_for(GameProfile p) {
         if (p == null || p.getId() == null) {
             return null;
         }
@@ -504,10 +727,10 @@ public final class AccountRenderer {
         if (cached != null) {
             return cached;
         }
-        if (entityFailed.contains(key) || previewWorldFailed) {
+        if (entity_failed.contains(key) || preview_world_failed) {
             return null;
         }
-        ClientWorld world = previewWorld();
+        ClientWorld world = preview_world();
         if (world == null) {
             return null;
         }
@@ -527,8 +750,8 @@ public final class AccountRenderer {
             entities.put(key, created);
             return created;
         } catch (Throwable t) {
-            // sticky per profile: computeIfAbsent-style retry would log every frame
-            entityFailed.add(key);
+            // sticky per profile: retry would log every frame
+            entity_failed.add(key);
             TabVisualsClient.LOGGER.error("Preview entity creation failed", t);
             return null;
         }
@@ -538,12 +761,16 @@ public final class AccountRenderer {
 
     public void beginDrag(double mouseX, double mouseY) {
         dragging = true;
-        lastDragX = mouseX;
-        lastDragY = mouseY;
+        yaw_vel = 0f;
+        idle_time = 0f;
+        last_drag_x = mouseX;
+        last_drag_y = mouseY;
+        last_drag_nanos = System.nanoTime();
     }
 
     public void endDrag() {
         dragging = false;
+        idle_time = 0f;   // inertia first, the snap-back waits out SNAP_AFTER
     }
 
     /** Drag deltas: horizontal spins the body, vertical tilts the model. */
@@ -551,119 +778,309 @@ public final class AccountRenderer {
         if (!dragging || !Double.isFinite(mouseX) || !Double.isFinite(mouseY)) {
             return;
         }
-        float dx = (float) (mouseX - lastDragX);
-        float dy = (float) (mouseY - lastDragY);
-        lastDragX = mouseX;
-        lastDragY = mouseY;
-        yaw -= dx * 0.9f;
+        float dx = (float) (mouseX - last_drag_x);
+        float dy = (float) (mouseY - last_drag_y);
+        last_drag_x = mouseX;
+        last_drag_y = mouseY;
+        if (!Float.isFinite(dx) || !Float.isFinite(dy)) {
+            return;
+        }
+        long now = System.nanoTime();
+        double secs = (now - last_drag_nanos) / 1.0e9;
+        last_drag_nanos = now;
+        float d_yaw = -dx * 0.9f;
+        yaw += d_yaw;
         tilt = clamp(tilt - dy * 0.45f, -MAX_TILT, MAX_TILT);
+        idle_time = 0f;
+        // angular velocity for the release inertia — EMA, mouse deltas are bursty
+        if (secs > 1.0e-4 && secs < 0.5) {
+            float raw = (float) (d_yaw / secs);
+            if (Float.isFinite(raw)) {
+                yaw_vel = clamp(yaw_vel * 0.55f + raw * 0.45f, -MAX_SPIN, MAX_SPIN);
+            }
+        } else if (yaw_vel != 0f) {
+            yaw_vel *= 0.3f;   // a pause mid-drag kills the stale momentum
+        }
     }
 
-    /** FPS-independent easing; called once per frame from the screen. */
-    private void update(float dt) {
-        if (!Float.isFinite(yaw)) {
-            yaw = NEUTRAL_YAW;   // one bad drag must not poison the matrix forever
-        }
-        if (!Float.isFinite(tilt)) {
-            tilt = 0f;
-        }
+    /** FPS-independent easing + crossfade; called once per frame from the screen. */
+    private void step(float dt) {
         if (!Float.isFinite(dt) || dt < 0f) {
             dt = 0f;
         }
-        if (switchT < 1f) {
-            switchT = Math.min(1f, switchT + dt * 3.2f);
+        if (dt > 0.25f) {
+            dt = 0.25f;   // a hitch must not teleport the model
         }
+        anim_time += dt;
+        if (anim_time > 600f) {
+            anim_time -= 600f;   // keep sin() in a precise range
+        }
+        // one bad drag must not poison the matrix forever
+        if (!Float.isFinite(yaw)) yaw = NEUTRAL_YAW;
+        if (!Float.isFinite(tilt)) tilt = 0f;
+        if (!Float.isFinite(yaw_vel)) yaw_vel = 0f;
+
+        // swap in a profile resolved on a worker thread (render thread only)
+        GameProfile fresh = pending_profile;
+        if (fresh != null && fresh.getId() != null && fresh.getName() != null
+                && fresh.getName().equalsIgnoreCase(nick)) {
+            profile = fresh;
+            pending_profile = null;
+        }
+        sync_resolve(dt);
+        render_entity = entity_for(profile);
+
+        String key = nick_key();
+        boolean settled = !nick.isEmpty() && (has_textures(profile)
+                || MISSING.contains(key) || PROFILE_CACHE.containsKey(key));
+        show_placeholder = !nick.isEmpty() && (render_entity == null || !settled);
+        show_error = show_placeholder && RESOLVE_FAILED.containsKey(key);
+
+        float target = show_placeholder ? 0f : 1f;
+        float rate = target > skin_a ? 5.5f : 7.5f;   // in slower than out, no flicker
+        skin_a += (target - skin_a) * (1f - (float) Math.exp(-dt * rate));
+        if (Math.abs(target - skin_a) < 0.004f) {
+            skin_a = target;
+        }
+        if (!Float.isFinite(skin_a)) skin_a = target;
+        skin_a = clamp(skin_a, 0f, 1f);
+
         if (dragging) {
-            return;
+            idle_time = 0f;
+        } else {
+            idle_time += dt;
+            if (yaw_vel != 0f) {
+                if (idle_time < SNAP_AFTER + 1.2f) {
+                    yaw += yaw_vel * dt;
+                    yaw_vel *= (float) Math.exp(-dt * 4.5f);
+                    if (Math.abs(yaw_vel) < 1.5f) yaw_vel = 0f;
+                } else {
+                    yaw_vel = 0f;
+                }
+            }
+            if (idle_time >= SNAP_AFTER) {
+                // ease back to the nearest neutral angle (front-facing)
+                float target_yaw = NEUTRAL_YAW + 360f * Math.round((yaw - NEUTRAL_YAW) / 360f);
+                if (Float.isFinite(target_yaw)) {
+                    yaw += (target_yaw - yaw) * (1f - (float) Math.exp(-dt * 6f));
+                    if (Math.abs(target_yaw - yaw) < 0.05f) yaw = target_yaw;
+                }
+                tilt += (0f - tilt) * (1f - (float) Math.exp(-dt * 8f));
+                if (Math.abs(tilt) < 0.05f) tilt = 0f;
+            }
         }
-        // ease back to the nearest neutral angle (front-facing)
-        float target = NEUTRAL_YAW + 360f * Math.round((yaw - NEUTRAL_YAW) / 360f);
-        yaw += (target - yaw) * (1f - (float) Math.exp(-dt * 9f));
-        tilt += (0f - tilt) * (1f - (float) Math.exp(-dt * 11f));
+        tilt = clamp(tilt, -MAX_TILT, MAX_TILT);
+
+        float k = 1f - (float) Math.exp(-dt * 2.5f);
+        idle_blend += ((dragging ? 0f : 1f) - idle_blend) * k;
+        boolean at_rest = !dragging && idle_time >= SNAP_AFTER + 0.4f
+                && Math.abs(yaw - NEUTRAL_YAW) < 1.5f && Math.abs(tilt) < 1f;
+        rest_blend += ((at_rest ? 1f : 0f) - rest_blend) * k;
+        idle_blend = clamp(idle_blend, 0f, 1f);
+        rest_blend = clamp(rest_blend, 0f, 1f);
     }
 
     // ---------------------------------------------------------- render
 
     /**
-     * Draws the full body inside the given box (the caller owns the panel).
-     * The model is centered, aspect never squashed (uniform scale from the
-     * box), and a soft shadow disc grounds the feet.
+     * Draws the full body inside the given box (the caller owns the panel):
+     * violet pedestal (radial glow + rounded vignette + floor shadow), the
+     * model with studio lighting, and the placeholder states — everything is
+     * derived from the box, no extra parameters needed.
      */
     public void render(DrawContext ctx, MatrixStack m, float x, float y, float w, float h, float dt) {
-        update(dt);
-        // swap in a profile resolved on a worker thread (render thread only!)
-        GameProfile fresh = pendingProfile;
-        if (fresh != null && fresh.getName() != null && fresh.getName().equalsIgnoreCase(nick)) {
-            profile = fresh;
-            pendingProfile = null;
-        }
-        retryResolve();
-        OtherClientPlayerEntity entity = entityFor(profile);
-        if (entity == null) {
+        step(dt);
+        if (!(w > 0f) || !(h > 0f)) {
             return;
         }
 
-        float cx = x + w / 2f;
-        float cy = y + h / 2f;
-        // uniform scale: full 1.8-block body fits the box, never wider than it
-        float size = Math.min(h * 0.52f, w * 0.75f);
-        float feetY = cy + 0.9f * size;
+        // half-pixel snap: the pedestal stays crisp at every GUI scale
+        float cx = Math.round((x + w / 2f) * 2f) / 2f;
+        float cy = Math.round((y + h / 2f) * 2f) / 2f;
+        float wave = (float) (Math.PI * 2.0 / BOB_PERIOD);
+        float bob = (float) Math.sin(anim_time * wave) * BOB_PX * idle_blend;
 
-        // ground shadow under the feet (the vanilla pass draws no shadows)
-        float shadowW = size * 0.62f;
-        UiRender.rect(m, cx - shadowW / 2f, feetY - 2f, shadowW, 4.5f,
-                2.2f, fade(0x583B2A66));
+        draw_pedestal(m, x, y, w, h, cx, cy, wave);
 
-        float prevBody = entity.bodyYaw;
-        float prevYaw = entity.getYaw();
-        float prevPitch = entity.getPitch();
-        float prevHead = entity.headYaw;
-        float prevPrevHead = entity.prevHeadYaw;
-        entity.bodyYaw = yaw;
-        entity.setYaw(yaw);
-        entity.headYaw = yaw;
-        entity.prevHeadYaw = yaw;
-        entity.setPitch(-tilt); // model tilt is carried by the quaternion
+        OtherClientPlayerEntity entity = render_entity;
+        if (entity != null) {
+            float size = clamp(Math.min(h * 0.52f, w * 0.75f), 6f, 512f);
+            float feet_y = cy + 0.9f * size + bob;
+            draw_floor_shadow(m, cx, feet_y, size, skin_a);
 
-        Quaternionf rotZ = new Quaternionf().rotateZ((float) Math.PI);
-        Quaternionf rotX = new Quaternionf().rotateX((float) Math.toRadians(tilt));
-        Quaternionf combined = new Quaternionf(rotZ).mul(rotX);
-        float scale = size / entity.getScale();
-        Vector3f offset = new Vector3f(0f, entity.getHeight() / 2f, 0f);
+            // breathing: a slow sway around the neutral pose, only when settled
+            float body_yaw = yaw + SWAY_DEG * (float) Math.sin(anim_time * wave + 1.1f) * rest_blend;
+            float tilt_deg = clamp(tilt
+                            + BREATH_TILT_DEG * (float) Math.sin(anim_time * wave + 0.4f) * rest_blend,
+                    -MAX_TILT - 2f, MAX_TILT + 2f);
+            draw_model(ctx, m, entity, cx, cy, size, body_yaw, tilt_deg);
+        }
+
+        // crossfade veil: the panel colour hides the model until it settles
+        if (entity != null && skin_a < 0.999f) {
+            UiRender.rect(m, x, y, w, h, 10,
+                    UiRender.withAlpha(PANEL_VEIL, (int) ((1f - skin_a) * 245f)));
+        }
+
+        float placeholder_a = 1f - skin_a;
+        if (show_placeholder && placeholder_a > 0.01f) {
+            // the placeholder sits in its own halo so the pedestal never dies
+            UiRender.glow(m, cx, cy, Math.min(w, h) * 0.45f, ACCENT, 0.11f, placeholder_a);
+            draw_placeholder(m, x, y, w, h, cx, cy, placeholder_a);
+        }
+    }
+
+    /** Radial glow + rounded vignette + hairline: the studio pedestal. */
+    private void draw_pedestal(MatrixStack m, float x, float y, float w, float h,
+                               float cx, float cy, float wave) {
+        float breath = 1f + 0.06f * (float) Math.sin(anim_time * wave);
+        float peak = (0.13f + 0.07f * skin_a) * breath;
+        UiRender.glow(m, cx, cy - h * 0.08f, Math.min(w, h) * 0.62f, ACCENT, peak, 1f);
+
+        float d = Math.min(w, h) * 0.26f;
+        if (d > 1.5f) {
+            int top = UiRender.withAlpha(0x07040F, 62);
+            int bottom = UiRender.withAlpha(0x07040F, 96);
+            UiRender.gradient(m, x, y, w, d, top, 0, 0, top);
+            UiRender.gradient(m, x, y + h - d, w, d, 0, bottom, bottom, 0);
+            UiRender.gradient(m, x, y, d, h, top, bottom, 0, 0);
+            UiRender.gradient(m, x + w - d, y, d, h, 0, 0, bottom, top);
+        }
+        UiRender.outline(m, x, y, w, h, 10,
+                UiRender.withAlpha(0xFFB49AFF, (int) (26f + 30f * skin_a)), 1f);
+    }
+
+    /** Soft elliptical floor shadow: three stacked ellipses, dark violet. */
+    private static void draw_floor_shadow(MatrixStack m, float cx, float feet_y, float size, float alpha) {
+        if (!(alpha > 0.01f) || !(size > 0f)) {
+            return;
+        }
+        float w0 = size * 0.80f;
+        float h0 = Math.max(4f, size * 0.17f);
+        UiRender.rect(m, cx - w0 / 2f, feet_y - h0 / 2f, w0, h0, h0 / 2f,
+                UiRender.withAlpha(0xFF171034, (int) (40f * alpha)));
+        float w1 = w0 * 0.70f;
+        float h1 = h0 * 0.72f;
+        UiRender.rect(m, cx - w1 / 2f, feet_y - h1 / 2f, w1, h1, h1 / 2f,
+                UiRender.withAlpha(0xFF100B24, (int) (72f * alpha)));
+        float w2 = w0 * 0.42f;
+        float h2 = h0 * 0.42f;
+        UiRender.rect(m, cx - w2 / 2f, feet_y - h2 / 2f, w2, h2, h2 / 2f,
+                UiRender.withAlpha(0xFF090615, (int) (110f * alpha)));
+    }
+
+    /** Pulsing USER glyph while fetching (and NODE badge when the fetch failed). */
+    private void draw_placeholder(MatrixStack m, float x, float y, float w, float h,
+                                  float cx, float cy, float alpha) {
+        float pulse = 0.5f + 0.5f * (float) Math.sin(anim_time * 2.4f);
+        float size = clamp(Math.min(w, h) * 0.34f, 12f, 30f);
+        int col = UiRender.withAlpha(0xFFD7CBFF, (int) (alpha * (120f + 80f * pulse)));
+        m.push();
+        m.translate(cx, cy, 0f);
+        m.scale(1f + 0.05f * pulse, 1f + 0.05f * pulse, 1f);
+        m.translate(-cx, -cy, 0f);
+        // drawCentered centres by the text box; +3/+height/4 lands the glyph on cy
+        Icons.drawCentered(m, Icons.Glyph.USER_OUTLINE, cx,
+                cy + 3f + Icons.height(Icons.Glyph.USER_OUTLINE, size) * 0.25f, size, col);
+        m.pop();
+
+        if (show_error) {
+            float bx = x + w - 13f;
+            float by = y + 13f;
+            float r = 9.5f;
+            UiRender.rect(m, bx - r, by - r, r * 2f, r * 2f, r,
+                    UiRender.withAlpha(0x3A0B0618, (int) (alpha * 235f)));
+            UiRender.outline(m, bx - r, by - r, r * 2f, r * 2f, r,
+                    UiRender.withAlpha(0xFFE05B5B, (int) (alpha * (110f + 60f * pulse))), 1f);
+            float ns = 11f;
+            Icons.drawCentered(m, Icons.Glyph.NODE, bx,
+                    by + 3f + Icons.height(Icons.Glyph.NODE, ns) * 0.25f, ns,
+                    UiRender.withAlpha(0xFFFFC9C9, (int) (alpha * (150f + 70f * pulse))));
+        }
+    }
+
+    /** Saves the entity pose, draws it, restores everything even on failure. */
+    private void draw_model(DrawContext ctx, MatrixStack m, OtherClientPlayerEntity entity,
+                            float cx, float cy, float size, float body_yaw, float tilt_deg) {
+        float prev_body = entity.bodyYaw;
+        float prev_yaw = entity.getYaw();
+        float prev_pitch = entity.getPitch();
+        float prev_head = entity.headYaw;
+        float prev_prev_head = entity.prevHeadYaw;
         EntityRenderDispatcher dispatcher = MinecraftClient.getInstance().getEntityRenderDispatcher();
-        Quaternionf prevRot = new Quaternionf(dispatcher.getRotation());
+        Quaternionf prev_rot = null;
         try {
-            InventoryScreen.drawEntity(ctx, cx, cy, scale, offset, combined, rotX, entity);
+            Quaternionf current_rot = dispatcher.getRotation();
+            prev_rot = current_rot == null ? null : new Quaternionf(current_rot);
+            entity.bodyYaw = body_yaw;
+            entity.setYaw(body_yaw);
+            entity.headYaw = body_yaw;
+            entity.prevHeadYaw = body_yaw;
+            entity.setPitch(-tilt_deg); // model tilt is carried by the quaternion
+
+            Quaternionf rot_z = new Quaternionf().rotateZ((float) Math.PI);
+            Quaternionf rot_x = new Quaternionf().rotateX((float) Math.toRadians(tilt_deg));
+            Quaternionf combined = new Quaternionf(rot_z).mul(rot_x);
+            float entity_scale = entity.getScale();
+            if (!(entity_scale > 0.01f)) {
+                entity_scale = 1f;
+            }
+            Vector3f offset = new Vector3f(0f, entity.getHeight() / 2f, 0f);
+            draw_preview_entity(ctx, m, cx, cy, size / entity_scale, offset, combined, rot_x,
+                    tilt_deg, entity);
         } catch (Throwable t) {
-            // vanilla drawEntity sets the global dispatcher rotation and never
-            // restores it — keep the log quiet after the first failure
-            if (!renderErrorLogged) {
-                renderErrorLogged = true;
+            // a failing preview must never take the title screen down with it
+            if (!render_error_logged) {
+                render_error_logged = true;
                 TabVisualsClient.LOGGER.error("Preview entity render failed", t);
             }
-        }
-        dispatcher.setRotation(prevRot);
-        entity.bodyYaw = prevBody;
-        entity.setYaw(prevYaw);
-        entity.setPitch(prevPitch);
-        entity.headYaw = prevHead;
-        entity.prevHeadYaw = prevPrevHead;
-
-        // crossfade veil while the skin swaps after a nick change
-        if (switchT < 0.999f) {
-            UiRender.rect(m, x, y, w, h, 8, fadeVeil());
+        } finally {
+            if (prev_rot != null) {
+                dispatcher.setRotation(prev_rot);
+            }
+            entity.bodyYaw = prev_body;
+            entity.setYaw(prev_yaw);
+            entity.setPitch(prev_pitch);
+            entity.headYaw = prev_head;
+            entity.prevHeadYaw = prev_prev_head;
         }
     }
 
-    /** Panel-colored veil alpha for the nick-switch crossfade. */
-    private int fadeVeil() {
-        int a = (int) ((1f - switchT) * 255f) & 0xFF;
-        return (a << 24) | 0x12142E;
-    }
-
-    private int fade(int argb) {
-        int a = (int) (((argb >>> 24) & 0xFF) * switchT) & 0xFF;
-        return (argb & 0x00FFFFFF) | (a << 24);
+    /**
+     * InventoryScreen.drawEntity, transcribed 1:1 from vanilla bytecode, with
+     * one change: the shader key light is rotated with the model tilt — the
+     * recipe vanilla's own draggable PlayerSkinWidget uses — so the face keeps
+     * its light while dragged. At rest the rotation is the identity, i.e. the
+     * exact vanilla inventory lighting. Light stays MAX (the title screen
+     * lightmap is the white default, any lower value would read flat grey).
+     */
+    private static void draw_preview_entity(DrawContext ctx, MatrixStack matrices, float cx, float cy,
+                                            float size, Vector3f offset, Quaternionf rotation,
+                                            Quaternionf camera_orientation, float tilt_deg,
+                                            OtherClientPlayerEntity entity) {
+        EntityRenderDispatcher dispatcher = MinecraftClient.getInstance().getEntityRenderDispatcher();
+        matrices.push();
+        try {
+            matrices.translate(cx, cy, 50.0);
+            matrices.scale(size, size, -size);
+            matrices.translate(offset.x, offset.y, offset.z);
+            matrices.multiply(rotation);
+            ctx.draw();   // flush the GUI quads the pedestal was batched into
+            DiffuseLighting.method_56819(new Quaternionf().rotateX((float) Math.toRadians(tilt_deg)));
+            if (camera_orientation != null) {
+                dispatcher.setRotation(new Quaternionf(camera_orientation).conjugate()
+                        .rotateY(3.1415927f));
+            }
+            dispatcher.setRenderShadows(false);
+            ctx.draw(vcp -> dispatcher.render(entity, 0.0, 0.0, 0.0, 1.0f,
+                    ctx.getMatrices(), vcp, 15728880));
+            ctx.draw();
+        } finally {
+            dispatcher.setRenderShadows(true);
+            matrices.pop();
+            DiffuseLighting.method_34742();           // vanilla entity lights back
+            DiffuseLighting.enableGuiDepthLighting(); // same tail as drawEntity
+        }
     }
 
     private static float clamp(float v, float min, float max) {

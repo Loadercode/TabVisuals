@@ -61,6 +61,12 @@ public class Binds extends AbstractDraggable {
     private final Map<Item, Long> pill_born_ms = new HashMap<>();
     private final Map<Item, Integer> prev_item_counts = new HashMap<>();
     private final Set<Item> active_pill_items = new HashSet<>();
+    /** Стеки для запроса кулдауна: один ItemStack на предмет вместо нового каждый кадр. */
+    private final Map<Item, ItemStack> cooldown_stack_cache = new HashMap<>();
+    /** Стеки превью-пилюль (пустой список + открытый чат) — та же идея. */
+    private final Map<Item, ItemStack> preview_stack_cache = new HashMap<>();
+    /** Ширины рядов текущего кадра — переиспользуется вместо new ArrayList на кадр. */
+    private final List<Float> row_widths = new ArrayList<>();
     private long preview_born_ms;
     private FontRenderer font13;
     private FontRenderer font11;
@@ -171,9 +177,15 @@ public class Binds extends AbstractDraggable {
 
     private float getCooldownProgress(Item item) {
         if (HudHelper.nullCheck()) return 0;
-        ItemStack stack = new ItemStack(item);
+        // менеджер кулдаунов только читает группу предмета — общий стек безопасен
+        ItemStack stack = cooldown_stack_cache.computeIfAbsent(item, Item::getDefaultStack);
         assert mc.player != null;
         return mc.player.getItemCooldownManager().getCooldownProgress(stack, mc.getRenderTickCounter().getTickDelta(false));
+    }
+
+    /** Стек превью-пилючи по индексу предмета — без аллокации на кадр. */
+    private ItemStack preview_stack(int itemIndex) {
+        return preview_stack_cache.computeIfAbsent(EXAMPLE_ITEMS[itemIndex], Item::getDefaultStack);
     }
 
     @Override
@@ -290,7 +302,8 @@ public class Binds extends AbstractDraggable {
         float posY = getY();
         int totalBinds = activeBinds.size();
         int rowCount = (int) Math.ceil((double) totalBinds / BINDS_PER_ROW);
-        List<Float> rowWidths = new ArrayList<>();
+        List<Float> rowWidths = row_widths;
+        rowWidths.clear();
         float firstRowWidth = 0;
         if (font13 == null) {
             font13 = Fonts.getSize(13, Fonts.Type.DEFAULT);
@@ -338,7 +351,7 @@ public class Binds extends AbstractDraggable {
         if (activeBinds.isEmpty() && HudHelper.isChat(mc.currentScreen)) {
             java.lang.String name = "Example Bind";
             java.lang.String[] keys = {currentRandomKey1, currentRandomKey2, currentRandomKey3};
-            ItemStack[] stacks = {new ItemStack(EXAMPLE_ITEMS[currentItemIndex1]), new ItemStack(EXAMPLE_ITEMS[currentItemIndex2]), new ItemStack(EXAMPLE_ITEMS[currentItemIndex3])};
+            ItemStack[] stacks = {preview_stack(currentItemIndex1), preview_stack(currentItemIndex2), preview_stack(currentItemIndex3)};
             if (preview_born_ms == 0) preview_born_ms = now;
             float offsetX = padding;
             for (int i = 0; i < 3; i++) {

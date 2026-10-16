@@ -14,6 +14,7 @@
 		"InGameHudMixin",
 		"MouseMixin",
 		"PlayerListHudMixin",
+		"ScreenBackgroundMixin",
 		"TitleScreenMixin"
 	],
 	"injectors": {

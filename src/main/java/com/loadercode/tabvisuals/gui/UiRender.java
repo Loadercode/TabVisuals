@@ -2,6 +2,7 @@
 package com.loadercode.tabvisuals.gui;
 
 import com.loadercode.tabvisuals.gui.hud.HudRenderer;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.interfaces.QuickImports;
 import com.loadercode.tabvisuals.render.shape.ShapeProperties;
@@ -74,6 +75,35 @@ public final class UiRender implements QuickImports {
             return;
         }
         font.drawString(m, s, x, y, argb);
+    }
+
+    // ------------------------------------------------------------- icons
+
+    /**
+     * Draw-y of a glyph whose optical centre lands on {@code cy}.
+     *
+     * <p>FontRenderer draws at 0.5 scale with a -3 baseline shift, so the naive
+     * {@code cy - height/2} (used by Icons.drawCentered) leaves the icon
+     * floating above its box — the same trap as {@code centerBoxY} for text.
+     */
+    public static float iconY(Icons.Glyph glyph, float size, float cy) {
+        return cy + 3f - Icons.height(glyph, size) * 0.25f;
+    }
+
+    /** Draw-y of a glyph sitting on the same optical line as text drawn at {@code drawY} with {@code font}. */
+    public static float iconLineY(FontRenderer font, Icons.Glyph glyph, float size, float drawY) {
+        if (font == null) {
+            return drawY;
+        }
+        return drawY + (font.getStringHeight("Ag") - Icons.height(glyph, size)) * 0.25f;
+    }
+
+    /** Glyph centred on (cx, cy) — Icons.drawCentered with the baseline corrected (see {@link #iconY}). */
+    public static void iconCentered(MatrixStack m, Icons.Glyph glyph, float cx, float cy, float size, int argb) {
+        if (glyph == null || m == null) {
+            return;
+        }
+        Icons.draw(m, glyph, cx - Icons.width(glyph, size) / 2f, iconY(glyph, size, cy), size, argb);
     }
 
     // ----------------------------------------------------- LoxeDLC panels
@@ -211,6 +241,26 @@ public final class UiRender implements QuickImports {
             return;
         }
         font.drawStringWithScroll(m, s, x, y, maxWidth, argb);
+    }
+
+    /** 0.5px hairline — the shared separator recipe (snapped to the half pixel). */
+    public static void hairline(MatrixStack m, float x, float y, float w, int argb) {
+        if (w <= 0f || argb >>> 24 == 0) {
+            return;
+        }
+        rect(m, x, y, w, 0.5f, 0, argb);
+    }
+
+    /**
+     * Grab affordance: the MOVE_H glyph floating just under-right of the
+     * cursor — the visual "this window is draggable" hint. The caller eases
+     * the alpha in/out; a fully transparent hint draws nothing.
+     */
+    public static void dragHint(MatrixStack m, double mx, double my, float size, int argb) {
+        if (argb >>> 24 == 0) {
+            return;
+        }
+        iconCentered(m, Icons.MOVE_H, (float) mx + 11f, (float) my + 11f, size, argb);
     }
 
     /** Centered text inside a pill; returns the full pill width. */

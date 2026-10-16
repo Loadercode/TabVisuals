@@ -7,6 +7,7 @@ import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
 import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.island.IslandStatus;
@@ -23,6 +24,8 @@ public class MineStatus extends IslandStatus implements QuickImports {
 
     private static final Vec3d FT_SPAWN = new Vec3d(-68, 81, 5);
     private static final float TIME_BOX_PAD = 3f;  // отступ цифр внутри маленького окна таймера
+    private static final float ICON_SIZE = 11f;
+    private static final float ICON_GAP = 3f;
 
     /**
      * Один обход мира вместо двух за кадр, и не чаще, чем раз в 150 мс.
@@ -128,15 +131,19 @@ public class MineStatus extends IslandStatus implements QuickImports {
         var font7 = Fonts.getSize(18, Fonts.Type.NOTVISUALS_MEDIUM);
         float timeW = mc.textRenderer.getWidth(time);
         float boxW = TIME_BOX_PAD * 2 + timeW;
-        width = 10f + boxW + font7.getStringWidth(mineType);
+        // 4 слева + иконка + зазор + окно времени + 2 зазор + текст + 4 справа
+        width = 4f + ICON_SIZE + ICON_GAP + boxW + 2f + font7.getStringWidth(mineType) + 4f;
         height = 17f;
         float boxH = 12f;
-        float boxX = x + 4;
+        float iconX = x + 4;
+        float boxX = iconX + ICON_SIZE + ICON_GAP;
         float boxY = y + 2f;
         float timeY = boxY + (boxH - mc.textRenderer.fontHeight) / 2f + 1f;  // +1 для точной вертикали
         float textY = HudHelper.hud_text_mid_y(font7, mineType, y, height);
 
         int textColor = UiRender.mulAlpha(ColorAssist.getText(), alpha);
+        Icons.draw(context.getMatrices(), Icons.CUBE, iconX,
+                UiRender.iconY(Icons.CUBE, ICON_SIZE, y + height / 2f), ICON_SIZE, textColor);
         rectangle.render(ShapeProperties.create(context.getMatrices(), boxX, boxY, boxW, boxH).round(3f).color(UiRender.mulAlpha(color, alpha)).build());
         context.drawText(mc.textRenderer, time, (int) (boxX + TIME_BOX_PAD), (int) timeY, textColor, false);
         font7.drawStringSnapped(context.getMatrices(), mineType, boxX + boxW + 2, textY, textColor);

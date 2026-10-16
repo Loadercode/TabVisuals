@@ -5,6 +5,7 @@ import lombok.Getter;
 import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.gui.Theme;
 import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.loadercode.tabvisuals.gui.hud.Hud;
 import com.loadercode.tabvisuals.gui.hud.HudRenderer;
 import com.loadercode.tabvisuals.gui.hud.compat.Instance;
@@ -51,7 +52,8 @@ public class MediaPlayer extends AbstractDraggable {
     private float widthDuration;
     private FontRenderer bigFont;
     private FontRenderer miniFont;
-    private FontRenderer iconFont;
+    /** Размер иконок транспорта — тот же, что в зонах хитбоксов. */
+    private static final float TRANSPORT_ICON_SIZE = 17f;
 
     private static final float SPOTIFY_ARTWORK_CROP_BOTTOM = 0.20f;
     @Getter
@@ -125,7 +127,6 @@ public class MediaPlayer extends AbstractDraggable {
         if (bigFont == null) {
             bigFont = Fonts.getSize(14, Fonts.Type.DEFAULT);
             miniFont = Fonts.getSize(11, Fonts.Type.DEFAULT);
-            iconFont = Fonts.getSize(17, Fonts.Type.ICONS);
         }
     }
 
@@ -257,9 +258,10 @@ public class MediaPlayer extends AbstractDraggable {
         ensureFonts();
         float[] out = zone_buf;
         float baseX = base_x();
-        float prevW = iconFont.getStringWidth("O");
-        float playW = Math.max(iconFont.getStringWidth("I"), iconFont.getStringWidth("H"));
-        float nextW = iconFont.getStringWidth("P");
+        float prevW = Icons.width(Icons.Glyph.SKIP_PREV, TRANSPORT_ICON_SIZE);
+        float playW = Math.max(Icons.width(Icons.Glyph.PLAY, TRANSPORT_ICON_SIZE),
+                Icons.width(Icons.Glyph.PAUSE, TRANSPORT_ICON_SIZE));
+        float nextW = Icons.width(Icons.Glyph.SKIP_NEXT, TRANSPORT_ICON_SIZE);
         float p0 = baseX - 4f, p1 = baseX + 4.5f, p2 = baseX + 14f;
         float left = p0 - ZONE_PAD, right = p2 + nextW + ZONE_PAD;
         float b1 = (p0 + prevW + p1) / 2f;
@@ -328,19 +330,16 @@ public class MediaPlayer extends AbstractDraggable {
         }
     }
 
-    private static final String GLYPH_PREV = "O", GLYPH_PLAY = "I", GLYPH_PAUSE = "H", GLYPH_NEXT = "P";
-
-    /** Иконки транспорта поверх плашек: те же якоря, что и в zone_rects(). */
+    /** Иконки транспорта поверх плашек: центр каждой иконки = центр её зоны,
+     *  поэтому press-scale отжимает ровно нарисованную кнопку, а клик по зоне
+     *  (MouseMixin → press_zone) попадает в тот же хитбокс. */
     private void draw_transport(MatrixStack m, float[] zones, MediaBridge.Snapshot snap) {
-        float baseX = base_x();
-        float a0 = baseX - 4f, a1 = baseX + 4.5f, a2 = baseX + 14f;
-        float y = getY() + 25.5f;
         for (int i = 0; i < ZONE_COUNT; i++) {
             // без аллокации массива строк/координат на каждый кадр
-            String glyph = i == ZONE_PREV ? GLYPH_PREV
-                    : i == ZONE_NEXT ? GLYPH_NEXT
-                    : (snap.playing() ? GLYPH_PLAY : GLYPH_PAUSE);
-            float anchor = i == ZONE_PREV ? a0 : i == ZONE_NEXT ? a2 : a1;
+            Icons.Glyph glyph = i == ZONE_PREV ? Icons.Glyph.SKIP_PREV
+                    : i == ZONE_NEXT ? Icons.Glyph.SKIP_NEXT
+                    // кнопка показывает действие: играет — PAUSE (вектор), стоит — PLAY
+                    : (snap.playing() ? Icons.Glyph.PAUSE : Icons.Glyph.PLAY);
             float scale = UiRender.pressScale(press_t[i]);
             float cx = zones[4 * i] + zones[4 * i + 2] / 2f;
             float cy = zones[4 * i + 1] + zones[4 * i + 3] / 2f;
@@ -349,7 +348,12 @@ public class MediaPlayer extends AbstractDraggable {
             m.translate(cx, cy, 0f);
             m.scale(scale, scale, 1f);
             m.translate(-cx, -cy, 0f);
-            iconFont.drawString(m, glyph, anchor, y, color);
+            // PAUSE векторный (два бара) — у него своя центровка, у глифов — baseline-коррекция
+            if (glyph == Icons.Glyph.PAUSE) {
+                Icons.drawCentered(m, glyph, cx, cy, TRANSPORT_ICON_SIZE, color);
+            } else {
+                UiRender.iconCentered(m, glyph, cx, cy, TRANSPORT_ICON_SIZE, color);
+            }
             m.pop();
         }
     }
@@ -402,15 +406,27 @@ public class MediaPlayer extends AbstractDraggable {
         }
     }
 
+    /** Кэш первой буквы: пересчёт только при смене строки снапшота. */
+    private String letter_source_cache;
+    private String letter_cache = "";
+
     /** Первая буква названия трека (или приложения), если она есть. */
     private String cover_letter(MediaBridge.Snapshot snap) {
         String source = snap.title() != null && !snap.title().isBlank() ? snap.title() : snap.app();
         if (source == null) return "";
+        // идентичность строк: снапшоты переиспользуют title/app, пока трек не сменился
+        if (source == letter_source_cache) return letter_cache;
+        String letter = "";
         for (int i = 0; i < source.length(); i++) {
             char c = source.charAt(i);
-            if (!Character.isWhitespace(c)) return String.valueOf(Character.toUpperCase(c));
+            if (!Character.isWhitespace(c)) {
+                letter = String.valueOf(Character.toUpperCase(c));
+                break;
+            }
         }
-        return "";
+        letter_source_cache = source;
+        letter_cache = letter;
+        return letter;
     }
 
     // ------------------------------------------------------------------ draw

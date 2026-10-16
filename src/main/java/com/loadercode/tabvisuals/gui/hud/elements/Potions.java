@@ -2,6 +2,8 @@
 package com.loadercode.tabvisuals.gui.hud.elements;
 
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
+import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.effect.StatusEffect;
@@ -41,9 +43,14 @@ public class Potions extends AbstractDraggable {
     };
     private static List<RegistryEntry<StatusEffect>> previewEffects;
     private FontRenderer fontCached;
-    private FontRenderer iconCached;
     private FontRenderer fontPotionCache;
     private FontRenderer itemsCached;
+    /** Кадровая развязка для въезда панели. */
+    private long last_frame_ns;
+    private float entrance_t = 1f;
+    /** Размеры панели, накапливаемые циклом строк внутри Calculate.setAlpha. */
+    private float draw_offset = 23f;
+    private float draw_max_width = 95f;
     private long lastEffectChange = 0;
     private RegistryEntry<StatusEffect> currentRandomEffect = StatusEffects.SPEED;
     private int activeEffectCount = 0;
@@ -128,23 +135,37 @@ public class Potions extends AbstractDraggable {
         if(fontCached == null){
             fontCached = Fonts.getSize(13,Fonts.Type.DEFAULT);
             fontPotionCache = Fonts.getSize(13,Fonts.Type.DEFAULT);
-            iconCached = Fonts.getSize(17,Fonts.Type.ICONS);
-            itemsCached = Fonts.getSize(12,Fonts.Type.DEFAULT);
-
+            itemsCached = Fonts.getSize(12, Fonts.Type.DEFAULT);
         }
+
+        // wall-clock развязка: пауза отрисовки (>250 мс) перезапускает въезд панели
+        long prev_ns = last_frame_ns;
+        long nowNs = System.nanoTime();
+        last_frame_ns = nowNs;
+        float dt = prev_ns == 0L ? 0.016f : (nowNs - prev_ns) / 1_000_000_000f;
+        if (dt > 0.1f) dt = 0.1f;
+        if (prev_ns == 0L || nowNs - prev_ns > 250_000_000L) entrance_t = 0f;
+        entrance_t = Math.min(1f, entrance_t + dt / 0.30f);
+        float enterInv = 1f - entrance_t;
+        final float enter = 1f - enterInv * enterInv * enterInv;
 
         String effectCountText = String.valueOf(activeEffectCount);
 
-        int[] gc = ColorAssist.getRectangleGradientColors();
         int blurQuality = com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality();
-        float totalH = getHeight();
+        draw_offset = 23f;
+        draw_max_width = 95f;
 
-        blur.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), totalH)
+        // Въезд панели: подъём снизу + альфа, как у CoolDowns
+        matrix.push();
+        matrix.translate(0f, (1f - enter) * -6f, 0f);
+        Calculate.setAlpha(enter, () -> {
+        int[] gc = ColorAssist.getRectangleGradientColors();
+        blur.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), getHeight())
                 .round(4f)
                 .quality(blurQuality)
                 .color(ColorAssist.getBlurColor())
                 .build());
-        rectangle.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), totalH)
+        rectangle.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), getHeight())
                 .round(4f)
                 .thickness(0.1f)
                 .outlineColor(ColorAssist.getOutlineColor())
@@ -171,18 +192,19 @@ public class Potions extends AbstractDraggable {
         rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 1f, 6)
                 .color(ColorAssist.getText(0.5F)).round(0F).build());
 
-        iconCached.drawString(matrix, "C", getX() + HudHelper.hud_px(5f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
+        // Иконка шапки — оптически на одной линии с заголовком
+        Icons.draw(matrix, Icons.POTION, getX() + HudHelper.hud_px(4.5f),
+                UiRender.iconLineY(fontCached, Icons.POTION, 17f, getY() + HudHelper.hud_px(6.5f)),
+                17f, ColorAssist.getText());
         fontCached.drawString(matrix, getName(), getX() + HudHelper.hud_px(22f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
 
         float centerX = getX() + getWidth() / 2.0F;
-        float offset = 23;
-        float maxWidth = 95;
 
         if (list.isEmpty() && HudHelper.isChat(mc.currentScreen)) {
             if (preview_born_ms == 0) preview_born_ms = now;
             final float rowStagger = stagger_progress(now, preview_born_ms, 0);
             final float rowSlide = (1f - rowStagger) * -12f;
-            float centerY = HudHelper.hud_px(getY() + offset);
+            float centerY = HudHelper.hud_px(getY() + draw_offset);
             String name = "Example effect";
             String duration = "**:**";
             int textColor = ColorAssist.getText();
@@ -202,8 +224,8 @@ public class Potions extends AbstractDraggable {
             });
             matrix.pop();
             float width = (float) Math.ceil(fontPotionCache.getStringWidth(name + duration)) + 30;
-            maxWidth = Math.max(width, maxWidth);
-            offset += 11 * rowStagger;
+            draw_max_width = Math.max(width, draw_max_width);
+            draw_offset += 11 * rowStagger;
         } else {
             preview_born_ms = 0;
             for (int rowIndex = 0; rowIndex < list.size(); rowIndex++) {
@@ -212,7 +234,7 @@ public class Potions extends AbstractDraggable {
                 final float animation = potion.anim.getOutput().floatValue();
                 final float rowStagger = stagger_progress(now, potion.bornMs(), rowIndex);
                 final float rowSlide = (1f - rowStagger) * -12f;
-                float centerY = HudHelper.hud_px(getY() + offset);
+                float centerY = HudHelper.hud_px(getY() + draw_offset);
                 int amplifier = effect.getAmplifier();
                 String name = com.loadercode.tabvisuals.gui.hud.HudRenderer.effectName(com.loadercode.tabvisuals.gui.hud.HudRenderer.effectKey(effect.getTranslationKey()));
                 String duration = getDuration(effect);
@@ -246,12 +268,14 @@ public class Potions extends AbstractDraggable {
                 });
                 matrix.pop();
                 float width = (float) Math.ceil(fontPotionCache.getStringWidth(name + lvl + duration)) + 30;
-                maxWidth = Math.max(width, maxWidth);
-                offset += 11 * animation * rowStagger;
+                draw_max_width = Math.max(width, draw_max_width);
+                draw_offset += 11 * animation * rowStagger;
             }
         }
-        setWidth((int) Math.ceil(maxWidth));
-        setHeight((int) Math.ceil(offset));
+        });
+        matrix.pop();
+        setWidth((int) Math.ceil(draw_max_width));
+        setHeight((int) Math.ceil(draw_offset));
     }
 
     private static float clamp01(float value) {

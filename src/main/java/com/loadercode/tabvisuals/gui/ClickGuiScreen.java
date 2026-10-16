@@ -4,6 +4,7 @@ package com.loadercode.tabvisuals.gui;
 import com.loadercode.tabvisuals.gui.config.ConfigManager;
 import com.loadercode.tabvisuals.gui.hud.HudRenderer;
 import com.loadercode.tabvisuals.gui.hud.NotificationManager;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.loadercode.tabvisuals.gui.module.ModuleRegistry;
 import com.loadercode.tabvisuals.gui.module.ModuleStub;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
@@ -37,11 +38,16 @@ import java.util.Map;
 
 /**
  * Click GUI in the LoxeDLC MenuScreen layout: a floating 400x250 window
- * (MMB-draggable, ease-back open), a left-docked icon rail with the client
- * logo and category tabs, a header with the category glyph + name, a search
- * field for RENDER/MISC, a two-column module card grid (name / description /
- * settings glyphs / toggle pill / bind chip; right-click opens the settings
- * popup), a compact Configs tab and the theme picker behind the rail gear.
+ * (draggable by its header with LMB or anywhere with MMB, ease-back open),
+ * a left-docked icon rail with the client logo and category tabs, a header
+ * with the category glyph + name, a search field for RENDER/MISC, a two-column
+ * module card grid (name / description / settings glyphs / toggle pill /
+ * bind chip; right-click opens the settings popup), a compact Configs tab and
+ * the theme picker behind the rail gear.
+ *
+ * <p>Window position is persisted through ConfigManager (guiX/guiY) and clamped
+ * on load, so a resolution change never loses the window off-screen; while it
+ * is being dragged a faint MOVE_H glyph rides the cursor.
  *
  * <p>Animation model: every easing is FPS-independent — a value approaches its
  * target with {@code 1 - exp(-frameDt * k)} (see {@link #approach}). The panel
@@ -53,19 +59,13 @@ import java.util.Map;
  */
 public final class ClickGuiScreen extends Screen {
 
-    // --- fonts (LoxeDLC sizes) ---
+    // --- fonts (LoxeDLC sizes) — icon fonts are routed through Icons, not these ---
     private static final FontRenderer F_TITLE = Fonts.getSize(15, Fonts.Type.DEFAULT);
     private static final FontRenderer F_HEAD = Fonts.getSize(15, Fonts.Type.SEMI);
     private static final FontRenderer F_BODY = Fonts.getSize(12, Fonts.Type.REGULAR);
     private static final FontRenderer F_SEMI = Fonts.getSize(12, Fonts.Type.SEMI);
     private static final FontRenderer F_BOLD = Fonts.getSize(12, Fonts.Type.BOLD);
     private static final FontRenderer F_TINY = Fonts.getSize(11, Fonts.Type.REGULAR);
-    private static final FontRenderer F_ICON_A = Fonts.getSize(18, Fonts.Type.GUIICONS);
-    private static final FontRenderer F_ICON_B = Fonts.getSize(16, Fonts.Type.GUIICONS);
-    private static final FontRenderer F_ICON_C = Fonts.getSize(14, Fonts.Type.GUIICONS);
-    private static final FontRenderer F_ICONS = Fonts.getSize(17, Fonts.Type.ICONS);
-    private static final FontRenderer F_CAT = Fonts.getSize(18, Fonts.Type.ICONSCATEGORY);
-    private static final FontRenderer F_SEARCH = Fonts.getSize(15, Fonts.Type.ICONS);
 
     // --- window geometry (LoxeDLC MenuScreen) ---
     private static final float WIN_W = 400f;
@@ -81,6 +81,17 @@ public final class ClickGuiScreen extends Screen {
     private static final float CARD_W = 182f;
     private static final float CARD_GAP = 9f;
     private static final float DROP_ROW_H = 12f;
+
+    // --- shared radii: one recipe per surface size (windows/cards 10, small fields 4, pills h/2) ---
+    private static final float WIN_R = 10f;
+    private static final float CARD_R = 10f;
+    private static final float FIELD_R = 4f;
+
+    // --- header / drag zones ---
+    /** Header band height — the top bar with the title; drag handle of the window. */
+    private static final float HEAD_H = 28f;
+    /** Slice of the header that must stay on screen (px) — the window can never be lost. */
+    private static final float GRAB_MIN = 40f;
 
     // --- settings popup row metrics (LoxeDLC ModuleSettingsWindow) ---
     /** Checkbox rows are compact; every other control sits on a 22px line. */
@@ -105,13 +116,21 @@ public final class ClickGuiScreen extends Screen {
     private final Map<Category, Float> scrollByCat = new EnumMap<>(Category.class);
     private String search = "";
     private boolean searchFocused = false;
+    /** Search field text with the caret — rebuilt only when the query/focus changes. */
+    private String searchText = "";
+    private String searchTextQuery = "\0";
+    private boolean searchTextFocus;
 
     // --- window position, kept as screen percents like LoxeDLC ---
     private float winX, winY;
     private float offXP = 0.5f, offYP = 0.5f;
     private int lastW, lastH;
     private boolean dragging;
+    /** Button that owns the current window drag (0 = header LMB, 2 = MMB anywhere). */
+    private int dragButton = -1;
     private double dragOffX, dragOffY;
+    /** Eased alpha of the MOVE_H cursor hint (full while dragging, faint on header hover). */
+    private float dragHint;
     /** Mouse transformed through the open-scale — matches the drawn geometry. */
     private double tmx, tmy;
 
@@ -176,6 +195,26 @@ public final class ClickGuiScreen extends Screen {
     private float smoothScroll;
     private float searchX, searchY, searchW = 80, searchH = 15;
     private float gearX, gearY, gearSize = 20;
+
+    /** Visible categories — the module registry is static, so the list is built once. */
+    private List<Category> visibleCats;
+    /** Filtered module list + the (tab, query) it was built for — no rebuild per frame. */
+    private final List<ModuleStub> filteredMods = new ArrayList<>();
+    private Category filteredCat;
+    private String filteredQ = null;
+    /** Hot-path string caches: bind-chip width, key labels, slider read-outs. */
+    private final Map<String, Float> chipWidthCache = new HashMap<>();
+    private final Map<Integer, String> keyLabelCache = new HashMap<>();
+    private final Map<String, String> valueLabelCache = new HashMap<>();
+    private final Map<String, Float> valueLabelFor = new HashMap<>();
+    /** Popup title, truncated once in openPopup instead of every frame. */
+    private String popTitle = "";
+    /** Picker hex label cache — rebuilt only when the edited colour actually moves. */
+    private String hexCache = "";
+    private int hexCacheColor;
+    private boolean hexCacheValid;
+    /** Config name field focus glow 0..1 (the search field's recipe). */
+    private float cfgFocusAnim;
 
     // --- settings popup (LoxeDLC ModuleSettingsWindow) ---
     private ModuleStub popupModule;
@@ -313,6 +352,8 @@ public final class ClickGuiScreen extends Screen {
     private static final String CFG_SAVE = "cfg:save";
     private static final String CFG_LOAD = "cfg:load:";
     private static final String CFG_DEL = "cfg:del:";
+    /** Config card row hover — keyed by name, pruned with the button anims. */
+    private static final String CFG_ROW = "cfgrow:";
 
     // ------------------------------------------------------------------ render
 
@@ -350,7 +391,9 @@ public final class ClickGuiScreen extends Screen {
         cfgRows.clear();
         themeRows.clear();
 
-        // window position tracks the screen size by percent (LoxeDLC)
+        // window position tracks the screen size by percent (LoxeDLC); the
+        // first placement comes from the persisted guiX/guiY, clamped so a
+        // smaller resolution (or GUI scale) never starts the window off-screen
         int cw = MinecraftClient.getInstance().getWindow().getScaledWidth();
         int ch = MinecraftClient.getInstance().getWindow().getScaledHeight();
         if (lastW != cw || lastH != ch) {
@@ -358,13 +401,20 @@ public final class ClickGuiScreen extends Screen {
                 winX = cw * offXP - WIN_W / 2f;
                 winY = ch * offYP - WIN_H / 2f;
             } else {
-                winX = cw / 2f - WIN_W / 2f;
-                winY = ch / 2f - WIN_H / 2f;
+                float[] saved = ConfigManager.guiPosition();
+                if (saved != null) {
+                    winX = saved[0];
+                    winY = saved[1];
+                } else {
+                    winX = cw / 2f - WIN_W / 2f;
+                    winY = ch / 2f - WIN_H / 2f;
+                }
                 offXP = (winX + WIN_W / 2f) / cw;
                 offYP = (winY + WIN_H / 2f) / ch;
             }
             lastW = cw;
             lastH = ch;
+            clampWindowPos();
         }
 
         openFade = clamp01(openT);
@@ -401,6 +451,23 @@ public final class ClickGuiScreen extends Screen {
             renderPicker(m, mouseX, mouseY);
         }
 
+        // drag cursor hint: a faint MOVE_H rides the pointer while it hovers the
+        // draggable header, and holds steady while the window is actually carried
+        float hintTarget = 0f;
+        if (!closing && openT > 0.9f && !settingsView && settingsAnim <= 0.01f
+                && !pickerOpen && pickerAnim <= 0.01f) {
+            if (dragging) {
+                hintTarget = 0.85f;
+            } else if (headerHover()) {
+                hintTarget = 0.45f;
+            }
+        }
+        dragHint = approach(dragHint, hintTarget, dragging ? 22f : 12f);
+        if (dragHint > 0.01f) {
+            UiRender.dragHint(m, mouseX, mouseY, 13,
+                    UiRender.mulAlpha(UiRender.mix(t.text(), t.accent(), 0.45f), dragHint * openFade));
+        }
+
         // toasts drawn above the overlay; animation is driven here only when
         // the in-game HUD pass is not running (no world → no HUD frame)
         HudRenderer.renderToasts(MinecraftClient.getInstance(), m, width, height, MinecraftClient.getInstance().player == null);
@@ -408,34 +475,60 @@ public final class ClickGuiScreen extends Screen {
         FontRenderer.flushDeferred();
     }
 
-    /** Main window: blur + glass panel + hairline + header (LoxeDLC BackgroundComponent). */
+    /** Main window: drop shadow + blur + glass panel + hairline + header (LoxeDLC BackgroundComponent). */
     private void renderWindow(MatrixStack m, Theme t, float openA) {
+        // soft shadow first, so the blur pass and the panel paint over it
+        UiRender.shadow(m, winX, winY, WIN_W, WIN_H, WIN_R, 0.42f * openA);
         if (HudRenderer.blurEnabled()) {
             QuickImports.blur.setup();
             int tint = UiRender.mulAlpha(t.background(), 0.55f);
             QuickImports.blur.renderSmooth(ShapeProperties.create(m, winX, winY, WIN_W, WIN_H)
-                    .round(8)
+                    .round(WIN_R)
                     .quality(32)
                     .color(tint, tint, tint, tint)
                     .build(), 32);
         }
-        UiRender.rect(m, winX, winY, WIN_W, WIN_H, 8, UiRender.mulAlpha(t.panel(), openA));
-        UiRender.outline(m, winX, winY, WIN_W, WIN_H, 8, UiRender.mulAlpha(t.outline(), openA), 1f);
+        UiRender.rect(m, winX, winY, WIN_W, WIN_H, WIN_R, UiRender.mulAlpha(t.panel(), openA));
+        UiRender.outline(m, winX, winY, WIN_W, WIN_H, WIN_R, UiRender.mulAlpha(t.outline(), openA), 1f);
 
         // header: category glyph in the 13px gutter, title on the shared text column;
         // both are centred on the title's own optical centre so they read as one line
         int headCol = UiRender.mulAlpha(t.text(), openA);
-        String headGlyph = activeCategory == Category.CONFIGS ? "H" : String.valueOf(activeCategory.icon());
         String headTitle = activeCategory.displayName();
         float titleY = winY + 12;
         float titleMid = titleY - 3f + F_TITLE.getStringHeight(headTitle) * 0.25f;
-        FontRenderer.drawCentered(F_CAT, m, headGlyph, winX + GRID_X + 6.5f,
-                centerBoxY(F_CAT, headGlyph, titleMid - 8f, 16f), headCol);
+        UiRender.iconCentered(m, catGlyph(activeCategory), winX + GRID_X + 6.5f, titleMid, 18, headCol);
         F_TITLE.drawString(m, headTitle, winX + GRID_X + 15, titleY, headCol);
-        UiRender.rect(m, winX + GRID_X, winY + 28, WIN_W - GRID_X, 0.5f, 0,
+
+        // grip: three hairlines in the header's optical centre — the quiet
+        // "this window is draggable" affordance; brightens under the cursor
+        boolean gripHover = headerHover();
+        int gripCol = UiRender.mulAlpha(t.text(), (gripHover ? 90f : 46f) / 255f * openA);
+        float gripCx = winX + WIN_W / 2f;
+        UiRender.hairline(m, gripCx - 5f, titleMid - 2.5f, 10f, gripCol);
+        UiRender.hairline(m, gripCx - 5f, titleMid, 10f, gripCol);
+        UiRender.hairline(m, gripCx - 5f, titleMid + 2.5f, 10f, gripCol);
+
+        UiRender.hairline(m, winX + GRID_X, winY + HEAD_H, WIN_W - GRID_X,
                 UiRender.mulAlpha(UiRender.withAlpha(t.outline(), 140), openA));
 
         renderRail(m, t);
+    }
+
+    /**
+     * Category tab glyph, routed through Icons. The per-tab visual stays
+     * LoxeDLC-faithful: PLAYER keeps the person glyph ('D' → CAT_TARGET) and
+     * MISC keeps the box glyph ('E' → CAT_WORLD), exactly as Category.icon().
+     */
+    private static Icons.Glyph catGlyph(Category c) {
+        return switch (c) {
+            case COMBAT -> Icons.CAT_COMBAT;
+            case PLAYER -> Icons.CAT_TARGET;
+            case MOVEMENT -> Icons.CAT_MOVEMENT;
+            case RENDER -> Icons.CAT_VISUAL;
+            case MISC -> Icons.CAT_WORLD;
+            case CONFIGS -> Icons.CAT_CONFIGS;
+        };
     }
 
     /** Left-docked icon rail: logo box, category tabs, gear (LoxeDLC CategoryContainer). */
@@ -448,17 +541,18 @@ public final class ClickGuiScreen extends Screen {
         float railX = winX - RAIL_W - RAIL_GAP;
         float railY = winY + (WIN_H - railH) / 2f;
 
+        UiRender.shadow(m, railX, railY, RAIL_W, railH, WIN_R, 0.32f * openFade);
         if (HudRenderer.blurEnabled()) {
             QuickImports.blur.setup();
             int tint = UiRender.mulAlpha(t.background(), 0.55f);
             QuickImports.blur.renderSmooth(ShapeProperties.create(m, railX, railY, RAIL_W, railH)
-                    .round(8)
+                    .round(WIN_R)
                     .quality(32)
                     .color(tint, tint, tint, tint)
                     .build(), 32);
         }
-        UiRender.rect(m, railX, railY, RAIL_W, railH, 8, UiRender.mulAlpha(t.panel(), 0.98f * openFade));
-        UiRender.outline(m, railX, railY, RAIL_W, railH, 8, UiRender.mulAlpha(t.outline(), openFade), 1f);
+        UiRender.rect(m, railX, railY, RAIL_W, railH, WIN_R, UiRender.mulAlpha(t.panel(), 0.98f * openFade));
+        UiRender.outline(m, railX, railY, RAIL_W, railH, WIN_R, UiRender.mulAlpha(t.outline(), openFade), 1f);
 
         // logo box at the top of the rail — brand logo cropped to the TV mark
         float logoBoxX = railX + (RAIL_W - TAB) / 2f;
@@ -502,14 +596,13 @@ public final class ClickGuiScreen extends Screen {
             boolean isActive = c == activeCategory;
             boolean hover = UiRender.inside(tmx, tmy, tx, ty, TAB, TAB);
             if (!isActive && hover) {
-                UiRender.rect(m, tx, ty, TAB, TAB, 4, UiRender.mulAlpha(t.cardHover(), openFade));
+                UiRender.rect(m, tx, ty, TAB, TAB, 5, UiRender.mulAlpha(t.cardHover(), openFade));
             }
             float sel = approach(tabSelAnim.getOrDefault(c, 0f), isActive ? 1f : 0f, 13f);
             tabSelAnim.put(c, sel);
             int col = UiRender.mix(UiRender.mix(t.textSecondary(), t.text(), hover ? 1f : 0f), t.accent(), sel);
-            String glyph = String.valueOf(c.icon());
-            F_CAT.drawCenteredString(m, glyph, tx + TAB / 2.0,
-                    centerBoxY(F_CAT, glyph, ty, TAB), UiRender.mulAlpha(col, openFade));
+            UiRender.iconCentered(m, catGlyph(c), tx + TAB / 2f, ty + TAB / 2f, 18,
+                    UiRender.mulAlpha(col, openFade));
             tabs.add(new TabRect(c, tx, ty, TAB, TAB));
             ty += TAB + TAB_SP;
         }
@@ -517,12 +610,16 @@ public final class ClickGuiScreen extends Screen {
         // gear at the bottom of the rail — the theme overlay
         gearX = railX + (RAIL_W - gearSize) / 2f;
         gearY = railY + railH - 26;
-        boolean gearHover = UiRender.inside(tmx, tmy, gearX, gearY, gearSize, gearSize);
-        int gearBg = settingsView ? UiRender.mulAlpha(t.accent(), 0.85f) : (gearHover ? t.cardHover() : t.card());
+        float ghv = easeHover("rail:gear", UiRender.inside(tmx, tmy, gearX, gearY, gearSize, gearSize));
+        float gpr = easePress("rail:gear", "rail:gear".equals(pressedBtn));
+        pushScale(m, gearX + gearSize / 2f, gearY + gearSize / 2f, UiRender.pressScale(gpr));
+        int gearBg = settingsView ? UiRender.mulAlpha(t.accent(), 0.85f)
+                : UiRender.mix(t.card(), t.cardHover(), Math.max(ghv, 0.6f * gpr));
         UiRender.rect(m, gearX, gearY, gearSize, gearSize, 5, UiRender.mulAlpha(gearBg, openFade));
-        int glyph = settingsView ? 0xFFFFFFFF : t.textSecondary();
-        UiRender.outline(m, gearX + 5, gearY + 5, 10, 10, 5, UiRender.mulAlpha(glyph, openFade), 1.3f);
-        UiRender.rect(m, gearX + 8, gearY + 8, 4, 4, 2, UiRender.mulAlpha(glyph, openFade));
+        int gearCol = settingsView ? 0xFFFFFFFF : UiRender.mix(t.textSecondary(), t.text(), ghv);
+        UiRender.iconCentered(m, Icons.GEAR, gearX + gearSize / 2f, gearY + gearSize / 2f, 12,
+                UiRender.mulAlpha(gearCol, openFade));
+        m.pop();
     }
 
     /** Two-column card grid (LoxeDLC CategoryComponent): top-anchored, scrolls down. */
@@ -530,21 +627,29 @@ public final class ClickGuiScreen extends Screen {
         Theme t = Theme.get();
 
         // search field — RENDER/MISC only, like LoxeDLC; the outline eases in on focus
-        if (activeCategory == Category.RENDER || activeCategory == Category.MISC) {
+        if (searchVisible()) {
             searchFocusAnim = approach(searchFocusAnim, searchFocused ? 1f : 0f, 14f);
             searchX = winX + WIN_W - 16 - searchW;
             searchY = winY + 7.5f;
             float sa = openFade;
-            UiRender.rect(m, searchX, searchY, searchW, searchH, 3, UiRender.mulAlpha(t.card(), sa));
+            UiRender.rect(m, searchX, searchY, searchW, searchH, FIELD_R, UiRender.mulAlpha(t.card(), sa));
             int searchStroke = UiRender.mix(UiRender.withAlpha(t.outline(), 155), t.accent(), searchFocusAnim);
-            UiRender.outline(m, searchX, searchY, searchW, searchH, 3, UiRender.mulAlpha(searchStroke, sa), 1);
+            UiRender.outline(m, searchX, searchY, searchW, searchH, FIELD_R, UiRender.mulAlpha(searchStroke, sa), 1);
             boolean empty = search.isEmpty() && !searchFocused;
-            F_SEARCH.drawString(m, "U", searchX + searchW - 13,
-                    centerBoxY(F_SEARCH, "U", searchY, searchH),
-                    UiRender.mulAlpha(empty ? t.textSecondary() : t.text(), sa));
+            // the lens eases to the accent while the field holds the keyboard
+            int lensCol = UiRender.mix(UiRender.mix(t.textSecondary(), t.text(), empty ? 0f : 1f),
+                    t.accent(), searchFocusAnim);
+            UiRender.iconCentered(m, Icons.SEARCH, searchX + searchW - 9.5f, searchY + searchH / 2f, 13,
+                    UiRender.mulAlpha(lensCol, sa));
             UiRender.rect(m, searchX + searchW - 19, searchY + 3.5f, 0.5f, 8, 0,
                     UiRender.mulAlpha(UiRender.withAlpha(t.outline(), 160), sa));
-            F_TINY.drawString(m, empty ? "Поиск" : search + (searchFocused ? "|" : ""),
+            // the caret string is rebuilt only when the query or the focus flips
+            if (!search.equals(searchTextQuery) || searchFocused != searchTextFocus) {
+                searchTextQuery = search;
+                searchTextFocus = searchFocused;
+                searchText = search + (searchFocused ? "|" : "");
+            }
+            F_TINY.drawString(m, empty ? "Поиск" : searchText,
                     searchX + 6, centerBoxY(F_TINY, "Aa", searchY, searchH),
                     UiRender.mulAlpha(empty ? t.textSecondary() : t.text(), sa));
         } else {
@@ -552,16 +657,22 @@ public final class ClickGuiScreen extends Screen {
             searchFocused = false; // no field on this tab — don't keep capturing keys
         }
 
-        // filtered modules: by category, or by name across all when searching
+        // filtered modules: by category, or by name across all when searching —
+        // the result is cached and only rebuilt when the tab or the query changes
         String q = search.toLowerCase(Locale.ROOT);
-        List<ModuleStub> mods = new ArrayList<>();
-        for (Category c : Category.values()) {
-            if (c == Category.CONFIGS) {
-                continue;
-            }
-            for (ModuleStub s : ModuleRegistry.byCategory(c)) {
-                if (q.isEmpty() ? c == activeCategory : s.name().toLowerCase(Locale.ROOT).contains(q)) {
-                    mods.add(s);
+        List<ModuleStub> mods = filteredMods;
+        if (activeCategory != filteredCat || !q.equals(filteredQ)) {
+            filteredCat = activeCategory;
+            filteredQ = q;
+            mods.clear();
+            for (Category c : Category.values()) {
+                if (c == Category.CONFIGS) {
+                    continue;
+                }
+                for (ModuleStub s : ModuleRegistry.byCategory(c)) {
+                    if (q.isEmpty() ? c == activeCategory : s.name().toLowerCase(Locale.ROOT).contains(q)) {
+                        mods.add(s);
+                    }
                 }
             }
         }
@@ -614,8 +725,17 @@ public final class ClickGuiScreen extends Screen {
         scissor.pop();
 
         if (mods.isEmpty()) {
-            String hint = search.isEmpty() ? "Нет модулей в этой категории" : "Ничего не найдено";
-            F_BODY.drawString(m, hint, winX + GRID_X, winY + GRID_TOP + 8, t.textSecondary());
+            // centred empty state: icon over the hint, in the middle of the grid band
+            boolean noQuery = search.isEmpty();
+            String hint = noQuery ? "Нет модулей в этой категории"
+                    : "Ничего не найдено: " + truncate(F_BODY, search, 130);
+            float emptyCx = winX + GRID_X + (WIN_W - GRID_X - 6) / 2f;
+            float emptyMidY = winY + GRID_TOP + viewportH / 2f - 8f;
+            UiRender.iconCentered(m, noQuery ? Icons.DASHBOARD : Icons.SEARCH, emptyCx, emptyMidY, 18,
+                    UiRender.mulAlpha(t.textSecondary(), 0.7f * openFade));
+            FontRenderer.drawCentered(F_BODY, m, hint, emptyCx,
+                    centerBoxY(F_BODY, hint, emptyMidY + 12f, 14f),
+                    UiRender.mulAlpha(t.textSecondary(), 0.95f * openFade));
         }
 
         // scrollbar on the right edge
@@ -699,10 +819,10 @@ public final class ClickGuiScreen extends Screen {
 
         int fill = UiRender.mix(t.card(), t.cardHover(), hoverK);
         fill = UiRender.mix(fill, UiRender.mix(fill, t.accent(), 0.14f), k);
-        UiRender.rect(m, x, y, w, h, 5, UiRender.mulAlpha(fill, alpha));
+        UiRender.rect(m, x, y, w, h, CARD_R, UiRender.mulAlpha(fill, alpha));
         float glow = Math.max(hoverK, k * 0.7f);
         int stroke = UiRender.mix(UiRender.withAlpha(t.outline(), 110), UiRender.withAlpha(t.accent(), 150), glow);
-        UiRender.outline(m, x, y, w, h, 5, UiRender.mulAlpha(stroke, alpha), 1f);
+        UiRender.outline(m, x, y, w, h, CARD_R, UiRender.mulAlpha(stroke, alpha), 1f);
 
         // name: bullet in the glyph gutter, text on the description's left
         // column (x+15) — name and description read as one aligned block
@@ -718,7 +838,7 @@ public final class ClickGuiScreen extends Screen {
         float dy = y + 19;
         for (int i = 0; i < lines.size(); i++) {
             if (i == 0) {
-                F_ICON_C.drawString(m, "C", x + 6.5f, dy, glyphCol);
+                iconOnLine(m, Icons.INFO, F_BODY, 11, x + 10f, dy, glyphCol);
             }
             F_BODY.drawString(m, lines.get(i), x + 15, dy, descCol);
             dy += 8;
@@ -726,14 +846,15 @@ public final class ClickGuiScreen extends Screen {
 
         // separator above the bottom row
         float sepY = y + h - 20;
-        UiRender.rect(m, x, sepY, w, 0.5f, 0, UiRender.mulAlpha(UiRender.withAlpha(t.outline(), 120), alpha));
+        UiRender.hairline(m, x, sepY, w, UiRender.mulAlpha(UiRender.withAlpha(t.outline(), 120), alpha));
 
         // bottom row: settings glyphs left, bind chip, toggle pill right —
         // glyphs are centered on the same band the chip and pill sit in
         float rowY = y + h - 16;
-        F_ICON_A.drawString(m, "A", x + 7, centerBoxY(F_ICON_A, "A", y + h - 20, 20), glyphCol);
+        float bandMidY = y + h - 10;
+        UiRender.iconCentered(m, Icons.SLIDERS, x + 10.5f, bandMidY, 16, glyphCol);
         if (!mod.settings().isEmpty()) {
-            F_ICON_B.drawString(m, "B", x + 20, centerBoxY(F_ICON_B, "B", y + h - 20, 20), glyphCol);
+            UiRender.iconCentered(m, Icons.GEAR, x + 24f, bandMidY, 12, glyphCol);
         }
 
         // toggle pill (LoxeDLC StatusRender): 16x8 track, the accent fill grows
@@ -746,15 +867,22 @@ public final class ClickGuiScreen extends Screen {
         UiRender.rect(m, knobX, togY - 0.5f, 9, 9, 4.5f, UiRender.mulAlpha(t.card(), alpha));
         UiRender.outline(m, knobX, togY - 0.5f, 9, 9, 4.5f, UiRender.mulAlpha(UiRender.withAlpha(t.outline(), 220), alpha), 1.2f);
 
-        // bind chip: key label, or the chain glyph when unbound
+        // bind chip: key label, or the chain glyph when unbound; it eases its
+        // hover and breathes in accent while it waits for a key
         String bindName = capturingMod == mod ? "..." : keyLabel(mod.bind());
         float chipW = chipWidth(bindName);
         float chipX = x + w - 32 - chipW;
-        UiRender.rect(m, chipX, rowY + 1, chipW, 10, 3, UiRender.mulAlpha(UiRender.withAlpha(t.text(), 80), alpha));
-        if (mod.bind() < 0 && capturingMod != mod) {
-            F_ICON_B.drawString(m, "G", chipX + chipW / 2f - 5, centerBoxY(F_ICON_B, "G", rowY + 1, 10), glyphCol);
+        boolean chipCapturing = capturingMod == mod;
+        float chipHover = easeHover("chip:" + id, UiRender.inside(tmx, tmy, chipX, rowY + 1, chipW, 10));
+        float capPulse = chipCapturing ? 0.6f + 0.4f * (float) Math.sin(animTime * 6.0) : 1f;
+        int chipBg = UiRender.mix(UiRender.withAlpha(t.text(), 80), UiRender.withAlpha(t.accent(), 120),
+                Math.max(chipHover, chipCapturing ? 0.55f * capPulse : 0f));
+        UiRender.rect(m, chipX, rowY + 1, chipW, 10, 5, UiRender.mulAlpha(chipBg, alpha));
+        if (mod.bind() < 0 && !chipCapturing) {
+            UiRender.iconCentered(m, Icons.LINK, chipX + chipW / 2f, rowY + 6f, 10, glyphCol);
         } else {
-            F_BODY.drawString(m, bindName, chipX + 4, centerBoxY(F_BODY, bindName, rowY + 1, 10), glyphCol);
+            F_BODY.drawString(m, bindName, chipX + 4, centerBoxY(F_BODY, bindName, rowY + 1, 10),
+                    chipCapturing ? UiRender.mulAlpha(t.accent(), capPulse * alpha) : glyphCol);
         }
         m.pop();
     }
@@ -762,7 +890,7 @@ public final class ClickGuiScreen extends Screen {
     /** Right-click settings popup (LoxeDLC ModuleSettingsWindow). */
     private void renderPopup(MatrixStack m, Theme t) {
         // ease the entrance (slide-in + grow) and the mirrored exit
-        popupAnim = approach(popupAnim, popupClosing ? 0f : 1f, 20f);
+        popupAnim = approach(popupAnim, popupClosing ? 0f : 1f, 18f);
         if (popupClosing && popupAnim < 0.02f) {
             popupModule = null;
             popupClosing = false;
@@ -792,7 +920,7 @@ public final class ClickGuiScreen extends Screen {
         }
 
         float e = easeOutBack(popupAnim);
-        float slide = (1f - e) * 14f;
+        float slide = (1f - e) * 18f;
         float a = clamp01(popupAnim);
 
         // rows first: the panel height and the scroll follow the animated stack
@@ -809,32 +937,42 @@ public final class ClickGuiScreen extends Screen {
         float anchorY = popY + Math.min(popH, 120f) / 2f;
         m.push();
         m.translate(anchorX + slide, anchorY, 0f);
-        float psc = 0.93f + 0.07f * e;
+        float psc = 0.90f + 0.10f * e;
         m.scale(psc, psc, 1f);
         m.translate(-anchorX, -anchorY, 0f);
 
+        // soft shadow rides the same slide/scale as the panel
+        UiRender.shadow(m, popX, popY, popW, popPanelH, WIN_R, 0.42f * a);
         if (HudRenderer.blurEnabled()) {
             QuickImports.blur.setup();
             int tint = UiRender.mulAlpha(t.background(), 0.55f * a);
             QuickImports.blur.renderSmooth(ShapeProperties.create(m, popX, popY, popW, popPanelH)
-                    .round(8)
+                    .round(WIN_R)
                     .quality(32)
                     .color(tint, tint, tint, tint)
                     .build(), 32);
         }
-        UiRender.rect(m, popX, popY, popW, popPanelH, 8, UiRender.mulAlpha(t.panel(), 0.98f * a));
-        UiRender.outline(m, popX, popY, popW, popPanelH, 8, UiRender.mulAlpha(t.outline(), a), 1f);
+        UiRender.rect(m, popX, popY, popW, popPanelH, WIN_R, UiRender.mulAlpha(t.panel(), 0.98f * a));
+        UiRender.outline(m, popX, popY, popW, popPanelH, WIN_R, UiRender.mulAlpha(t.outline(), a), 1f);
 
-        // header: "<Module> Settings" + close glyph, hairline underneath (y+22)
-        String title = truncate(F_HEAD, popupModule.name() + " Settings", popW - 42);
+        // header: "<Module> Settings" + close button, hairline underneath (y+22)
         float popTitleY = popY + 8;
-        float popMid = popTitleY - 3f + F_HEAD.getStringHeight(title) * 0.25f;
-        F_HEAD.drawString(m, title, popX + 10, popTitleY, UiRender.mulAlpha(t.text(), a));
-        F_ICONS.drawString(m, "K", popX + popW - 15,
-                centerBoxY(F_ICONS, "K", popMid - 8f, 16f),
-                UiRender.mulAlpha(t.textSecondary(), 0.6f * a));
-        UiRender.rect(m, popX + 10, popY + 22, popW - 20, 0.5f, 0,
+        F_HEAD.drawString(m, popTitle, popX + 10, popTitleY, UiRender.mulAlpha(t.text(), a));
+        // close: a real 16x16 hover box with the X-in-circle glyph, sunk on press
+        float closeX = popX + popW - 19;
+        float closeY = popY + 4;
+        float chv = easeHover("pop:close", UiRender.inside(tmx, tmy, closeX, closeY, 16, 16) && !popupClosing);
+        float cpr = easePress("pop:close", "pop:close".equals(pressedBtn));
+        pushScale(m, closeX + 8f, closeY + 8f, UiRender.pressScale(cpr));
+        if (chv > 0.01f) {
+            UiRender.rect(m, closeX, closeY, 16, 16, FIELD_R, UiRender.mulAlpha(t.text(), 0.08f * chv * a));
+        }
+        UiRender.iconCentered(m, Icons.CLOSE, closeX + 8f, closeY + 8f, 11,
+                UiRender.mulAlpha(UiRender.mix(t.textSecondary(), t.text(), chv), 0.85f * a));
+        // header hairline rides the same slide/scale as the panel it belongs to
+        UiRender.hairline(m, popX + 10, popY + 22, popW - 20,
                 UiRender.mulAlpha(t.text(), 0.2f * a));
+        m.pop();
 
         // rows clipped to the viewport, so a long list scrolls instead of spilling
         Matrix4f clipMatrix = m.peek().getPositionMatrix();
@@ -1009,7 +1147,7 @@ public final class ClickGuiScreen extends Screen {
         int dimCol = UiRender.mulAlpha(t.textSecondary(), 0.3f * a);
 
         if (s instanceof BooleanSetting b) {
-            F_ICON_C.drawString(m, "K", x + ROW_GLYPH_X, centerBoxY(F_ICON_C, "K", y, base), dimCol);
+            UiRender.iconCentered(m, Icons.BOX, x + ROW_GLYPH_X + 3.5f, y + base / 2f, 11, dimCol);
             String nm = truncate(F_BODY, b.name(), w - ROW_TEXT_X - 36);
             F_BODY.drawString(m, nm, x + ROW_TEXT_X, centerBoxY(F_BODY, nm, y, base), textCol);
             float k = toggleEase(row.key, b.get());
@@ -1022,22 +1160,33 @@ public final class ClickGuiScreen extends Screen {
             UiRender.outline(m, knobX, togY - 0.5f, 9, 9, 4.5f,
                     UiRender.mulAlpha(UiRender.withAlpha(t.outline(), 220), a), 1.2f);
         } else if (s instanceof DoubleSetting d) {
-            F_ICON_C.drawString(m, "H", x + ROW_GLYPH_X, centerBoxY(F_ICON_C, "H", y, base), dimCol);
+            UiRender.iconCentered(m, Icons.SLIDERS, x + ROW_GLYPH_X + 3.5f, y + base / 2f, 11, dimCol);
             String nm = truncate(F_BODY, d.name(), w - ROW_TEXT_X - TRACK_W - 16);
             F_BODY.drawString(m, nm, x + ROW_TEXT_X, centerBoxY(F_BODY, nm, y, base), textCol);
 
-            // the read-out counts up/down with the fill instead of snapping
+            // the read-out counts up/down with the fill instead of snapping;
+            // the formatted label is cached per row and only rebuilt when it moves
             float shown = approach(valueAnim.getOrDefault(row.key, (float) d.get()), (float) d.get(), 16f);
             valueAnim.put(row.key, shown);
-            String val = formatValue(d, shown);
+            Float forVal = valueLabelFor.get(row.key);
+            String val = forVal != null && forVal.floatValue() == shown
+                    ? valueLabelCache.get(row.key) : null;
+            if (val == null) {
+                val = formatValue(d, shown);
+                valueLabelCache.put(row.key, val);
+                valueLabelFor.put(row.key, shown);
+            }
             FontRenderer.drawRight(F_BOLD, m, val, right, centerBoxY(F_BOLD, val, y, base),
                     UiRender.mulAlpha(t.accent(), a));
 
-            // fill and knob lag the drag (k≈18); grabbing adds a soft glow
+            // fill and knob lag the drag (k≈18); hovering the track lifts the
+            // knob and dragging adds the accent glow on top of that
             float frac = approach(sliderAnim.getOrDefault(row.key, d.fraction()), d.fraction(), 18f);
             sliderAnim.put(row.key, frac);
             float trackX = right - TRACK_W;
             float trackY = y + 15;
+            float trkHv = easeHover(row.key + ":trk",
+                    UiRender.inside(tmx, tmy, trackX - 3, trackY - 5, TRACK_W + 6, 13) && row.alpha > 0.5f);
             UiRender.rect(m, trackX, trackY, TRACK_W, 3, 1.5f,
                     UiRender.mulAlpha(UiRender.withAlpha(t.text(), 30), a));
             UiRender.rect(m, trackX, trackY, Math.max(3f, TRACK_W * frac), 3, 1.5f,
@@ -1047,26 +1196,26 @@ public final class ClickGuiScreen extends Screen {
             if (dragging2 == d) {
                 UiRender.glow(m, thX + 3.5f, thY + 3.5f, 11f, t.accent() & 0xFFFFFF, 0.30f, a);
             }
-            UiRender.rect(m, thX, thY, 7, 7, 3.5f, UiRender.mulAlpha(t.accent(), a));
+            int knobCol = UiRender.lighten(t.accent(), 0.16f * Math.max(trkHv, dragging2 == d ? 1f : 0f));
+            UiRender.rect(m, thX, thY, 7, 7, 3.5f, UiRender.mulAlpha(knobCol, a));
             UiRender.outline(m, thX, thY, 7, 7, 3.5f,
                     UiRender.mulAlpha(UiRender.withAlpha(0xFFFFFFFF, 170), a), 1.1f);
         } else if (s instanceof ModeSetting md) {
-            F_ICON_C.drawString(m, "J", x + ROW_GLYPH_X, centerBoxY(F_ICON_C, "J", y, base), dimCol);
+            UiRender.iconCentered(m, Icons.ELLIPSIS, x + ROW_GLYPH_X + 3.5f, y + base / 2f, 11, dimCol);
             String nm = truncate(F_BODY, md.name(), w - ROW_TEXT_X - FIELD_W - 16);
             F_BODY.drawString(m, nm, x + ROW_TEXT_X, centerBoxY(F_BODY, nm, y, base), textCol);
             drawSelectField(m, t, right - FIELD_W, y + (ROW_H - 14) / 2f, FIELD_W,
                     md.get(), dropdown == md, a, row.key);
         } else if (s instanceof KeySetting k2) {
-            F_ICON_C.drawString(m, "L", x + ROW_GLYPH_X, centerBoxY(F_ICON_C, "L", y, base), dimCol);
+            UiRender.iconCentered(m, Icons.KEYBOARD, x + ROW_GLYPH_X + 3.5f, y + base / 2f, 11, dimCol);
             String nm = truncate(F_BODY, k2.name(), w - ROW_TEXT_X - FIELD_W - 16);
             F_BODY.drawString(m, nm, x + ROW_TEXT_X, centerBoxY(F_BODY, nm, y, base), textCol);
             drawBindField(m, t, right - FIELD_W, y + (ROW_H - 14) / 2f, FIELD_W, k2, a, row.key);
         } else if (s instanceof ColorSetting cs) {
-            // colour row: current colour in the gutter, swatch on the right column
-            float dotY = y + base / 2f - 3.5f;
-            UiRender.rect(m, x + ROW_GLYPH_X, dotY, 7, 7, 3.5f, UiRender.mulAlpha(cs.get(), a));
-            UiRender.outline(m, x + ROW_GLYPH_X, dotY, 7, 7, 3.5f,
-                    UiRender.mulAlpha(UiRender.withAlpha(t.outline(), 200), a), 1f);
+            // colour row: the BRUSH glyph in the gutter is tinted with the live
+            // colour (readable even at 11px, unlike a bare dot); swatch on the right
+            UiRender.iconCentered(m, Icons.BRUSH, x + ROW_GLYPH_X + 3.5f, y + base / 2f, 11,
+                    UiRender.mulAlpha(UiRender.lighten(cs.get(), 0.22f), a));
             String nm = truncate(F_BODY, cs.name(), w - ROW_TEXT_X - 30);
             F_BODY.drawString(m, nm, x + ROW_TEXT_X, centerBoxY(F_BODY, nm, y, base), textCol);
 
@@ -1096,9 +1245,9 @@ public final class ClickGuiScreen extends Screen {
         float pulse = cap ? 0.55f + 0.45f * (float) Math.sin(animTime * 6.0) : 1f;
         pushScale(m, fx + fw / 2f, fy + 7f, UiRender.pressScale(pr));
         int bg = UiRender.mix(UiRender.mix(t.card(), t.cardHover(), hv), t.accent(), cap ? 0.20f * pulse : 0f);
-        UiRender.rect(m, fx, fy, fw, 14, 3, UiRender.mulAlpha(bg, a));
+        UiRender.rect(m, fx, fy, fw, 14, FIELD_R, UiRender.mulAlpha(bg, a));
         int stroke = UiRender.mix(UiRender.withAlpha(t.outline(), 155), t.accent(), cap ? pulse : 0f);
-        UiRender.outline(m, fx, fy, fw, 14, 3, UiRender.mulAlpha(stroke, a), cap ? 1.3f : 1f);
+        UiRender.outline(m, fx, fy, fw, 14, FIELD_R, UiRender.mulAlpha(stroke, a), cap ? 1.3f : 1f);
         String val = cap ? "Нажмите клавишу" : k2.label();
         int fg = cap ? UiRender.mulAlpha(t.accent(), pulse * a) : UiRender.mulAlpha(t.text(), a);
         F_TINY.drawStringWithScroll(m, val, fx + 5, centerBoxY(F_TINY, val, fy, 14), fw - 10, fg);
@@ -1113,9 +1262,11 @@ public final class ClickGuiScreen extends Screen {
         float pr = easePress(id, id.equals(pressedBtn));
         pushScale(m, fx + fw / 2f, fy + 7f, UiRender.pressScale(pr));
         int bg = UiRender.mix(UiRender.mix(t.card(), t.cardHover(), hv), t.accent(), active ? 0.18f : 0f);
-        UiRender.rect(m, fx, fy, fw, 14, 3, UiRender.mulAlpha(bg, a));
-        UiRender.outline(m, fx, fy, fw, 14, 3, UiRender.mulAlpha(
-                UiRender.mix(UiRender.withAlpha(t.outline(), 155), t.accent(), active ? 1f : 0f), a), 1);
+        UiRender.rect(m, fx, fy, fw, 14, FIELD_R, UiRender.mulAlpha(bg, a));
+        // hover lifts the hairline toward the accent a quarter of the way
+        UiRender.outline(m, fx, fy, fw, 14, FIELD_R, UiRender.mulAlpha(
+                UiRender.mix(UiRender.withAlpha(t.outline(), 155), t.accent(),
+                        Math.max(active ? 1f : 0f, 0.35f * hv)), a), 1);
         F_BODY.drawStringWithScroll(m, value, fx + 5, centerBoxY(F_BODY, value, fy, 14), fw - 16,
                 UiRender.mulAlpha(t.text(), a));
         // chevron: two hairlines; the short one flips above when the list opens
@@ -1145,8 +1296,9 @@ public final class ClickGuiScreen extends Screen {
         m.translate(-dcx, -dropY, 0f);
 
         float listH = Math.max(4f, dropPushH);
-        UiRender.rect(m, dropX, dropY, dropW, listH, 3, UiRender.mulAlpha(t.panel(), a));
-        UiRender.outline(m, dropX, dropY, dropW, listH, 3,
+        UiRender.shadow(m, dropX, dropY, dropW, listH, FIELD_R, 0.25f * a);
+        UiRender.rect(m, dropX, dropY, dropW, listH, FIELD_R, UiRender.mulAlpha(t.panel(), a));
+        UiRender.outline(m, dropX, dropY, dropW, listH, FIELD_R,
                 UiRender.mulAlpha(UiRender.withAlpha(t.outline(), 155), a), 1);
 
         // hover highlight slides to the row under the cursor, fades out otherwise
@@ -1192,9 +1344,10 @@ public final class ClickGuiScreen extends Screen {
 
         cfgFieldX = winX + GRID_X;
         cfgFieldY = winY + 36;
-        UiRender.rect(m, cfgFieldX, cfgFieldY, cfgFieldW, cfgFieldH, 3, t.card());
-        UiRender.outline(m, cfgFieldX, cfgFieldY, cfgFieldW, cfgFieldH, 3,
-                configNameFocused ? t.accent() : UiRender.withAlpha(t.outline(), 155), 1);
+        cfgFocusAnim = approach(cfgFocusAnim, configNameFocused ? 1f : 0f, 14f);
+        UiRender.rect(m, cfgFieldX, cfgFieldY, cfgFieldW, cfgFieldH, FIELD_R, t.card());
+        UiRender.outline(m, cfgFieldX, cfgFieldY, cfgFieldW, cfgFieldH, FIELD_R,
+                UiRender.mix(UiRender.withAlpha(t.outline(), 155), t.accent(), cfgFocusAnim), 1);
         boolean empty = configName.isEmpty() && !configNameFocused;
         F_TINY.drawString(m, empty ? "имя конфига..." : configName + (configNameFocused ? "|" : ""),
                 cfgFieldX + 6, centerBoxY(F_TINY, "Aa", cfgFieldY, cfgFieldH),
@@ -1204,12 +1357,12 @@ public final class ClickGuiScreen extends Screen {
         float saveW = 52;
         float saveX = winX + WIN_W - 16 - saveW;
         boolean saveHover = UiRender.inside(tmx, tmy, saveX, cfgFieldY, saveW, cfgFieldH);
-        drawButton(m, F_TINY, CFG_SAVE, saveX, cfgFieldY, saveW, cfgFieldH, 3, "Save",
+        drawButton(m, F_TINY, CFG_SAVE, saveX, cfgFieldY, saveW, cfgFieldH, FIELD_R, "Save",
                 saveHover, t.accent(), 0xFFFFFFFF, true);
         // the icon rides the same sink drawButton just eased
         pushScale(m, saveX + saveW / 2f, cfgFieldY + cfgFieldH / 2f,
                 UiRender.pressScale(btnPressAnim.getOrDefault(CFG_SAVE, 0f)));
-        F_ICON_B.drawString(m, "M", saveX + 5, centerBoxY(F_ICON_B, "M", cfgFieldY, cfgFieldH), 0xFFFFFFFF);
+        UiRender.iconCentered(m, Icons.SAVE, saveX + 11, cfgFieldY + cfgFieldH / 2f, 11, 0xFFFFFFFF);
         m.pop();
 
         // config cards, two per row — the list is the cached snapshot
@@ -1224,7 +1377,14 @@ public final class ClickGuiScreen extends Screen {
         cfgScroll = Math.min(Math.max(0, cfgScroll), maxScroll);
 
         if (names.isEmpty()) {
-            F_BODY.drawString(m, "Пока нет конфигов", winX + GRID_X, listTop + 8, t.textSecondary());
+            // centred empty state: folder icon over the hint
+            String hint = "Пока нет конфигов";
+            float emptyCx = winX + GRID_X + (WIN_W - GRID_X - 6) / 2f;
+            float emptyMidY = listTop + Math.max(0f, listH) / 2f - 8f;
+            UiRender.iconCentered(m, Icons.FOLDER, emptyCx, emptyMidY, 18,
+                    UiRender.mulAlpha(t.textSecondary(), 0.7f));
+            FontRenderer.drawCentered(F_BODY, m, hint, emptyCx,
+                    centerBoxY(F_BODY, hint, emptyMidY + 12f, 14f), UiRender.mulAlpha(t.textSecondary(), 0.95f));
             return;
         }
 
@@ -1239,23 +1399,34 @@ public final class ClickGuiScreen extends Screen {
             float cx2 = winX + GRID_X + col * (CARD_W + CARD_GAP);
             float cy2 = listTop + (i / 2) * rowStep;
             float screenY = cy2 - cfgSmooth;
-            UiRender.rect(m, cx2, cy2, CARD_W, 40, 5, t.card());
-            UiRender.outline(m, cx2, cy2, CARD_W, 40, 5, UiRender.withAlpha(t.outline(), 110), 1f);
-            String cfgLabel = truncate(F_SEMI, name, CARD_W - 16);
-            F_SEMI.drawString(m, cfgLabel, cx2 + 8, centerBoxY(F_SEMI, cfgLabel, cy2, 20), t.text());
+            float rowHover = easeHover("cfgrow:" + name, UiRender.inside(tmx, tmy, cx2, screenY, CARD_W, 40));
+            UiRender.rect(m, cx2, cy2, CARD_W, 40, CARD_R, UiRender.mix(t.card(), t.cardHover(), rowHover));
+            UiRender.outline(m, cx2, cy2, CARD_W, 40, CARD_R, UiRender.withAlpha(t.outline(), 110), 1f);
+            // folder marks the row as a file; the name keeps the shared text column
+            UiRender.iconCentered(m, Icons.FOLDER, cx2 + 14, cy2 + 10, 12,
+                    UiRender.mix(t.accent(), t.text(), rowHover * 0.4f));
+            String cfgLabel = truncate(F_SEMI, name, CARD_W - 32);
+            F_SEMI.drawString(m, cfgLabel, cx2 + 24, centerBoxY(F_SEMI, cfgLabel, cy2, 20), t.text());
 
             float btnY = cy2 + 22;
-            // load (play glyph) + delete (trash glyph) icon buttons
+            // load (play) + delete (trash) icon buttons — body from drawButton,
+            // the glyph rides the same eased press sink on top
             float loadX = cx2 + CARD_W - 38;
             float delX = cx2 + CARD_W - 20;
             boolean lh = UiRender.inside(tmx, tmy, loadX, btnY, 16, 12);
             boolean dh = UiRender.inside(tmx, tmy, delX, btnY, 16, 12);
             int loadFg = UiRender.mix(t.textSecondary(), t.accent(), easeHover(CFG_LOAD + name, lh));
             int delFg = UiRender.mix(t.textSecondary(), 0xFFFF6B81, easeHover(CFG_DEL + name, dh));
-            drawButton(m, F_ICONS, CFG_LOAD + name, loadX, btnY, 16, 12, 3, "H", lh,
+            drawButton(m, null, CFG_LOAD + name, loadX, btnY, 16, 12, FIELD_R, "", lh,
                     UiRender.withAlpha(t.text(), 30), loadFg, false);
-            drawButton(m, F_ICON_C, CFG_DEL + name, delX, btnY, 16, 12, 3, "O", dh,
+            pushScale(m, loadX + 8, btnY + 6, UiRender.pressScale(btnPressAnim.getOrDefault(CFG_LOAD + name, 0f)));
+            UiRender.iconCentered(m, Icons.PLAY, loadX + 8, btnY + 6, 9, loadFg);
+            m.pop();
+            drawButton(m, null, CFG_DEL + name, delX, btnY, 16, 12, FIELD_R, "", dh,
                     UiRender.withAlpha(t.text(), 30), delFg, false);
+            pushScale(m, delX + 8, btnY + 6, UiRender.pressScale(btnPressAnim.getOrDefault(CFG_DEL + name, 0f)));
+            UiRender.iconCentered(m, Icons.TRASH, delX + 8, btnY + 6, 10, delFg);
+            m.pop();
             if (screenY + 40 > listTop && screenY < listTop + listH) {
                 cfgRows.add(new CfgRow(name, cx2, screenY, CARD_W, 40, loadX, delX, btnY - cfgSmooth));
             }
@@ -1306,9 +1477,9 @@ public final class ClickGuiScreen extends Screen {
         m.scale(s, s, 1f);
         m.translate(-ocx, -ocy, 0f);
 
-        UiRender.shadow(m, px, py, pw, ph, 10, 0.4f * a);
-        UiRender.rect(m, px, py, pw, ph, 10, UiRender.mulAlpha(t.panel(), a));
-        UiRender.outline(m, px, py, pw, ph, 10, UiRender.mulAlpha(t.outline(), a), 1);
+        UiRender.shadow(m, px, py, pw, ph, WIN_R, 0.4f * a);
+        UiRender.rect(m, px, py, pw, ph, WIN_R, UiRender.mulAlpha(t.panel(), a));
+        UiRender.outline(m, px, py, pw, ph, WIN_R, UiRender.mulAlpha(t.outline(), a), 1);
         F_TITLE.drawString(m, "Темы", px + 14, py + 12, UiRender.mulAlpha(t.text(), a));
         F_TINY.drawString(m, "Клик по свотчу Custom открывает HSV-пикер",
                 px + 14, py + 30, UiRender.mulAlpha(t.textSecondary(), 0.9f * a));
@@ -1327,13 +1498,14 @@ public final class ClickGuiScreen extends Screen {
                     active ? 1f : 0f, 16f);
             themeSelAnim.put(th.id(), sel);
 
-            pushScale(m, tx + tw / 2f, ry + tileH / 2f, UiRender.pressScale(pr));
+            // hover lifts the tile a hair, press sinks it; the active theme keeps an accent ring
+            pushScale(m, tx + tw / 2f, ry + tileH / 2f, UiRender.pressScale(pr) * (1f + 0.018f * hv));
             int fill = UiRender.mix(t.card(), t.cardHover(), hv);
             fill = UiRender.mix(fill, UiRender.mix(fill, th.accent(), 0.16f), sel);
-            UiRender.rect(m, tx, ry, tw, tileH, 6, UiRender.mulAlpha(fill, a));
+            UiRender.rect(m, tx, ry, tw, tileH, CARD_R, UiRender.mulAlpha(fill, a));
             int stroke = UiRender.mix(UiRender.withAlpha(t.outline(), 110), t.accent(),
                     Math.max(sel, hv * 0.45f));
-            UiRender.outline(m, tx, ry, tw, tileH, 6, UiRender.mulAlpha(stroke, a), 1f + 0.4f * sel);
+            UiRender.outline(m, tx, ry, tw, tileH, CARD_R, UiRender.mulAlpha(stroke, a), 1f + 0.5f * sel);
 
             // label column: the Custom name is edited in place, caret blinks
             String label = displayName(th);
@@ -1350,11 +1522,11 @@ public final class ClickGuiScreen extends Screen {
                 // fixed action column before the swatch cluster
                 float ax = tx + RENAME_X;
                 float ay = actionY(ry);
-                drawButton(m, F_TINY, "theme:ren", ax, ay, REN_W, ACTION_H, 4, "Переим.",
+                drawButton(m, F_TINY, "theme:ren", ax, ay, REN_W, ACTION_H, FIELD_R, "Переим.",
                         UiRender.inside(mouseX, mouseY, ax, ay, REN_W, ACTION_H),
                         t.cardHover(), t.text(), false);
                 float bx = tx + DELETE_X;
-                drawButton(m, F_TINY, "theme:del", bx, ay, DEL_W, ACTION_H, 4, "Сброс",
+                drawButton(m, F_TINY, "theme:del", bx, ay, DEL_W, ACTION_H, FIELD_R, "Сброс",
                         UiRender.inside(mouseX, mouseY, bx, ay, DEL_W, ACTION_H),
                         UiRender.mix(t.cardHover(), 0xFFFF6B81, 0.30f), 0xFFFF8FA0, false);
             }
@@ -1526,9 +1698,9 @@ public final class ClickGuiScreen extends Screen {
         m.scale(psc, psc, 1f);
         m.translate(-ocx, -ocy, 0f);
 
-        UiRender.shadow(m, pickX, pickY, pickW, pickH, 10, 0.45f * a);
-        UiRender.rect(m, pickX, pickY, pickW, pickH, 10, UiRender.mulAlpha(t.panel(), 0.99f * a));
-        UiRender.outline(m, pickX, pickY, pickW, pickH, 10, UiRender.mulAlpha(t.outline(), a), 1);
+        UiRender.shadow(m, pickX, pickY, pickW, pickH, WIN_R, 0.45f * a);
+        UiRender.rect(m, pickX, pickY, pickW, pickH, WIN_R, UiRender.mulAlpha(t.panel(), 0.99f * a));
+        UiRender.outline(m, pickX, pickY, pickW, pickH, WIN_R, UiRender.mulAlpha(t.outline(), a), 1);
 
         // title in the label column, current value right-aligned in the value column
         // (both centred on the title's optical centre, so the line reads level)
@@ -1539,8 +1711,7 @@ public final class ClickGuiScreen extends Screen {
         float pickTitleY = pickY + 9;
         float titleMid = pickTitleY - 3f + F_TITLE.getStringHeight(title) * 0.25f;
         F_TITLE.drawString(m, title, pickX + 10, pickTitleY, UiRender.mulAlpha(t.text(), a));
-        String rightCol = slotMode ? slotDisplayName()
-                : String.format(Locale.ROOT, "#%06X", color & 0xFFFFFF);
+        String rightCol = slotMode ? slotDisplayName() : hexLabel(color);
         FontRenderer.drawRight(F_TINY, m, rightCol, pickX + pickW - 10,
                 centerBoxY(F_TINY, rightCol, titleMid - 8f, 16f),
                 UiRender.mulAlpha(t.accent(), a));
@@ -1611,8 +1782,9 @@ public final class ClickGuiScreen extends Screen {
         UiRender.rect(m, pickX + 10, fy + 2, 16, 16, 4, color);
         UiRender.outline(m, pickX + 10, fy + 2, 16, 16, 4, UiRender.mulAlpha(t.outline(), a), 1f);
         m.pop();
-        String hex = String.format(Locale.ROOT, "#%06X", color & 0xFFFFFF);
-        F_TINY.drawString(m, hex, pickX + 32, fy + 5, UiRender.mulAlpha(t.textSecondary(), a));
+        String hex = hexLabel(color);
+        F_TINY.drawString(m, hex, pickX + 32, centerBoxY(F_TINY, hex, fy + 2, 16),
+                UiRender.mulAlpha(t.textSecondary(), a));
 
         pickBtnX = pickX + pickW - 10 - pickBtnW;
         pickBtnY = fy;
@@ -1647,6 +1819,16 @@ public final class ClickGuiScreen extends Screen {
             }
         }
         return "";
+    }
+
+    /** "#RRGGBB" of the edited colour — cached, re-formatted on change, not per frame. */
+    private String hexLabel(int color) {
+        if (!hexCacheValid || hexCacheColor != color) {
+            hexCacheColor = color;
+            hexCacheValid = true;
+            hexCache = String.format(Locale.ROOT, "#%06X", color & 0xFFFFFF);
+        }
+        return hexCache;
     }
 
     /** Points the picker at a colour; snap also lands the eased read-out on it. */
@@ -1754,11 +1936,45 @@ public final class ClickGuiScreen extends Screen {
         tmy = (mouseY - cy) / sc + cy;
     }
 
-    /** Keeps a grabbable slice of the window on screen while MMB-dragging. */
+    /** The header search field only exists on RENDER/MISC (LoxeDLC) — the one test for draw, hint and clicks. */
+    private boolean searchVisible() {
+        return activeCategory == Category.RENDER || activeCategory == Category.MISC;
+    }
+
+    /**
+     * True when the transformed cursor sits on the draggable header band, minus
+     * the search field (its clicks belong to the field). The single source of
+     * truth for the grip hover, the MOVE_H hint and the LMB drag hit rect —
+     * the drawn header and the drag zone are literally the same test.
+     */
+    private boolean headerHover() {
+        return UiRender.inside(tmx, tmy, winX, winY, WIN_W, HEAD_H)
+                && !(searchVisible() && UiRender.inside(tmx, tmy, searchX, searchY, searchW, searchH));
+    }
+
+    /** Keeps a grabbable {@link #GRAB_MIN} slice of the window on screen — the header can never be lost. */
     private void clampWindowPos() {
-        float minVisible = 60f;
-        winX = Math.max(-(WIN_W - minVisible), Math.min(width - minVisible, winX));
-        winY = Math.max(-(WIN_H - minVisible), Math.min(height - minVisible, winY));
+        winX = Math.max(-(WIN_W - GRAB_MIN), Math.min(width - GRAB_MIN, winX));
+        winY = Math.max(-(WIN_H - GRAB_MIN), Math.min(height - GRAB_MIN, winY));
+    }
+
+    /**
+     * Ends the current window drag (LMB header or MMB anywhere): refreshes the
+     * resolution-tracking percents and persists the position through the
+     * throttled autosave. Every release/Esc/close path funnels here, and it is
+     * a no-op without an active drag, so a drag can never outlive its gesture.
+     */
+    private void endDrag() {
+        if (!dragging) {
+            return;
+        }
+        dragging = false;
+        dragButton = -1;
+        int cw = MinecraftClient.getInstance().getWindow().getScaledWidth();
+        int ch = MinecraftClient.getInstance().getWindow().getScaledHeight();
+        offXP = (winX + WIN_W / 2f) / cw;
+        offYP = (winY + WIN_H / 2f) / ch;
+        ConfigManager.rememberGuiPosition(winX, winY); // dirty-flag autosave: writes at most once per interval
     }
 
     /** 0..1 entrance progress of the card at index (staggered after a tab switch). */
@@ -1772,9 +1988,18 @@ public final class ClickGuiScreen extends Screen {
         return (1f - entranceProgress(index)) * 10f;
     }
 
-    /** Width of a card's bind chip — shared by the draw and the hit test. */
+    /** Width of a card's bind chip — shared by the draw and the hit test, cached per label. */
     private float chipWidth(String bindName) {
-        return Math.max(12f, F_BODY.getStringWidth(bindName)) + 8;
+        Float cached = chipWidthCache.get(bindName);
+        if (cached != null) {
+            return cached;
+        }
+        float w = Math.max(12f, F_BODY.getStringWidth(bindName)) + 8;
+        if (chipWidthCache.size() > 256) {
+            chipWidthCache.clear(); // free-form key names must not grow the cache forever
+        }
+        chipWidthCache.put(bindName, w);
+        return w;
     }
 
     /** Re-reads the config list from disk and drops anims of buttons that vanished with it. */
@@ -1797,7 +2022,10 @@ public final class ClickGuiScreen extends Screen {
         if (key.startsWith(CFG_LOAD)) {
             return !cfgNames.contains(key.substring(CFG_LOAD.length()));
         }
-        return key.startsWith(CFG_DEL) && !cfgNames.contains(key.substring(CFG_DEL.length()));
+        if (key.startsWith(CFG_DEL)) {
+            return !cfgNames.contains(key.substring(CFG_DEL.length()));
+        }
+        return key.startsWith(CFG_ROW) && !cfgNames.contains(key.substring(CFG_ROW.length()));
     }
 
     // ------------------------------------------------- shared control easing
@@ -1838,6 +2066,13 @@ public final class ClickGuiScreen extends Screen {
         m.translate(cx, cy, 0f);
         m.scale(scale, scale, 1f);
         m.translate(-cx, -cy, 0f);
+    }
+
+    /** Glyph centred on cx, sitting on the same optical line as text drawn at drawY with font f. */
+    private static void iconOnLine(MatrixStack m, Icons.Glyph glyph, FontRenderer font, float size,
+                                   float cx, float drawY, int argb) {
+        Icons.draw(m, glyph, cx - Icons.width(glyph, size) / 2f,
+                UiRender.iconLineY(font, glyph, size, drawY), size, argb);
     }
 
     /** Decaying 1→0 pulse; set the key to 1 the moment its colour changes. */
@@ -1887,42 +2122,56 @@ public final class ClickGuiScreen extends Screen {
         return k;
     }
 
-    /** Categories that hold modules, plus the Configs tab — empty ones are hidden. */
+    /** Categories that hold modules, plus the Configs tab — empty ones are hidden. Built once (the registry is static). */
     private List<Category> visibleCategories() {
-        List<Category> out = new ArrayList<>();
-        for (Category c : Category.values()) {
-            if (c == Category.CONFIGS || !ModuleRegistry.byCategory(c).isEmpty()) {
-                out.add(c);
+        if (visibleCats == null) {
+            List<Category> out = new ArrayList<>();
+            for (Category c : Category.values()) {
+                if (c == Category.CONFIGS || !ModuleRegistry.byCategory(c).isEmpty()) {
+                    out.add(c);
+                }
             }
+            if (out.isEmpty()) {
+                out.add(Category.CONFIGS);
+            }
+            visibleCats = out;
         }
-        if (out.isEmpty()) {
-            out.add(Category.CONFIGS);
-        }
-        return out;
+        return visibleCats;
     }
 
-    /** Key name for the bind chip; module binds use GLFW keycodes. */
+    /** Key name for the bind chip; module binds use GLFW keycodes. Cached — the chip is drawn per card per frame. */
     private String keyLabel(int key) {
         if (key < 0) {
             return "";
         }
-        String name = GLFW.glfwGetKeyName(key, 0);
-        if (name != null) {
-            return name.toUpperCase(Locale.ROOT);
+        String cached = keyLabelCache.get(key);
+        if (cached != null) {
+            return cached;
         }
-        return switch (key) {
-            case GLFW.GLFW_KEY_RIGHT_SHIFT -> "RSHIFT";
-            case GLFW.GLFW_KEY_LEFT_SHIFT -> "LSHIFT";
-            case GLFW.GLFW_KEY_RIGHT_CONTROL -> "RCTRL";
-            case GLFW.GLFW_KEY_LEFT_CONTROL -> "LCTRL";
-            case GLFW.GLFW_KEY_RIGHT_ALT -> "RALT";
-            case GLFW.GLFW_KEY_LEFT_ALT -> "LALT";
-            case GLFW.GLFW_KEY_SPACE -> "SPACE";
-            case GLFW.GLFW_KEY_TAB -> "TAB";
-            case GLFW.GLFW_KEY_INSERT -> "INSERT";
-            case GLFW.GLFW_KEY_DELETE -> "DELETE";
-            default -> "K" + key;
-        };
+        String name = GLFW.glfwGetKeyName(key, 0);
+        String out;
+        if (name != null) {
+            out = name.toUpperCase(Locale.ROOT);
+        } else {
+            out = switch (key) {
+                case GLFW.GLFW_KEY_RIGHT_SHIFT -> "RSHIFT";
+                case GLFW.GLFW_KEY_LEFT_SHIFT -> "LSHIFT";
+                case GLFW.GLFW_KEY_RIGHT_CONTROL -> "RCTRL";
+                case GLFW.GLFW_KEY_LEFT_CONTROL -> "LCTRL";
+                case GLFW.GLFW_KEY_RIGHT_ALT -> "RALT";
+                case GLFW.GLFW_KEY_LEFT_ALT -> "LALT";
+                case GLFW.GLFW_KEY_SPACE -> "SPACE";
+                case GLFW.GLFW_KEY_TAB -> "TAB";
+                case GLFW.GLFW_KEY_INSERT -> "INSERT";
+                case GLFW.GLFW_KEY_DELETE -> "DELETE";
+                default -> "K" + key;
+            };
+        }
+        if (keyLabelCache.size() > 256) {
+            keyLabelCache.clear(); // bounded by keycodes anyway; this is a hard stop
+        }
+        keyLabelCache.put(key, out);
+        return out;
     }
 
     /** Ease-out-back — the LoxeDLC window pop (slight overshoot, no bounce). */
@@ -2009,12 +2258,17 @@ public final class ClickGuiScreen extends Screen {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         // hit-test against the geometry of THIS event, not of the last frame
         updateTransformedMouse(mouseX, mouseY);
-        // MMB drag of the window, LoxeDLC-style
-        if (button == 2 && !closing && openT > 0.6f
+        // MMB drag of the window, LoxeDLC-style — same settle gate as LMB and the
+        // same modal gate as the MOVE_H hint, so a grab never starts against the
+        // still-scaled entrance geometry or from under the theme panel / picker
+        if (button == 2 && !dragging && !closing && openT > 0.9f
+                && !settingsView && settingsAnim <= 0.01f && !pickerOpen && pickerAnim <= 0.01f
                 && tmx >= winX - 20 && tmx <= winX + WIN_W + 20 && tmy >= winY && tmy <= winY + WIN_H) {
             dragging = true;
+            dragButton = 2;
             dragOffX = tmx - winX;
             dragOffY = tmy - winY;
+            closePopup(); // the popup is anchored to the window and would be left behind
             return true;
         }
         // right-click on a card opens its settings popup (LoxeDLC ModuleSettingsWindow)
@@ -2093,6 +2347,7 @@ public final class ClickGuiScreen extends Screen {
         // while the overlay is still fading over it
         if (settingsView || settingsAnim > 0.01f) {
             if (UiRender.inside(tmx, tmy, gearX, gearY, gearSize, gearSize)) {
+                pressedBtn = "rail:gear";
                 commitRename(); // closing via the gear must not lose the typed name
                 settingsView = false;
                 return true;
@@ -2134,6 +2389,23 @@ public final class ClickGuiScreen extends Screen {
             return true;
         }
 
+        // a held drag owns every further button — a second press must not retarget it
+        if (dragging) {
+            return true;
+        }
+
+        // drag the window by its header with the LEFT button (MMB still works
+        // anywhere); the search field keeps its clicks, and a grab drops the
+        // popup — it is anchored to the window and would be left behind
+        if (headerHover()) {
+            dragging = true;
+            dragButton = 0;
+            dragOffX = tmx - winX;
+            dragOffY = tmy - winY;
+            closePopup();
+            return true;
+        }
+
         if (dropdown != null && dropRow != null) {
             String[] opts = dropRow.options();
             // the list is drawn inside the popup's clip — a click on the part
@@ -2168,6 +2440,7 @@ public final class ClickGuiScreen extends Screen {
 
         // gear → theme overlay
         if (UiRender.inside(tmx, tmy, gearX, gearY, gearSize, gearSize)) {
+            pressedBtn = "rail:gear";
             settingsView = !settingsView;
             return true;
         }
@@ -2177,7 +2450,7 @@ public final class ClickGuiScreen extends Screen {
         }
 
         // search field (RENDER/MISC)
-        if (activeCategory == Category.RENDER || activeCategory == Category.MISC) {
+        if (searchVisible()) {
             if (UiRender.inside(tmx, tmy, searchX, searchY, searchW, searchH)) {
                 searchFocused = true;
                 configNameFocused = false;
@@ -2191,7 +2464,9 @@ public final class ClickGuiScreen extends Screen {
 
         // settings popup rows first — they sit above the grid
         if (popupModule != null && !popupClosing) {
+            // same 16x16 box the close button draws in renderPopup
             if (UiRender.inside(tmx, tmy, popX + popW - 19, popY + 4, 16, 16)) {
+                pressedBtn = "pop:close";
                 closePopup();
                 return true;
             }
@@ -2339,6 +2614,7 @@ public final class ClickGuiScreen extends Screen {
         popScroll = 0f;
         popSmooth = 0f;
         popW = 160;
+        popTitle = truncate(F_HEAD, mod.name() + " Settings", popW - 42); // immutable per module — not worth re-measuring per frame
         float contentH = 0f;
         for (Setting s : mod.settings()) {
             contentH += rowHeight(s);
@@ -2354,15 +2630,11 @@ public final class ClickGuiScreen extends Screen {
         popY = Math.max(8, Math.min(winY, height - popH - 8));
     }
 
-    /** Right-click opens the settings popup; processed before the LMB branch. */
+    /** Ends the window drag on the release of the button that owns it — even outside the window. */
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (dragging && button == 2) {
-            dragging = false;
-            int cw = MinecraftClient.getInstance().getWindow().getScaledWidth();
-            int ch = MinecraftClient.getInstance().getWindow().getScaledHeight();
-            offXP = (winX + WIN_W / 2f) / cw;
-            offYP = (winY + WIN_H / 2f) / ch;
+        if (dragging && button == dragButton) {
+            endDrag();
             return true;
         }
         pickerDrag = 0;
@@ -2377,7 +2649,9 @@ public final class ClickGuiScreen extends Screen {
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double deltaX, double deltaY) {
         updateTransformedMouse(mouseX, mouseY);
-        if (dragging && button == 2) {
+        // the owning button drives the move — LMB header drags and MMB drags
+        // share one path; the position follows the cursor with no easing (no lag)
+        if (dragging && button == dragButton) {
             winX = (float) (tmx - dragOffX);
             winY = (float) (tmy - dragOffY);
             clampWindowPos();
@@ -2605,6 +2879,10 @@ public final class ClickGuiScreen extends Screen {
             return true;
         }
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            if (dragging) {
+                endDrag(); // Esc must never leave the window glued to the cursor
+                return true;
+            }
             if (pickerOpen) {
                 closePicker();
                 return true;
@@ -2628,8 +2906,9 @@ public final class ClickGuiScreen extends Screen {
     @Override
     public void removed() {
         // the screen can be swapped mid-interaction (disconnect, F11…) —
-        // release every held input state before the autosave
-        dragging = false;
+        // release every held input state before the autosave; endDrag also
+        // persists the window position the interrupted drag had reached
+        endDrag();
         dragging2 = null;
         pickerDrag = 0;
         pressedId = null;
@@ -2655,8 +2934,9 @@ public final class ClickGuiScreen extends Screen {
             dropPushH = 0f;
             popupModule = null; // no point animating the popup out with the panel
             popupClosing = false;
-            // no held input may outlive the screen (stuck press / drag / capture)
-            dragging = false;
+            // no held input may outlive the screen (stuck press / drag / capture);
+            // endDrag persists wherever the drag had reached
+            endDrag();
             dragging2 = null;
             pickerDrag = 0;
             pressedId = null;

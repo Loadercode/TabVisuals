@@ -1,9 +1,10 @@
 /*© 2026 LoxeDLC. All rights reserved.*/
 package com.loadercode.tabvisuals.gui.hud.elements;
 
-import com.loadercode.tabvisuals.common.animation.Direction;
+import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.hud.Hud;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.util.math.MatrixStack;
 import com.loadercode.tabvisuals.gui.hud.draggable.AbstractDraggable;
@@ -32,9 +33,7 @@ public class HotKeys extends AbstractDraggable {
     private int activeBindCount = 0;
     private FontRenderer font;
     private FontRenderer fontModule;
-    private FontRenderer icon;
     private FontRenderer items;
-    private FontRenderer categoryIcon;
     private static final Random RANDOM = new Random();
     private static final List<java.lang.String> PREVIEW_KEYS = List.of("A", "B", "C", "D", "E");
 
@@ -43,6 +42,14 @@ public class HotKeys extends AbstractDraggable {
     private static final long ROW_HIGHLIGHT_MS = 650L;
     /** Появление строки по имени модуля — вход и подсветка считаются от него. */
     private final Map<java.lang.String, RowAnim> row_anims = new HashMap<>();
+    /** Переиспользуемый набор живых строк — без аллокации HashSet на кадр. */
+    private final Set<java.lang.String> live_rows = new HashSet<>();
+    /** Кадровая развязка для въезда панели. */
+    private long last_frame_ns;
+    private float entrance_t = 1f;
+    /** Размеры панели, накапливаемые циклом строк внутри Calculate.setAlpha. */
+    private float draw_offset = 23f;
+    private float draw_max_width = 80f;
 
     private static final class RowAnim {
         long appear_nanos;
@@ -83,15 +90,15 @@ public class HotKeys extends AbstractDraggable {
         return 1f - smoothstep(elapsed / ROW_HIGHLIGHT_MS);
     }
 
-    /** Category tab glyph in the ICONSCATEGORY atlas (stable letters only). */
-    private static String categoryGlyph(Category category) {
+    /** Category tab glyph from the shared ClickGUI set (Icons.CAT_*). */
+    private static Icons.Glyph categoryGlyph(Category category) {
         return switch (category) {
-            case RENDER -> "C";
-            case MISC -> "E";
-            case CONFIGS -> "F";
-            case COMBAT -> "G";
-            case PLAYER -> "H";
-            case MOVEMENT -> "D";
+            case COMBAT -> Icons.CAT_COMBAT;
+            case PLAYER -> Icons.CAT_TARGET;
+            case MOVEMENT -> Icons.CAT_MOVEMENT;
+            case RENDER -> Icons.CAT_VISUAL;
+            case MISC -> Icons.CAT_WORLD;
+            case CONFIGS -> Icons.CAT_CONFIGS;
         };
     }
 
@@ -132,23 +139,38 @@ public class HotKeys extends AbstractDraggable {
         if (font == null) {
             font = Fonts.getSize(13, Fonts.Type.DEFAULT);
             fontModule = Fonts.getSize(13, Fonts.Type.DEFAULT);
-            icon = Fonts.getSize(23, Fonts.Type.ICONS);
             items = Fonts.getSize(12, Fonts.Type.DEFAULT);
-            categoryIcon = Fonts.getSize(16, Fonts.Type.ICONSCATEGORY);
         }
 
         java.lang.String moduleCountText = java.lang.String.valueOf(activeBindCount);
 
-        int[] gc = ColorAssist.getRectangleGradientColors();
-        int blurQuality = com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality();
-        float totalH = getHeight();
+        // wall-clock развязка: пауза отрисовки (>250 мс) перезапускает въезд панели
+        long prev_ns = last_frame_ns;
+        long now = System.nanoTime();
+        last_frame_ns = now;
+        float dt = prev_ns == 0L ? 0.016f : (now - prev_ns) / 1_000_000_000f;
+        if (dt > 0.1f) dt = 0.1f;
+        if (prev_ns == 0L || now - prev_ns > 250_000_000L) entrance_t = 0f;
+        entrance_t = Math.min(1f, entrance_t + dt / 0.30f);
+        float enterInv = 1f - entrance_t;
+        final float enter = 1f - enterInv * enterInv * enterInv;
 
-        blur.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), totalH)
+        int blurQuality = com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality();
+        draw_offset = 23f;
+        draw_max_width = 80f;
+        live_rows.clear();
+
+        // Въезд панели: подъём снизу + альфа, как у CoolDowns/Potions
+        matrix.push();
+        matrix.translate(0f, (1f - enter) * -6f, 0f);
+        Calculate.setAlpha(enter, () -> {
+        int[] gc = ColorAssist.getRectangleGradientColors();
+        blur.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), getHeight())
                 .round(4f)
                 .quality(blurQuality)
                 .color(ColorAssist.getBlurColor())
                 .build());
-        rectangle.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), totalH)
+        rectangle.render(ShapeProperties.create(matrix, getX(), getY(), getWidth(), getHeight())
                 .round(4f)
                 .thickness(0.1f)
                 .outlineColor(ColorAssist.getOutlineColor())
@@ -175,28 +197,26 @@ public class HotKeys extends AbstractDraggable {
         rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 1f, 6)
                 .color(ColorAssist.getText(0.5F)).round(0F).build());
 
-        icon.drawString(matrix, "B", getX() + HudHelper.hud_px(4f), getY() + HudHelper.hud_px(5f), ColorAssist.getText());
+        // Иконка шапки — центр строки, оптически на одной линии с заголовком
+        Icons.draw(matrix, Icons.KEYBOARD, getX() + HudHelper.hud_px(4.5f),
+                UiRender.iconLineY(font, Icons.KEYBOARD, 17f, getY() + HudHelper.hud_px(6.5f)),
+                17f, ColorAssist.getText());
         font.drawString(matrix, getName(), getX() + HudHelper.hud_px(22f), getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
 
         float centerX = getX() + getWidth() / 2F;
-        int offset = 23;
-        int maxWidth = 80;
-
-        long now = System.nanoTime();
-        Set<java.lang.String> live_rows = new HashSet<>();
 
         if (keysList.isEmpty() && HudHelper.isChat(mc.currentScreen)) {
-            float centerY = getY() + offset;
+            float centerY = getY() + draw_offset;
             java.lang.String name = "Example Module";
             java.lang.String bind = "[" + currentRandomKey + "]";
-            java.lang.String iconChar = "A";
+            Icons.Glyph iconGlyph = Icons.CAT_COMBAT;
             RowAnim state = row_anims.computeIfAbsent("__preview__", k -> {
                 RowAnim a = new RowAnim();
                 a.appear_nanos = now;
                 return a;
             });
             live_rows.add("__preview__");
-            float enter = row_enter(state, 0, now);
+            float enterRow = row_enter(state, 0, now);
             float highlight = row_highlight(state.appear_nanos, now);
             int textColor = ColorAssist.getText();
             int bindColor = ColorAssist.lerp(highlight, textColor, ColorAssist.getClientColor());
@@ -204,58 +224,62 @@ public class HotKeys extends AbstractDraggable {
             int colorWithAlpha = ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
             matrix.push();
             // Скольжение строки из-под шапки: 8px слева при enter=0
-            matrix.translate((enter - 1f) * 8f, 0f, 0f);
-            Calculate.scale(matrix, centerX, centerY, 1, enter, () -> {
+            matrix.translate((enterRow - 1f) * 8f, 0f, 0f);
+            Calculate.scale(matrix, centerX, centerY, 1, enterRow, () -> {
                 draw_row_highlight(matrix, centerY, highlight);
-                categoryIcon.drawString(matrix, iconChar, getX() + HudHelper.hud_px(4.5f), centerY + HudHelper.hud_px(1.5f), textColor);
+                Icons.draw(matrix, iconGlyph, getX() + HudHelper.hud_px(4.5f),
+                        UiRender.iconLineY(fontModule, iconGlyph, 16f, centerY + 1), 16f, textColor);
                 rectangle.render(ShapeProperties.create(matrix, getX() + 15F, centerY - 1, 1F, 7).color(ColorAssist.getOutline(1, 0.5F)).build());
                 fontModule.drawString(matrix, name, getX() + HudHelper.hud_px(19f), centerY + 1, colorWithAlpha);
                 fontModule.drawString(matrix, bind, HudHelper.hud_text_right(fontModule, bind, HudHelper.hud_px(getX() + getWidth() - 8f)), centerY + 1, bindColor);
             });
             matrix.pop();
             int width = (int) Math.ceil(fontModule.getStringWidth(name + bind)) + 25;
-            maxWidth = Math.max(width, maxWidth);
-            offset += 11;
+            draw_max_width = Math.max(width, draw_max_width);
+            draw_offset += 11;
         } else {
             int row_index = 0;
             for (ModuleStub module : keysList) {
                 java.lang.String keyName = module.bind() > 0
                         ? StringHelper.getBindName(module.bind()) : holdKey(module);
                 java.lang.String bind = "[" + keyName + "]";
-                float centerY = getY() + offset;
+                float centerY = getY() + draw_offset;
                 RowAnim state = row_anims.computeIfAbsent(module.name(), k -> {
                     RowAnim a = new RowAnim();
                     a.appear_nanos = now;
                     return a;
                 });
                 live_rows.add(module.name());
-                float enter = row_enter(state, row_index, now);
+                float enterRow = row_enter(state, row_index, now);
                 float highlight = row_highlight(state.appear_nanos, now);
                 row_index++;
-                java.lang.String iconChar = categoryGlyph(module.category());
+                Icons.Glyph iconGlyph = categoryGlyph(module.category());
                 int textColor = ColorAssist.getText();
                 int bindColor = ColorAssist.lerp(highlight, textColor, ColorAssist.getClientColor());
                 int textAlpha = 255;
                 int colorWithAlpha = ColorAssist.rgba((textColor >> 16) & 255, (textColor >> 8) & 255, textColor & 255, textAlpha);
                 matrix.push();
                 // Скольжение строки из-под шапки: 8px слева при enter=0
-                matrix.translate((enter - 1f) * 8f, 0f, 0f);
-                Calculate.scale(matrix, centerX, centerY, 1, enter, () -> {
+                matrix.translate((enterRow - 1f) * 8f, 0f, 0f);
+                Calculate.scale(matrix, centerX, centerY, 1, enterRow, () -> {
                     draw_row_highlight(matrix, centerY, highlight);
-                    categoryIcon.drawString(matrix, iconChar, getX() + HudHelper.hud_px(4.5f), centerY + HudHelper.hud_px(1.5f), textColor);
+                    Icons.draw(matrix, iconGlyph, getX() + HudHelper.hud_px(4.5f),
+                            UiRender.iconLineY(fontModule, iconGlyph, 16f, centerY + 1), 16f, textColor);
                     rectangle.render(ShapeProperties.create(matrix, getX() + 15F, centerY - 1, 1F, 7).color(ColorAssist.getOutline(1, 0.5F)).build());
                     fontModule.drawString(matrix, module.name(), getX() + HudHelper.hud_px(19f), centerY + 1, colorWithAlpha);
                     fontModule.drawString(matrix, bind, HudHelper.hud_text_right(fontModule, bind, HudHelper.hud_px(getX() + getWidth() - 8f)), centerY + 1, bindColor);
                 });
                 matrix.pop();
                 float width = (float) Math.ceil(fontModule.getStringWidth(module.name() + bind)) + 25;
-                maxWidth = (int) Math.max(width, maxWidth);
-                offset += 11;
+                draw_max_width = Math.max(width, draw_max_width);
+                draw_offset += 11;
             }
         }
+        });
+        matrix.pop();
         row_anims.keySet().retainAll(live_rows);
-        setWidth(maxWidth + 10);
-        setHeight(offset);
+        setWidth((int) (draw_max_width + 10));
+        setHeight((int) draw_offset);
     }
 
     /** Акцентная подложка строки при срабатывании бинда: плавный всплеск alpha. */

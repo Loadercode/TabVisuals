@@ -3,6 +3,7 @@ package com.loadercode.tabvisuals.gui.hud;
 
 import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.loadercode.tabvisuals.gui.module.ModuleRegistry;
 import com.loadercode.tabvisuals.gui.module.ModuleStub;
 import com.loadercode.tabvisuals.gui.setting.BooleanSetting;
@@ -429,6 +430,11 @@ public final class HudRenderer {
 
     // --------------------------------------------------------------- toasts
 
+    /** Размер иконки типа уведомления в карточке (4..32 — диапазон предзагруженных шрифтов). */
+    private static final float TOAST_ICON_SIZE = 11f;
+    /** Зазор между иконкой и текстом карточки. */
+    private static final float TOAST_ICON_GAP = 5f;
+
     /**
      * Toast stack, centered under the crosshair (LoxeDLC Notifications: a
      * 1px accent progress bar on top of each card). Shared with ClickGuiScreen:
@@ -458,7 +464,9 @@ public final class HudRenderer {
             float mw = f.getStringWidth(t.middle);
             float sw2 = fb.getStringWidth(t.status);
             float textW = pw + nw + mw + sw2;
-            float cardW = textW + 22f;
+            // карточка шире текста ровно на блок иконки (иконка + зазор слева)
+            float contentW = TOAST_ICON_SIZE + TOAST_ICON_GAP + textW;
+            float cardW = contentW + 22f;
             float cardH = NotificationManager.TOAST_H;
 
             float alpha = NotificationManager.clamp01(t.enterEased) * (1f - t.exitP);
@@ -488,8 +496,13 @@ public final class HudRenderer {
                         .build());
             }
 
-            float tx = x + (dw - textW) / 2f;
+            float contentX = x + (dw - contentW) / 2f;
+            float tx = contentX + TOAST_ICON_SIZE + TOAST_ICON_GAP;
             float ty = y + (dh - textH) / 2f;
+            // иконка типа — та же baseline-коррекция UiRender.iconY, что и в элементах
+            Icons.draw(m, t.glyph, contentX,
+                    UiRender.iconY(t.glyph, TOAST_ICON_SIZE, y + dh / 2f),
+                    TOAST_ICON_SIZE, HudTheme.multAlpha(HudTheme.text(), alpha));
             f.drawString(m, t.prefix, tx, ty, HudTheme.multAlpha(HudTheme.text2(), alpha));
             fb.drawString(m, t.name, tx + pw, ty, HudTheme.multAlpha(HudTheme.text(), alpha));
             f.drawString(m, t.middle, tx + pw + nw, ty, HudTheme.multAlpha(HudTheme.text2(), alpha));
@@ -510,7 +523,9 @@ public final class HudRenderer {
         String prefix = "Module ", name = "HUD", middle = " was ", status = "enabled";
         float textW = f.getStringWidth(prefix) + fb.getStringWidth(name)
                 + f.getStringWidth(middle) + fb.getStringWidth(status);
-        float cardW = textW + 22f;
+        // та же раскладка, что у живой карточки: блок иконки слева + текст
+        float contentW = TOAST_ICON_SIZE + TOAST_ICON_GAP + textW;
+        float cardW = contentW + 22f;
         float cardH = NotificationManager.TOAST_H;
         float x = screenW / 2f - cardW / 2f;
         float y = screenH / 2f + NotificationManager.START_OFFSET + NotificationManager.yOffset;
@@ -520,8 +535,12 @@ public final class HudRenderer {
                 .round(0.75f, 0f, 0.75f, 0f)
                 .color(HudTheme.fade(0))
                 .build());
-        float tx = x + (cardW - textW) / 2f;
+        float contentX = x + (cardW - contentW) / 2f;
+        float tx = contentX + TOAST_ICON_SIZE + TOAST_ICON_GAP;
         float ty = y + (cardH - f.getStringHeight("Aa")) / 2f;
+        Icons.draw(m, Icons.INFO, contentX,
+                UiRender.iconY(Icons.INFO, TOAST_ICON_SIZE, y + cardH / 2f),
+                TOAST_ICON_SIZE, HudTheme.text());
         f.drawString(m, prefix, tx, ty, HudTheme.text2());
         fb.drawString(m, name, tx + f.getStringWidth(prefix), ty, HudTheme.text());
         f.drawString(m, middle, tx + f.getStringWidth(prefix) + fb.getStringWidth(name), ty, HudTheme.text2());
