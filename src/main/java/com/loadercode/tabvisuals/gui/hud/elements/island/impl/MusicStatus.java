@@ -4,6 +4,7 @@ package com.loadercode.tabvisuals.gui.hud.elements.island.impl;
 import com.loadercode.tabvisuals.gui.Theme;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.icon.Icons;
+import com.loadercode.tabvisuals.gui.hud.HudTheme;
 import com.loadercode.tabvisuals.gui.hud.elements.HudHelper;
 import com.loadercode.tabvisuals.gui.hud.elements.StringHelper;
 import com.loadercode.tabvisuals.gui.music.MusicManager;
@@ -364,10 +365,15 @@ public class MusicStatus extends IslandStatus implements QuickImports {
         float titleY = HudHelper.hud_text_top(blockTop);
         float artistY = HudHelper.hud_text_top(blockTop + titleH + lineGap);
 
+        // Длинный title/artist: скролл вместо жёсткого scissor-обрезания без
+        // многоточия (см. такой же вызов у строки 221); scissor остаётся
+        // внешним жёстким краем, чтобы прокрутка не вылезала за панель.
         scissor.push(m.peek().getPositionMatrix(), textX, y, maxTextWidth, height);
-        titleFont.drawStringSnapped(m, titleStr, textX, titleY, UiRender.mulAlpha(0xFFFFFFFF, fadeAlpha));
+        titleFont.drawStringWithScroll(m, titleStr, textX, titleY, maxTextWidth,
+                UiRender.mulAlpha(0xFFFFFFFF, fadeAlpha));
         if (hasArtist) {
-            artistFont.drawStringSnapped(m, artist, textX, artistY, UiRender.mulAlpha(0xFFA0A0A0, fadeAlpha));
+            artistFont.drawStringWithScroll(m, artist, textX, artistY, maxTextWidth,
+                    UiRender.mulAlpha(HudTheme.text2(), fadeAlpha));
         }
         scissor.pop();
 

@@ -1,10 +1,15 @@
 // language: Java, file: Icons.java, target: Minecraft 1.21.4 Fabric, JDK 21
 package com.loadercode.tabvisuals.gui.icon;
 
+import com.google.common.base.Suppliers;
 import com.loadercode.tabvisuals.gui.UiRender;
+import com.loadercode.tabvisuals.render.atlasfont.msdf.MsdfFont;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
+import com.loadercode.tabvisuals.render.systemrender.builders.Builder;
 import net.minecraft.client.util.math.MatrixStack;
+
+import java.util.function.Supplier;
 
 /**
  * Единая точка доступа к иконкам клиента. Иконки живут в пяти MSDF-гарнитурах
@@ -97,7 +102,12 @@ public final class Icons {
         USER_OUTLINE(Fonts.Type.ICONRICHREG, 'G'),
         EYE(Fonts.Type.ICONRICHREG, 'E'),
         INVISIBLE(Fonts.Type.ICONRICHREG, 'L'),
-        CUBE(Fonts.Type.ICONRICHREG, 'R');
+        CUBE(Fonts.Type.ICONRICHREG, 'R'),
+
+        /** Бренд-монограмма «D»: MSDF-атлас mre:clienticon1 (json+png), не ttf —
+         *  типа Fonts.Type у неё нет (type == null), во всех методах Icons
+         *  перехватывается ДО font(), как векторный PAUSE. */
+        BRAND(null, 'D');
 
         private final Fonts.Type type;
         private final char ch;
@@ -195,6 +205,7 @@ public final class Icons {
     public static final Glyph EYE = Glyph.EYE;
     public static final Glyph INVISIBLE = Glyph.INVISIBLE;
     public static final Glyph CUBE = Glyph.CUBE;
+    public static final Glyph BRAND = Glyph.BRAND;
 
     /** Векторный PAUSE: два бара шириной 0.13·size с зазором 0.12·size. */
     private static final float PAUSE_W_FACTOR = 0.38f;   // 2 бара + зазор
@@ -210,12 +221,35 @@ public final class Icons {
         return glyph == Glyph.PAUSE;
     }
 
+    private static boolean isBrand(Glyph glyph) {
+        return glyph == Glyph.BRAND;
+    }
+
+    /** MSDF-атлас бренда (mre:clienticon1): ленивая сборка на render-потоке — тот же
+     *  паттерн Suppliers.memoize, что был в Watermark до переезда на Icons. */
+    private static final Supplier<MsdfFont> BRAND_FONT =
+            Suppliers.memoize(() -> MsdfFont.builder().atlas("clienticon1").data("clienticon1").build());
+
+    private static void drawBrand(MatrixStack m, float x, float y, float size, int argb) {
+        Builder.text()
+                .font(BRAND_FONT.get())
+                .text(Glyph.BRAND.asString())
+                .size(size)
+                .color(argb)
+                .build()
+                .render(m.peek().getPositionMatrix(), x, y);
+    }
+
     /**
      * Рисует иконку с верхнего левого угла (x, y) — как drawString.
-     * PAUSE рисуется векторно (два бара), остальные — глифом.
+     * PAUSE рисуется векторно (два бара), бренд — MSDF-глифом, остальные — глифом.
      */
     public static void draw(MatrixStack m, Glyph glyph, float x, float y, float size, int argb) {
         if (glyph == null || m == null) return;
+        if (isBrand(glyph)) {
+            drawBrand(m, x, y, size, argb);
+            return;
+        }
         if (isVector(glyph)) {
             drawPause(m, x, y + (size - PAUSE_H_FACTOR * size) / 2f, size, argb);
             return;
@@ -237,6 +271,7 @@ public final class Icons {
     /** Ширина иконки при данном размере (для раскладки/центрирования). */
     public static float width(Glyph glyph, float size) {
         if (glyph == null) return 0f;
+        if (isBrand(glyph)) return BRAND_FONT.get().getWidth(glyph.asString(), size);
         if (isVector(glyph)) return PAUSE_W_FACTOR * size;
         FontRenderer f = font(glyph, size);
         return f == null ? 0f : f.getStringWidth(glyph.asString());
@@ -246,6 +281,8 @@ public final class Icons {
     public static float height(Glyph glyph, float size) {
         if (glyph == null) return 0f;
         if (isVector(glyph)) return PAUSE_H_FACTOR * size;
+        // у MSDF-атласа бренда getHeight нет — эм-бокс глифа ≈ size
+        if (isBrand(glyph)) return size;
         FontRenderer f = font(glyph, size);
         return f == null ? 0f : f.getStringHeight(glyph.asString());
     }
@@ -253,6 +290,10 @@ public final class Icons {
     /** Иконка, центрированная по точке (cx, cy). */
     public static void drawCentered(MatrixStack m, Glyph glyph, float cx, float cy, float size, int argb) {
         if (glyph == null || m == null) return;
+        if (isBrand(glyph)) {
+            drawBrand(m, cx - width(glyph, size) / 2f, cy - size / 2f, size, argb);
+            return;
+        }
         if (isVector(glyph)) {
             float barW = size * 0.13f;
             float barH = size * PAUSE_H_FACTOR;

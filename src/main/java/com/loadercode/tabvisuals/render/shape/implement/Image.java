@@ -24,36 +24,37 @@ public class Image implements Shape, QuickImports {
         }
 
         FontRenderer.flushDeferred();
-        
+
+        MatrixStack matrix = shape.getMatrix();
+        Identifier textureId = Identifier.of(texture);
+
         try {
-            MatrixStack matrix = shape.getMatrix();
-            Identifier textureId = Identifier.of(texture);
+            mc.getResourceManager().getResource(textureId).orElseThrow();
+        } catch (Exception e) {
+            return;
+        }
 
-            try {
-                mc.getResourceManager().getResource(textureId).orElseThrow();
-            } catch (Exception e) {
-                return;
-            }
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.setShaderTexture(0, textureId);
 
-            RenderSystem.enableBlend();
-            RenderSystem.defaultBlendFunc();
-            RenderSystem.setShaderTexture(0, textureId);
+        float width = shape.getWidth();
+        float x = shape.getX() + width;
+        float y = shape.getY();
 
-            float width = shape.getWidth();
-            float x = shape.getX() + width;
-            float y = shape.getY();
-
-            matrix.push();
+        matrix.push();
+        try {
             matrix.translate(x, y, 0.0F);
             matrix.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(90));
             matrix.translate(-x, -y, 0.0F);
 
             drawEngine.quad(matrix.peek().getPositionMatrix(), x, y, shape.getHeight(), width, shape.getColor().x);
-
-            matrix.pop();
-
-            RenderSystem.disableBlend();
         } catch (Exception ignored) {
+        } finally {
+            // pop/blend в finally: исключение из quad оставляло matrix-стек
+            // и blend включёнными на весь остаток кадра (рецепт EPRender).
+            matrix.pop();
+            RenderSystem.disableBlend();
         }
     }
 }

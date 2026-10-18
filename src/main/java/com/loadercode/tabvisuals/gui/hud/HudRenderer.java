@@ -115,13 +115,6 @@ public final class HudRenderer {
     public static final FontRenderer F_15 = Fonts.getSize(15, Fonts.Type.DEFAULT);
     public static final FontRenderer F_16 = Fonts.getSize(16, Fonts.Type.DEFAULT);
     public static final FontRenderer F_18_REG = Fonts.getSize(18, Fonts.Type.REGULAR);
-    public static final FontRenderer F_ICON_17 = Fonts.getSize(17, Fonts.Type.ICONS);
-    public static final FontRenderer F_ICON_21 = Fonts.getSize(21, Fonts.Type.ICONS);
-    public static final FontRenderer F_GI_14 = Fonts.getSize(14, Fonts.Type.GUIICONS);
-    public static final FontRenderer F_GI_18 = Fonts.getSize(18, Fonts.Type.GUIICONS);
-    public static final FontRenderer F_GI_20 = Fonts.getSize(20, Fonts.Type.GUIICONS);
-    public static final FontRenderer F_GI_23 = Fonts.getSize(23, Fonts.Type.GUIICONS);
-    public static final FontRenderer F_CAT_16 = Fonts.getSize(16, Fonts.Type.ICONSCATEGORY);
     public static final FontRenderer F_ISLAND = Fonts.getSize(16, Fonts.Type.NOTVISUALS_MEDIUM);
     public static final FontRenderer F_ISLAND_BIG = Fonts.getSize(18, Fonts.Type.NOTVISUALS_MEDIUM);
 
@@ -399,34 +392,8 @@ public final class HudRenderer {
         plate(m, x, y, w, h, new Vector4f(0f, RADIUS, 0f, RADIUS), alpha, true);
     }
 
-    /** "Title / Active: N" header content; returns nothing, pure draw. */
-    public static void drawHeader(MatrixStack m, float x, float y, String title, String counter,
-                                  FontRenderer iconFont, String iconGlyph) {
-        int text = HudTheme.text();
-        // divider like the reference: 0.5×6 hairline at x+18
-        QuickImports.rectangle.render(ShapeProperties.create(m, x + 18, y + 5, 0.5f, 6)
-                .color(HudTheme.text(0.5f)).build());
-        if (iconFont != null && iconGlyph != null) {
-            iconFont.drawString(m, iconGlyph, x + 4.5f, y + 5.5f, text);
-        }
-        F_TITLE_13.drawString(m, title, x + 22, y + 4f, text);
-        if (counter != null) {
-            FontRenderer f12 = F_12;
-            float cw = f12.getStringWidth(counter);
-            f12.drawString(m, counter, x + getWidth(m) - cw - 4f, y + 4.5f, HudTheme.text2());
-        }
-    }
-
-    /** Width bookkeeping for headers — set by the caller before drawHeader. */
-    private static float headerWidth;
-
-    private static float getWidth(MatrixStack m) {
-        return headerWidth;
-    }
-
-    public static void setHeaderWidth(float w) {
-        headerWidth = w;
-    }
+    // drawHeader/setHeaderWidth удалены: мёртвые (вызовов ноль), внутри была
+    // последняя в HUD точка рисования сырого шрифтового глифа мимо Icons.
 
     // --------------------------------------------------------------- toasts
 
@@ -498,7 +465,8 @@ public final class HudRenderer {
 
             float contentX = x + (dw - contentW) / 2f;
             float tx = contentX + TOAST_ICON_SIZE + TOAST_ICON_GAP;
-            float ty = y + (dh - textH) / 2f;
+            // канон центровки: drawY = y0 + (h − H/2)/2 + 3 (перо в y−3, H = getStringHeight)
+            float ty = y + (dh - textH / 2f) / 2f + 3f;
             // иконка типа — та же baseline-коррекция UiRender.iconY, что и в элементах
             Icons.draw(m, t.glyph, contentX,
                     UiRender.iconY(t.glyph, TOAST_ICON_SIZE, y + dh / 2f),
@@ -537,7 +505,8 @@ public final class HudRenderer {
                 .build());
         float contentX = x + (cardW - contentW) / 2f;
         float tx = contentX + TOAST_ICON_SIZE + TOAST_ICON_GAP;
-        float ty = y + (cardH - f.getStringHeight("Aa")) / 2f;
+        // канон центровки (см. живую карточку выше)
+        float ty = y + (cardH - f.getStringHeight("Aa") / 2f) / 2f + 3f;
         Icons.draw(m, Icons.INFO, contentX,
                 UiRender.iconY(Icons.INFO, TOAST_ICON_SIZE, y + cardH / 2f),
                 TOAST_ICON_SIZE, HudTheme.text());

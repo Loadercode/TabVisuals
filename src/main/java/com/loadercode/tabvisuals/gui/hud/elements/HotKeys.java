@@ -187,12 +187,15 @@ public class HotKeys extends AbstractDraggable {
                     .color(gc[0], gc[1], gc[2], gc[3])
                 .build());
 
-        // Фиксированная колонка справа: подпись и счётчик не смещаются при смене разрядов
-        final float rightEdge = HudHelper.hud_px(getX() + getWidth() - 8f);
-        items.drawString(matrix, "Active:",
-                HudHelper.hud_text_right(items, "Active:", rightEdge - 22f), getY() + 7, ColorAssist.getText());
-        items.drawString(matrix, moduleCountText,
-                HudHelper.hud_text_right(items, moduleCountText, rightEdge), getY() + 7, ColorAssist.getText());
+        // Правая колонка от ЛЕВОГО якоря, не правым выравниванием: замер по
+        // скриншоту показал, что getStringWidth("Active:") давал +18px и подпись
+        // наезжала на «Hot Keys» (якорь 574 при конце заголовка 579). Рисунок
+        // всегда стартует ровно от переданного x, поэтому левый якорь метрико-
+        // независим; счётчик идёт в составе одной строки — разряды не двигают
+        // начало колонки.
+        final float rightColX = HudHelper.hud_px(getX() + getWidth() - 62f);
+        items.drawString(matrix, "Active: " + moduleCountText,
+                rightColX, getY() + HudHelper.hud_px(6.5f), ColorAssist.getText());
 
         rectangle.render(ShapeProperties.create(matrix, getX() + 18, getY() + 5, 1f, 6)
                 .color(ColorAssist.getText(0.5F)).round(0F).build());

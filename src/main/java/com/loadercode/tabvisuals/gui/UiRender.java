@@ -275,7 +275,7 @@ public final class UiRender implements QuickImports {
         float w = tw + pad * 2;
         float x = cx - w / 2f;
         rect(m, x, y, w, h, h / 2f, bg);
-        font.drawString(m, label, x + pad, y + (h - font.getStringHeight(label)) / 2f + 1f, fg);
+        font.drawString(m, label, x + pad, y + (h - font.getStringHeight(label) / 2f) / 2f + 3f, fg);
         return w;
     }
 
@@ -335,8 +335,9 @@ public final class UiRender implements QuickImports {
             rect(m, x, y, w, h, round, body);
         }
         if (font != null && label != null && !label.isEmpty()) {
+            // канон центрирования: FontRenderer рисует перо в (y−3) при масштабе 0.5
             font.drawString(m, label, x + (w - font.getStringWidth(label)) / 2f,
-                    y + (h - font.getStringHeight(label)) / 2f + 1f, fg);
+                    y + (h - font.getStringHeight(label) / 2f) / 2f + 3f, fg);
         }
         m.pop();
     }

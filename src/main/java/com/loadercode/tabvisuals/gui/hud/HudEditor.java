@@ -639,7 +639,7 @@ public final class HudEditor {
         // Цвет фиксированный светлый: плашка тёмная (BADGE_BG), а HudTheme.text()
         // в светлой теме даёт тёмный текст — метка переставала читаться
         UiRender.text(F_BADGE, m, text, bx + 5f,
-                ly + (LABEL_H - F_BADGE.getStringHeight(text)) / 2f + 1f,
+                ly + (LABEL_H - F_BADGE.getStringHeight(text) / 2f) / 2f + 3f,
                 HudTheme.multAlpha(0xFFF5F5F8, a));
     }
 
@@ -657,7 +657,7 @@ public final class HudEditor {
         UiRender.rect(m, x, by, bw, BADGE_H, 3.5f, UiRender.mulAlpha(BADGE_BG, alpha));
         UiRender.outline(m, x, by, bw, BADGE_H, 3.5f, UiRender.mulAlpha(BADGE_BORDER, alpha), 1f);
         UiRender.text(F_BADGE, m, label, x + 5f,
-                by + (BADGE_H - F_BADGE.getStringHeight(label)) / 2f + 1f,
+                by + (BADGE_H - F_BADGE.getStringHeight(label) / 2f) / 2f + 3f,
                 HudTheme.multAlpha(0xFFF5F5F8, alpha));
     }
 
@@ -697,7 +697,7 @@ public final class HudEditor {
 
             String title = menuLabel;
             UiRender.text(F_MENU_SEMI, m, title, menuX + 8f,
-                    menuY + 4f + (12f - F_MENU_SEMI.getStringHeight(title)) / 2f + 1f,
+                    menuY + 4f + (12f - F_MENU_SEMI.getStringHeight(title) / 2f) / 2f + 3f,
                     UiRender.mulAlpha(MENU_TITLE, a));
 
             draw_menu_row(m, menuY + 20f, "Сбросить позицию", a, interactive);
@@ -714,7 +714,7 @@ public final class HudEditor {
             UiRender.rect(m, menuX + 4, ry, MENU_W - 8, 14, 3f, ROW_HOVER);
         }
         UiRender.text(F_MENU, m, label, menuX + 8f,
-                ry + (14f - F_MENU.getStringHeight(label)) / 2f + 1f,
+                ry + (14f - F_MENU.getStringHeight(label) / 2f) / 2f + 3f,
                 UiRender.mulAlpha(MENU_TEXT, alpha));
     }
 

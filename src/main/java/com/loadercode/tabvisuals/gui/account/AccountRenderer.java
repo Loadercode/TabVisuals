@@ -1084,6 +1084,8 @@ public final class AccountRenderer {
     }
 
     private static float clamp(float v, float min, float max) {
+        // NaN в min: сравнения с NaN — false, и NaN уходил в glow/альфы/координаты
+        if (Float.isNaN(v)) return min;
         return v < min ? min : v > max ? max : v;
     }
 

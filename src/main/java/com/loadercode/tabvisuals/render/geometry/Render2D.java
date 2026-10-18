@@ -210,19 +210,13 @@ public class Render2D implements QuickImports {
             return;
         }
 
-        // Параметры тени (смещение и размытие/интенсивность)
-        float shadowOffset = 2.0f;
-        int shadowColor = new Color(0, 0, 0, 150).getRGB(); // Полупрозрачный черный
-
-        // Вариант 1: Обычный сглаженный затененный прямоугольник под элементом
-        // Используем твой стандартный rectangle/Render2D (аналогично тому, как у тебя в коде)
-        // Рисуем с небольшим отступом (blur/glow эффект, если твоя система рендера поддерживает скругления и градиенты)
-
-        // Пример для ShapeProperties (как в твоих Binds/Armor):
-        // rectangle.render(ShapeProperties.create(matrix, x - 1, y - 1, width + 2, height + 2)
-        //         .round(4) // Скругление под стать элементам худа
-        //         .color(shadowColor)
-        //         .build());
+        // Мягкая тень: тот же скруглённый прямоугольник под элементом — чуть
+        // шире по бокам (ореол) и со смещением 2px вниз (глубина).
+        int shadowColor = new Color(0, 0, 0, 150).getRGB();
+        rectangle.render(ShapeProperties.create(matrix, x - 1f, y + 1f, width + 2f, height + 2f)
+                .round(4)
+                .color(shadowColor)
+                .build());
     }
 
     public static void endBuilding(BufferBuilder bb) {

@@ -199,12 +199,14 @@ public class HotBar extends AbstractDraggable {
 
             Calculate.setAlpha(alpha, () -> {
                 float tw = width + paddingX * 2;
-                float th = overlayFont.getStringHeight(text) / 2.15F + paddingY * 2;
+                // канон: высота строки = getStringHeight/2 (экранное), текст в
+                // центр бокса => drawY = heightStart + 3 независимо от паддинга
+                float th = overlayFont.getStringHeight(text) / 2F + paddingY * 2;
                 blur.render(ShapeProperties.create(matrix, x - paddingX, heightStart - paddingY, tw, th)
                         .round(2.5F).quality(Hud.getInstance().getBlurQuality())
                         .color(ColorAssist.getRect(0.7F))
                         .build());
-                overlayFont.drawText(matrix, text, x, heightStart + 2.5F);
+                overlayFont.drawText(matrix, text, x, heightStart + 3F);
             });
         }
 
@@ -218,12 +220,13 @@ public class HotBar extends AbstractDraggable {
 
             Calculate.setAlpha(alpha, () -> {
                 float tw = width + paddingX * 2;
-                float th = overlayFont.getStringHeight(text) / 2.15F + paddingY * 2;
+                // та же канонная высота/центровка, что и у тултипа предмета
+                float th = overlayFont.getStringHeight(text) / 2F + paddingY * 2;
                 blur.render(ShapeProperties.create(matrix, x - paddingX, heightStart - paddingY - 17, tw, th)
                             .round(2.5F).quality(Hud.getInstance().getBlurQuality())
                         .color(ColorAssist.getRect(0.7F))
                         .build());
-                overlayFont.drawText(matrix, text, x, heightStart - 14.5F);
+                overlayFont.drawText(matrix, text, x, heightStart - 14F);
             });
         }
     }

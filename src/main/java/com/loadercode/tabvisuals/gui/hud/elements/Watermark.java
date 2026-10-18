@@ -1,28 +1,21 @@
 /*© 2026 LoxeDLC. All rights reserved.*/
 package com.loadercode.tabvisuals.gui.hud.elements;
 
-import com.google.common.base.Suppliers;
 import com.loadercode.tabvisuals.gui.UiRender;
 import com.loadercode.tabvisuals.gui.hud.draggable.AbstractDraggable;
 import com.loadercode.tabvisuals.gui.icon.Icons;
-import com.loadercode.tabvisuals.render.atlasfont.msdf.MsdfFont;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.font.Fonts;
 import com.loadercode.tabvisuals.render.shape.ShapeProperties;
-import com.loadercode.tabvisuals.render.systemrender.builders.Builder;
 import com.loadercode.tabvisuals.render.color.ColorAssist;
 import com.loadercode.tabvisuals.render.geometry.Render2D;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.Identifier;
-import org.joml.Matrix4f;
 import com.mojang.blaze3d.systems.RenderSystem;
-
-import java.util.function.Supplier;
 
 public class Watermark extends AbstractDraggable {
     private int fpsCount = 0;
-    private static final Supplier<MsdfFont> ICONS_FONT_1 = Suppliers.memoize(() -> MsdfFont.builder().atlas("clienticon1").data("clienticon1").build());
     private FontRenderer default12;
     private FontRenderer default13;
     /** Размер бейджа часов в центре бара — тот же, что в расчёте ширины. */
@@ -68,7 +61,6 @@ public class Watermark extends AbstractDraggable {
 
         matrix.push();
         matrix.translate((double) slideX, 0.0, 0.0);
-        Matrix4f matrix4f = matrix.peek().getPositionMatrix();
         String fps = String.valueOf(fpsCount);
         String serverIp = getServerIpCached();
         String title = "TabVisuals";
@@ -87,7 +79,7 @@ public class Watermark extends AbstractDraggable {
         float serverIpWidth = default13.getStringWidth(serverIp);
         // иконка часов рисуется через Icons — ширина берётся оттуда же, а не «на глаз 10px»
         float clockWidth = Icons.width(Icons.Glyph.CLOCK, CLOCK_SIZE);
-        float trailingWidth = ICONS_FONT_1.get().getWidth("D", 11);
+        float trailingWidth = Icons.width(Icons.BRAND, 11f);
         float totalWidth = iconWidth + 7 + 4 + titleWidth + 9 + 5 + fpsWidth + 2 + clockWidth + 4 + 5
                 + serverIpWidth + 2.5f + trailingWidth;
         float finalWidth = totalWidth + 9;
@@ -186,13 +178,8 @@ public class Watermark extends AbstractDraggable {
 
         currentX += serverIpWidth;
 
-        Builder.text()
-                .font(ICONS_FONT_1.get())
-                .text("D")
-                .size(11)
-                .color(ColorAssist.multAlpha(ColorAssist.getText(), alpha))
-                .build()
-                .render(matrix4f, currentX + 2.5f, getY() + 2f);
+        Icons.draw(matrix, Icons.BRAND, currentX + 2.5f, getY() + 2f, 11f,
+                ColorAssist.multAlpha(ColorAssist.getText(), alpha));
 
         matrix.pop();
     }

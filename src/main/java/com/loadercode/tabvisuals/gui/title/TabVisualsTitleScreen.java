@@ -53,7 +53,9 @@ public final class TabVisualsTitleScreen extends Screen {
     private static final int TEXT = 0xFFF0F1FA;
     private static final int TEXT_2 = 0xFFB9BDD6;
     private static final int TEXT_3 = 0xFF7E84A6;
-    private static final int NAV_IDLE = 0xFF9BA1BE;
+    // idle должен читаться на насыщенном фиолете фона (143,98,244): старый
+    // 0xFF9BA1BE давал Δlum ~30 и текст «тонул». Светлый лавандовый — контраст ~90.
+    private static final int NAV_IDLE = 0xFFD7DBF0;
     /** Nav hover end — text brightens to pure white. */
     private static final int NAV_HOVER = 0xFFFFFFFF;
     /** Light glass on the dark surface. */
@@ -503,12 +505,15 @@ public final class TabVisualsTitleScreen extends Screen {
         UiRender.gradient(m, 0, 0, w, h,
                 mulAlpha(ACCENT, 0.16f * alpha),          // tl: violet
                 mulAlpha(0xFFC4B5FD, 0.10f * alpha),      // bl: lavender
-                mulAlpha(0xFFFFFFFF, 0.09f * alpha),      // br: white
-                mulAlpha(0xFFFFFFFF, 0.13f * alpha));     // tr: white
+                mulAlpha(0xFFFFFFFF, 0.06f * alpha),      // br: white
+                mulAlpha(0xFFFFFFFF, 0.07f * alpha));     // tr: white
 
-        // two large soft pools — violet top-left, warm white bottom-right
+        // two large soft pools — violet top-left, warm white bottom-right.
+        // UiRender.glow stacks 44 layers, so the composited centre reaches
+        // ~14× the peak: peaks here are tuned as EFFECTIVE strengths (the old
+        // 0.13 white blew the right half to ~85% white and drowned the lyrics).
         UiRender.glow(m, w * 0.24f, h * 0.30f, Math.max(w, h) * 0.45f, ACCENT, 0.20f, alpha);
-        UiRender.glow(m, w * 0.78f, h * 0.70f, Math.max(w, h) * 0.40f, 0xFFEDE9FE, 0.13f, alpha);
+        UiRender.glow(m, w * 0.78f, h * 0.70f, Math.max(w, h) * 0.32f, 0xFFEDE9FE, 0.05f, alpha);
 
         // readability scrims where the chrome sits (top bar + nav/lyrics/footer)
         UiRender.gradient(m, 0, 0, w, h * 0.20f,
@@ -577,9 +582,9 @@ public final class TabVisualsTitleScreen extends Screen {
         UiRender.rect(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x1AFFFFFF, alpha));
         UiRender.outline(m, lx, ly, tile, tile, tile * 0.3f, mulAlpha(0x30FFFFFF, alpha), 1f);
         F_MARK.drawCenteredString(m, "T", lx + tile / 2.0,
-                ly + (tile - F_MARK.getStringHeight("T")) / 2f + 1, mulAlpha(TEXT, alpha));
+                centerTextY(F_MARK, "T", ly + tile / 2f), mulAlpha(TEXT, alpha));
         F_SLOGAN.drawString(m, MARK_TXT, lx + tile + width * 0.010f,
-                ly + (tile - F_SLOGAN.getStringHeight(MARK_TXT)) / 2f + 1, mulAlpha(TEXT, alpha));
+                centerTextY(F_SLOGAN, MARK_TXT, ly + tile / 2f), mulAlpha(TEXT, alpha));
     }
 
     /** Top-right compact profile row: version, status, nickname, round avatar (photo 1/2). */
@@ -610,7 +615,7 @@ public final class TabVisualsTitleScreen extends Screen {
                 initChar = nick0.isEmpty() ? "?" : String.valueOf(Character.toUpperCase(nick0.charAt(0)));
             }
             F_BTN.drawCenteredString(m, initChar, ax + av / 2.0,
-                    top + (av - F_BTN.getStringHeight(initChar)) / 2f + 1, mulAlpha(INK, alpha));
+                    centerTextY(F_BTN, initChar, top + av / 2f), mulAlpha(INK, alpha));
         }
 
         // nickname: the Discord nick when connected, the account otherwise
@@ -687,11 +692,11 @@ public final class TabVisualsTitleScreen extends Screen {
             RenderSystem.disableBlend();
 
             float tx = x + badge + 5;
-            F_TINY.drawString(m, SOC_LABELS[i], tx, y + (rowH - F_TINY.getStringHeight(SOC_LABELS[i])) / 2f + 1,
+            F_TINY.drawString(m, SOC_LABELS[i], tx, centerTextY(F_TINY, SOC_LABELS[i], y + rowH / 2f),
                     mulAlpha(UiRender.mix(TEXT_2, TEXT, hv), alpha));
             if (showHandles) {
                 tx += F_TINY.getStringWidth(SOC_LABELS[i]) + 5;
-                F_TINY.drawString(m, SOC_HANDLES[i], tx, y + (rowH - F_TINY.getStringHeight(SOC_HANDLES[i])) / 2f + 1,
+                F_TINY.drawString(m, SOC_HANDLES[i], tx, centerTextY(F_TINY, SOC_HANDLES[i], y + rowH / 2f),
                         mulAlpha(UiRender.mix(TEXT_3, TEXT_2, hv), alpha));
             }
             x += itemW + gap;
@@ -831,19 +836,19 @@ public final class TabVisualsTitleScreen extends Screen {
             // no synced lyrics — the track/artist label takes the current-line slot
             String label = trackLabel();
             rightTextClamped(F_MENU_LINE, m, label, rightX, limit,
-                    height * 0.503f - F_MENU_LINE.getStringHeight(label) / 2f + 1,
+                    centerTextY(F_MENU_LINE, label, height * 0.503f),
                     mulAlpha(TEXT, alpha));
             return;
         }
 
         rightTextClamped(F_MENU_NEXT, m, MusicManager.prevLine(), rightX, limit,
-                height * 0.45f - F_MENU_NEXT.getStringHeight(MusicManager.prevLine()) / 2f + 1,
+                centerTextY(F_MENU_NEXT, MusicManager.prevLine(), height * 0.45f),
                 mulAlpha(TEXT_3, alpha * lineA));
         rightTextClamped(F_MENU_LINE, m, MusicManager.currentLine(), rightX, limit,
-                height * 0.503f - F_MENU_LINE.getStringHeight(MusicManager.currentLine()) / 2f + 1 + (1f - lineA) * 3f,
+                centerTextY(F_MENU_LINE, MusicManager.currentLine(), height * 0.503f) + (1f - lineA) * 3f,
                 mulAlpha(TEXT, alpha * lineA));
         rightTextClamped(F_MENU_NEXT, m, MusicManager.nextLine(), rightX, limit,
-                height * 0.551f - F_MENU_NEXT.getStringHeight(MusicManager.nextLine()) / 2f + 1,
+                centerTextY(F_MENU_NEXT, MusicManager.nextLine(), height * 0.551f),
                 mulAlpha(TEXT_3, alpha * lineA));
     }
 
@@ -903,7 +908,7 @@ public final class TabVisualsTitleScreen extends Screen {
         float countW = F_TINY.getStringWidth(countLabel) + 14;
         float countX = panelX + panelW - 34 - 10 - countW;
         UiRender.rect(m, countX, panelY + 14, countW, 16, 8, 0x18FFFFFF);
-        F_TINY.drawString(m, countLabel, countX + 7, panelY + 14 + (16 - F_TINY.getStringHeight(countLabel)) / 2f + 1,
+        F_TINY.drawString(m, countLabel, countX + 7, centerTextY(F_TINY, countLabel, panelY + 14 + 8f),
                 TEXT_2);
 
         // close: icon-only button carrying the unified CLOSE glyph
@@ -990,7 +995,7 @@ public final class TabVisualsTitleScreen extends Screen {
             shownCol = TEXT;
         }
         F_INPUT.drawString(m, shown, inputHit.x + 30 + shake,
-                inputHit.y + (inputHit.h - F_INPUT.getStringHeight(shown)) / 2f + 1, shownCol);
+                centerTextY(F_INPUT, shown, inputHit.y + inputHit.h / 2f), shownCol);
 
         // confirm: accent icon-only button carrying the LOGIN glyph
         drawAccentIconButton(m, createBtn, createHit, Icons.LOGIN, 13f, ACCENT, INK);
@@ -1096,7 +1101,7 @@ public final class TabVisualsTitleScreen extends Screen {
                 UiRender.outline(m, row.x + 10 + eshake, row.y + 3, fw, 24, 12, ering, 1f);
                 String shownEdit = editText + (blink ? "_" : "");
                 F_ROW.drawString(m, shownEdit, row.x + 22 + eshake,
-                        row.y + 3 + (24 - F_ROW.getStringHeight(shownEdit)) / 2f + 1, TEXT);
+                        centerTextY(F_ROW, shownEdit, row.y + 3 + 12f), TEXT);
             } else {
                 // row icon: solid USER for the current account, outline otherwise
                 Icons.Glyph rowGlyph = isActiveRow ? Icons.USER : Icons.USER_OUTLINE;
@@ -1109,13 +1114,14 @@ public final class TabVisualsTitleScreen extends Screen {
                 float nameH = F_ROW.getStringHeight(name);
                 String shownName = F_ROW.getStringWidth(name) > nameMax
                         ? F_ROW.trimToWidth(name, (int) nameMax) + "…" : name;
+                // nameH брался по полному имени — якорь (центр строки) сохранён
                 F_ROW.drawString(m, shownName, row.x + 38,
-                        row.y + (rowH - nameH) / 2f + 1, mulAlpha(TEXT, rowA));
+                        centerTextY(F_ROW, name, row.y + rowH / 2f), mulAlpha(TEXT, rowA));
                 if (tag != null) {
                     float tagX = login.x - 10 - tagW + 4;
                     UiRender.rect(m, tagX, row.y + (rowH - 14) / 2f, tagW, 14, 7, mulAlpha(0x1A8B5CF6, rowA));
                     F_TINY.drawString(m, tag, tagX + 6,
-                            row.y + (rowH - F_TINY.getStringHeight(tag)) / 2f + 1, mulAlpha(ACCENT_DEEP, rowA));
+                            centerTextY(F_TINY, tag, row.y + rowH / 2f), mulAlpha(ACCENT_DEEP, rowA));
                 }
             }
 

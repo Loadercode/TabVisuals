@@ -647,7 +647,9 @@ public final class ClickGuiScreen extends Screen {
             if (!search.equals(searchTextQuery) || searchFocused != searchTextFocus) {
                 searchTextQuery = search;
                 searchTextFocus = searchFocused;
-                searchText = search + (searchFocused ? "|" : "");
+                // обрезка под поле: справа ~26px заняты разделителем и линзой, каретка после обрезки
+                float maxW = searchW - 26f - (searchFocused ? F_TINY.getStringWidth("|") : 0f);
+                searchText = truncate(F_TINY, search, maxW) + (searchFocused ? "|" : "");
             }
             F_TINY.drawString(m, empty ? "Поиск" : searchText,
                     searchX + 6, centerBoxY(F_TINY, "Aa", searchY, searchH),
@@ -827,7 +829,7 @@ public final class ClickGuiScreen extends Screen {
         // name: bullet in the glyph gutter, text on the description's left
         // column (x+15) — name and description read as one aligned block
         int nameCol = UiRender.mulAlpha(UiRender.mix(UiRender.withAlpha(t.text(), 170), t.text(), k), alpha);
-        F_TITLE.drawString(m, "•", x + 6.5f, y + 6, nameCol);
+        F_TITLE.drawString(m, "•", x + 10f - F_TITLE.getStringWidth("•") / 2f, y + 6, nameCol);
         F_TITLE.drawString(m, truncate(F_TITLE, mod.name(), w - 15 - 8), x + 15, y + 6, nameCol);
 
         // description: first line tagged with the info glyph, continuations aligned
@@ -1296,9 +1298,9 @@ public final class ClickGuiScreen extends Screen {
         m.translate(-dcx, -dropY, 0f);
 
         float listH = Math.max(4f, dropPushH);
-        UiRender.shadow(m, dropX, dropY, dropW, listH, FIELD_R, 0.25f * a);
-        UiRender.rect(m, dropX, dropY, dropW, listH, FIELD_R, UiRender.mulAlpha(t.panel(), a));
-        UiRender.outline(m, dropX, dropY, dropW, listH, FIELD_R,
+        UiRender.shadow(m, dropX, dropY, dropW, listH, WIN_R, 0.25f * a);
+        UiRender.rect(m, dropX, dropY, dropW, listH, WIN_R, UiRender.mulAlpha(t.panel(), a));
+        UiRender.outline(m, dropX, dropY, dropW, listH, WIN_R,
                 UiRender.mulAlpha(UiRender.withAlpha(t.outline(), 155), a), 1);
 
         // hover highlight slides to the row under the cursor, fades out otherwise
@@ -2796,7 +2798,7 @@ public final class ClickGuiScreen extends Screen {
         if (Character.isISOControl(chr)) {
             return false;
         }
-        if (searchFocused && activeCategory != Category.CONFIGS) {
+        if (searchFocused && activeCategory != Category.CONFIGS && search.length() < 24) {
             search += chr;
             return true;
         }
