@@ -28,8 +28,12 @@ public class GameRendererMixin {
         ScissorAssist.INSTANCE.endFrame();
     }
 
+    // getFov has exactly one Integer.intValue (the options FOV read at bytecode
+    // offset 36); the second intValue in GameRenderer lives in render(). Pin the
+    // ordinal so a future MC update adding another Integer read can't silently
+    // rebind this hook to the wrong value.
     @ModifyExpressionValue(method = "getFov",
-            at = @At(value = "INVOKE", target = "Ljava/lang/Integer;intValue()I", remap = false))
+            at = @At(value = "INVOKE", target = "Ljava/lang/Integer;intValue()I", ordinal = 0, remap = false))
     private int tabvisuals$zoomFov(int original) {
         // second per-frame driver: restores the perspective when a screen
         // opens while FreeLook's key is held (updateMouse stops running there)

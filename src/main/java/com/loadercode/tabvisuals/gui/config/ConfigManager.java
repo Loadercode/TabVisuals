@@ -247,7 +247,10 @@ public final class ConfigManager {
     }
 
     /** Помечает состояние грязным и пишет, если интервал между записями прошёл. */
-    public static void autosave() {
+    public static synchronized void autosave() {
+        // Same monitor as flush_if_due: a dirty=true landing between snapshot()
+        // and the dirty=false inside the flush used to be silently dropped
+        // (the change missed autosave.json until the next mutation).
         dirty = true;
         flush_if_due(false);
     }

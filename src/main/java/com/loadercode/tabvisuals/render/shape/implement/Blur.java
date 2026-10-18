@@ -73,6 +73,14 @@ public class Blur implements Shape, QuickImports {
             rectangle.render(shape);
             return;
         }
+        // Shader load failure / GL fallback gives a null ShaderProgram here.
+        // The old path called shader.getUniformOrDefault → NPE in the render
+        // loop. Fall back to the plain rectangle (same as quality<=0).
+        ShaderProgram shader0 = RenderSystem.setShader(useGlass ? GLASS_KEY : BLUR_KEY);
+        if (shader0 == null) {
+            rectangle.render(shape);
+            return;
+        }
 
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
@@ -95,7 +103,7 @@ public class Blur implements Shape, QuickImports {
 
         GlStateManager._activeTexture(GL13.GL_TEXTURE0);
         if (input != null) RenderSystem.bindTexture(input.getColorAttachment());
-        ShaderProgram shader = RenderSystem.setShader(useGlass ? GLASS_KEY : BLUR_KEY);
+        ShaderProgram shader = shader0;
         shader(pos, round, softness, thickness, width, height, shader, currentWindow.getHeight());
         shader.getUniformOrDefault("Quality").set(quality);
         shader.getUniformOrDefault("SampleCount").set((float) samples);
@@ -146,9 +154,15 @@ public class Blur implements Shape, QuickImports {
     }
 
     public void setup() {
+        // Public method: a caller before window creation gets null getWindow()
+        // here (renderInternal guards this itself, setup() did not) — and a
+        // zero-sized framebuffer would build a degenerate SimpleFramebuffer.
+        if (mc.getWindow() == null) return;
         Framebuffer buffer = mc.getFramebuffer();
+        if (buffer == null) return;
         int fbW = mc.getWindow().getFramebufferWidth();
         int fbH = mc.getWindow().getFramebufferHeight();
+        if (fbW <= 0 || fbH <= 0) return;
         if (input == null) {
             input = new SimpleFramebuffer(fbW, fbH, false);
         } else if (input.textureWidth != fbW || input.textureHeight != fbH) {

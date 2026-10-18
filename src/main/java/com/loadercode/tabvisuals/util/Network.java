@@ -232,7 +232,12 @@ public class Network implements QuickImports {
                 .anyMatch(b -> {
                     if (b.getName() == null) return false;
                     String s = stripFormatting(b.getName().getString());
-                    return isPvpRelated(s) && (s.contains("0") || s.contains("1"));
+                    if (!isPvpRelated(s)) return false;
+                    // A PVP bar is "ending" once it has drained to empty. The old
+                    // check looked for the characters "0" or "1" anywhere in the
+                    // name, which misfired on any boss bar containing a digit
+                    // ("Игрок1", "100%"). Read the real progress instead.
+                    return b.getPercent() <= 0.01f;
                 });
     }
 

@@ -110,11 +110,15 @@ public class Calculate implements QuickImports {
     }
 
     public double round(double num, double increment) {
+        // increment == 0 would put Infinity/NaN into the matrix — bail to num
+        if (increment == 0) return num;
         double rounded = Math.round(num / increment) * increment;
         return Math.round(rounded * 100.0) / 100.0;
     }
 
     public int floorNearestMulN(int x, int n) {
+        // n == 0 → division by zero (ArithmeticException in the render loop)
+        if (n == 0) return x;
         return n * (int) Math.floor((double) x / (double) n);
     }
 
@@ -139,6 +143,8 @@ public class Calculate implements QuickImports {
     }
 
     public Vec3d cosSin(int i, int size, double width) {
+        // size == 0 → NaN angles poison the position matrix
+        if (size == 0) return new Vec3d(0, 0, 0);
         int index = Math.min(i, size);
         float cos = (float) (Math.cos(index * Calculate.PI2 / size) * width);
         float sin = (float) (-Math.sin(index * Calculate.PI2 / size) * width);
@@ -178,14 +184,16 @@ public class Calculate implements QuickImports {
     }
 
     public float interpolate(float prev, float orig) {
-        return lerp(tickCounter.getTickDelta(false), prev, orig);
+        return lerp(mc.getRenderTickCounter().getTickDelta(false), prev, orig);
     }
 
     public double interpolate(double prev, double orig) {
-        return lerp(tickCounter.getTickDelta(false), prev, orig);
+        return lerp(mc.getRenderTickCounter().getTickDelta(false), prev, orig);
     }
 
     public float interpolateSmooth(double smooth, float prev, float orig) {
-        return (float) lerp(tickCounter.getLastDuration() / smooth, prev, orig);
+        // smooth == 0 → division by zero feeds Infinity into the lerp
+        if (smooth <= 0f) return orig;
+        return (float) lerp(mc.getRenderTickCounter().getLastDuration() / smooth, prev, orig);
     }
 }

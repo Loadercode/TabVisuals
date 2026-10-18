@@ -401,7 +401,7 @@ public class TargetHud extends AbstractDraggable {
         if (!animation.isFinished(Direction.BACKWARDS) && !lastItem.equals(Items.AIR)) {
             int size = 24;
             float anim = animation.getOutput().floatValue();
-            float progress = Math.min(360f, (lastTarget.getItemUseTime() + tickCounter.getTickDelta(false)) / maxUseTicks(lastItem) * 360);
+            float progress = Math.min(360f, (lastTarget.getItemUseTime() + mc.getRenderTickCounter().getTickDelta(false)) / maxUseTicks(lastItem) * 360);
             float x = getX() - (size + 5) * anim;
             float y = getY() + 4;
             ScissorAssist scissorManager = ScissorAssist.INSTANCE;
@@ -438,7 +438,7 @@ public class TargetHud extends AbstractDraggable {
         }
         @SuppressWarnings("unchecked")
         LivingEntityRenderer<LivingEntity, LivingEntityRenderState, ?> renderer = (LivingEntityRenderer<LivingEntity, LivingEntityRenderState, ?>) baseRenderer;
-        LivingEntityRenderState state = renderer.getAndUpdateRenderState(lastTarget, tickCounter.getTickDelta(false));
+        LivingEntityRenderState state = renderer.getAndUpdateRenderState(lastTarget, mc.getRenderTickCounter().getTickDelta(false));
         Identifier textureLocation = renderer.getTexture(state);
         float alpha = faceAlphaAnimation.getOutput().floatValue() * fadeProgress;
         Calculate.setAlpha(alpha, () -> {

@@ -516,7 +516,9 @@ public class FontRenderer implements QuickImports {
     }
 
     public float getStringHeight(Text text) {
-        return getStringHeight(text.getString());
+        // Mirrors getStringWidth(Text): callers may pass null (e.g. an optional
+        // display name that never got set) — a bare text.getString() would NPE.
+        return text != null ? getStringHeight(text.getString()) : 0;
     }
 
     public float getStringHeight(java.lang.String text) {

@@ -104,7 +104,7 @@ public class EPRender extends AbstractDraggable {
         LivingEntityRenderer<LivingEntity, LivingEntityRenderState, ?> renderer =
                 (LivingEntityRenderer<LivingEntity, LivingEntityRenderState, ?>) baseRenderer;
 
-        float tickDelta = tickCounter.getTickDelta(false);
+        float tickDelta = mc.getRenderTickCounter().getTickDelta(false);
         LivingEntityRenderState state = renderer.getAndUpdateRenderState(mc.player, tickDelta);
         MatrixStack matrix = context.getMatrices();
         VertexConsumerProvider.Immediate consumers = mc.getBufferBuilders().getEntityVertexConsumers();

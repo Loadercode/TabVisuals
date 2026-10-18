@@ -172,12 +172,21 @@ public final class DiscordBridge {
                 byte[] png = httpGet(url);
                 if (png == null || png.length == 0) return;
                 NativeImage img = NativeImage.read(new ByteArrayInputStream(png));
-                roundMask(img);
+                try {
+                    roundMask(img);
+                } catch (Throwable maskErr) {
+                    // roundMask can throw before the texture wrapper owns the
+                    // image — close the off-heap NativeImage so it can't leak.
+                    img.close();
+                    throw maskErr;
+                }
                 Identifier id = Identifier.of("tabvisuals", "discord_avatar");
                 MinecraftClient.getInstance().execute(() -> {
                     NativeImageBackedTexture tex = null;
+                    boolean owned = false;
                     try {
                         tex = new NativeImageBackedTexture(img);
+                        owned = true;   // the texture now owns the image
                         MinecraftClient mc = MinecraftClient.getInstance();
                         // TextureManager не закрывает вытесненную текстуру —
                         // снимаем старую сами, иначе NativeImage течёт на каждый
@@ -194,6 +203,11 @@ public final class DiscordBridge {
                         // картинка не должна утекать, если upload упал
                         if (tex != null) tex.close(); else img.close();
                         TabVisualsClient.LOGGER.debug("avatar register failed: {}", t2.toString());
+                    } finally {
+                        // If we never got as far as wrapping the image in a
+                        // texture (e.g. the client quit and the task was
+                        // cancelled mid-run), close it here.
+                        if (!owned) img.close();
                     }
                 });
             } catch (Exception e) {

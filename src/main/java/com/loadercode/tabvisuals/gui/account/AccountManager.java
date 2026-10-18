@@ -42,6 +42,9 @@ public final class AccountManager {
 
     private static final int MIN_NICK = 3;
     private static final int MAX_NICK = 16;
+    /** Cap matching the title-screen row rect pools (64) — a 65th profile
+     *  would otherwise index past the pool and crash the account modal. */
+    public static final int MAX_ACCOUNTS = 64;
     /** Precompiled: clean() runs on every keystroke of the name field. */
     private static final Pattern DIRTY = Pattern.compile("[^A-Za-z0-9_]");
     /** Windows device names — a profile called CON can never become a file name. */
@@ -67,7 +70,9 @@ public final class AccountManager {
     private AccountManager() {
     }
 
-    private static Data data() {
+    /** Lazy load, guarded: two threads racing here could parse accounts.json twice
+     *  (and the loser's Data would overwrite the winner's writes). */
+    private static synchronized Data data() {
         if (data == null) {
             Data loaded = null;
             if (Files.exists(FILE)) {
@@ -177,6 +182,9 @@ public final class AccountManager {
     public static boolean create(String raw) {
         String name = clean(raw);
         if (name.isEmpty() || is_reserved(name) || contains(name)) {
+            return false;
+        }
+        if (data().accounts.size() >= MAX_ACCOUNTS) {
             return false;
         }
         data().accounts.add(name);

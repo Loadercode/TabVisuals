@@ -3,8 +3,6 @@ package com.loadercode.tabvisuals.render.interfaces;
 
 import com.google.gson.Gson;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.render.RenderTickCounter;
-import net.minecraft.client.util.Window;
 import com.loadercode.tabvisuals.render.draw.DrawEngine;
 import com.loadercode.tabvisuals.render.draw.DrawEngineImpl;
 import com.loadercode.tabvisuals.render.shape.implement.*;
@@ -15,8 +13,6 @@ import com.loadercode.tabvisuals.render.shape.implement.Rectangle;
 
 public interface QuickImports extends QuickLogger {
     MinecraftClient mc = MinecraftClient.getInstance();
-    RenderTickCounter tickCounter = mc.getRenderTickCounter();
-    Window window = mc.getWindow();
 
     DrawEngine drawEngine = new DrawEngineImpl();
 

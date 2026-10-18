@@ -3,7 +3,6 @@ package com.loadercode.tabvisuals.render.font.glyph;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import it.unimi.dsi.fastutil.chars.Char2ObjectArrayMap;
-import lombok.SneakyThrows;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
@@ -34,7 +33,7 @@ public class GlyphMap {
     public final Identifier bindToTexture;
     private final int pixelPadding;
     public int width, height;
-    private boolean generated = false;
+    private volatile boolean generated = false;
 
     public GlyphMap(char from, char to, Font font, Identifier identifier, int padding) {
         this.fromIncl = from;
@@ -53,9 +52,19 @@ public class GlyphMap {
         return c >= fromIncl && c < toExcl;
     }
 
+    /** Resolved once per class-load: enumerating GraphicsEnvironment.getAllFonts()
+     *  walks every installed system font and is far too slow to call per glyph in
+     *  the render loop (it froze on the first unsupported character). */
+    private static volatile Font[] systemFonts;
+
     private Font getFontForGlyph(char c) {
         if (font.canDisplay(c)) return font;
-        return Arrays.stream(GraphicsEnvironment.getLocalGraphicsEnvironment().getAllFonts()).filter(f -> f.canDisplay(c))
+        Font[] all = systemFonts;
+        if (all == null) {
+            all = GraphicsEnvironment.getLocalGraphicsEnvironment().getAllFonts();
+            systemFonts = all;
+        }
+        return Arrays.stream(all).filter(f -> f.canDisplay(c))
                 .map(f -> new Font(f.getFontName(), font.getStyle(), font.getSize()))
                 .findFirst().orElse(new Font("SansSerif", font.getStyle(), font.getSize()));
     }
@@ -142,39 +151,51 @@ public class GlyphMap {
         generated = true;
     }
 
-    @SneakyThrows
     public static void registerBufferedImageTexture(Identifier textureIdentifier, BufferedImage inputImage) {
         int imageWidth = inputImage.getWidth();
         int imageHeight = inputImage.getHeight();
 
         NativeImage nativeImage = new NativeImage(RGBA, imageWidth, imageHeight, false);
 
+        try {
+            IntBuffer buffer = MemoryUtil.memIntBuffer(nativeImage.pointer, nativeImage.getWidth() * nativeImage.getHeight());
 
-        IntBuffer buffer = MemoryUtil.memIntBuffer(nativeImage.pointer, nativeImage.getWidth() * nativeImage.getHeight());
+            WritableRaster raster = inputImage.getRaster();
+            ColorModel colorModel = inputImage.getColorModel();
 
-        WritableRaster raster = inputImage.getRaster();
-        ColorModel colorModel = inputImage.getColorModel();
+            Object data = createDataArrayBasedOnRaster(raster);
 
-        Object data = createDataArrayBasedOnRaster(raster);
-
-        for (int y = 0; y < imageHeight; y++) {
-            for (int x = 0; x < imageWidth; x++) {
-                raster.getDataElements(x, y, data);
-                int alpha = colorModel.getAlpha(data);
-                int red = colorModel.getRed(data);
-                int green = colorModel.getGreen(data);
-                int blue = colorModel.getBlue(data);
-                buffer.put(ColorHelper.getArgb(alpha, blue, green, red));
+            for (int y = 0; y < imageHeight; y++) {
+                for (int x = 0; x < imageWidth; x++) {
+                    raster.getDataElements(x, y, data);
+                    int alpha = colorModel.getAlpha(data);
+                    int red = colorModel.getRed(data);
+                    int green = colorModel.getGreen(data);
+                    int blue = colorModel.getBlue(data);
+                    buffer.put(ColorHelper.getArgb(alpha, blue, green, red));
+                }
             }
+        } catch (Throwable t) {
+            // The NativeImage is off-heap; an exception in the pixel-copy loop
+            // would leak it (the texture wrapper never got created). Close and
+            // rethrow as a plain RuntimeException — no more @SneakyThrows, so
+            // callers get a real stack trace instead of a hidden IOException.
+            nativeImage.close();
+            throw new RuntimeException("Failed to prepare glyph texture " + textureIdentifier, t);
         }
 
+        // Ownership transfers to the texture here — upload() must only run on
+        // the GL thread, so it moves inside the isOnRenderThread branch below.
         NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
-        texture.upload();
 
         if (RenderSystem.isOnRenderThread()) {
+            texture.upload();
             MinecraftClient.getInstance().getTextureManager().registerTexture(textureIdentifier, texture);
         } else {
-            RenderSystem.recordRenderCall(() -> MinecraftClient.getInstance().getTextureManager().registerTexture(textureIdentifier, texture));
+            RenderSystem.recordRenderCall(() -> {
+                texture.upload();
+                MinecraftClient.getInstance().getTextureManager().registerTexture(textureIdentifier, texture);
+            });
         }
     }
 

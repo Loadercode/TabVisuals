@@ -246,9 +246,12 @@ public final class MusicManager {
                 }
             }
             if (coverForTrack == id) {
-                coverTex = null;
-                coverSize = 0;
-                coverHeight = 0;
+                // No cover landed after all retries — free the old texture too,
+                // otherwise prevCoverTex (and its off-heap NativeImage) stays
+                // pinned until the next successful load. This runs on the cover
+                // worker; TextureManager must be touched on the client thread,
+                // so hop over via mc.execute (same as the register path above).
+                MinecraftClient.getInstance().execute(MusicManager::dropCover);
             }
         }, "tabvisuals-cover");
         t.setDaemon(true);

@@ -1031,7 +1031,13 @@ public final class TabVisualsTitleScreen extends Screen {
         ctx.enableScissor(Math.round(pcx + (panelX - pcx) * s), Math.round(pcy + (listY - pcy) * s),
                 Math.round(pcx + (panelX + panelW - pcx) * s), Math.round(pcy + (listY + visible - pcy) * s));
         boolean anyRowHover = false;
-        for (int i = 0; i < names.size(); i++) {
+        // The row rect pools (rowBox/rowLogin/rowEdit/rowDel/rowRec) hold 64
+        // entries; AccountManager.create is not capped, so a 65th profile would
+        // index past the pool (ArrayIndexOutOfBounds on rowBox[i] below). The
+        // click handler below already guards with `i < rowRec.length` — mirror
+        // that here so the render loop can never outrun the pool.
+        int rowLimit = Math.min(names.size(), rowBox.length);
+        for (int i = 0; i < rowLimit; i++) {
             float ry = listY + i * step - listScroll;
             if (ry > listY + visible || ry + rowH < listY) {
                 continue;

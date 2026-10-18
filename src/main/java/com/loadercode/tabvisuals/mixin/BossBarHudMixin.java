@@ -17,7 +17,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(BossBarHud.class)
 public class BossBarHudMixin {
 
-    @Inject(method = "render", at = @At("HEAD"), cancellable = true)
+    // Full descriptor: a bare "render" would silently bind to any overload
+    // added later (and PlayerListHudMixin already spells its descriptor out).
+    @Inject(method = "render(Lnet/minecraft/client/gui/DrawContext;)V", at = @At("HEAD"), cancellable = true)
     private void renderHook(CallbackInfo ci) {
         Hud hud = Hud.getInstance();
         if (hud == null || !hud.isState() || !hud.interfaceSettings.isSelected("Dynamic Island")) {

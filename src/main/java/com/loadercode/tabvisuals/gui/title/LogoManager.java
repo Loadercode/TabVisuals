@@ -58,12 +58,28 @@ public final class LogoManager {
                         .getResource(Identifier.of("tabvisuals", "textures/logo.png"))
                         .orElseThrow().getInputStream()) {
                     NativeImage img = NativeImage.read(in);
+                    boolean[] handedOff = {false};
                     mc.execute(() -> {
-                        mc.getTextureManager().registerTexture(LOGO_ID, new NativeImageBackedTexture(img));
-                        texW = img.getWidth();
-                        texH = img.getHeight();
-                        tex = LOGO_ID;
+                        try {
+                            mc.getTextureManager().registerTexture(LOGO_ID, new NativeImageBackedTexture(img));
+                            texW = img.getWidth();
+                            texH = img.getHeight();
+                            tex = LOGO_ID;
+                            handedOff[0] = true;
+                        } catch (Throwable texErr) {
+                            // upload/register failed inside the render task —
+                            // the off-heap image would otherwise leak here,
+                            // since the outer catch runs on this worker thread
+                            // and can no longer see img.
+                            img.close();
+                        }
                     });
+                    // If the client is shutting down the task may never run;
+                    // once execute() returns without handing off, nothing else
+                    // will close the image, so drop it here.
+                    if (!handedOff[0]) {
+                        img.close();
+                    }
                 }
             } catch (Throwable ignored) {
                 // no logo asset — screens keep the text mark

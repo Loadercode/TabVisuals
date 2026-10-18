@@ -129,7 +129,13 @@ public final class MediaBridge {
     }
 
     private static void run() {
+        // Exponential backoff: a bridge that cannot even start (no powershell,
+        // blocked execution policy) used to respawn every 5s forever, spamming
+        // the log with the same ERROR. Quick successful runs reset the delay.
+        int backoffMs = 5000;
+        long startedAt = 0L;
         while (!Thread.currentThread().isInterrupted()) {
+            startedAt = System.nanoTime();
             int exit;
             try {
                 exit = spawnOnce();
@@ -139,12 +145,16 @@ public final class MediaBridge {
                 exit = -1;
             }
             if (Thread.currentThread().isInterrupted()) break;
-            TabVisualsClient.LOGGER.info("SMTC bridge exited ({}), restarting in 5s", exit);
+            // ran for over a minute before dying → the bridge itself works,
+            // the exit was a one-off; restart quickly without escalating
+            if (System.nanoTime() - startedAt > 60_000_000_000L) backoffMs = 5000;
+            TabVisualsClient.LOGGER.info("SMTC bridge exited ({}), restarting in {}s", exit, backoffMs / 1000);
             try {
-                Thread.sleep(5000);
+                Thread.sleep(backoffMs);
             } catch (InterruptedException e) {
                 break;
             }
+            backoffMs = Math.min(backoffMs * 2, 300_000);   // cap at 5 min
         }
     }
 
