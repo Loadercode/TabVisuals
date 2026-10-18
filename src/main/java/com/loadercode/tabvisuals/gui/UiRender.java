@@ -44,6 +44,20 @@ public final class UiRender implements QuickImports {
     }
 
     /**
+     * The same four-corner gradient with rounded corners — the outer pass of
+     * {@link #gradientBorder}. Without the radius the outer quad stays a hard
+     * square and its corners poke out past the rounded fill (they read as
+     * dark boxes behind a pill when the accent is dark).
+     */
+    private static void gradientRounded(MatrixStack m, float x, float y, float w, float h, float radius,
+                                        int tl, int bl, int br, int tr) {
+        rectangle.render(ShapeProperties.create(m, x, y, w, h)
+                .round(radius)
+                .color(bl, tl, br, tr)
+                .build());
+    }
+
+    /**
      * Smooth radial glow: many faint concentric circles with a quadratic
      * alpha falloff and no jitter — stacking is even, so there is no banding
      * or lumpiness (the old jittered version read as "pixelated").
@@ -135,12 +149,12 @@ public final class UiRender implements QuickImports {
 
     /**
      * Panel with a 1px accent-gradient border (the LoxeDLC window hairline,
-     * but painted with the client accent gradient). The gradient quad is drawn
-     * first and the interior is then re-filled inset by 1px — the round shader
-     * only supports a solid outlineColor, so the ring is cut this way. Call
-     * this INSTEAD of {@link #roundedPanel}; an opaque fill hides the gradient
-     * under the panel, a translucent one picks up a slight accent tint.
-     * Corner order passed to {@link #gradient}: tl, bl, br, tr.
+     * but painted with the client accent gradient). The rounded gradient quad
+     * is drawn first and the interior is then re-filled inset by 1px — the
+     * round shader only supports a solid outlineColor, so the ring is cut
+     * this way. Call this INSTEAD of {@link #roundedPanel}; an opaque fill
+     * hides the gradient under the panel, a translucent one picks up a
+     * slight accent tint. Corner order: tl, bl, br, tr.
      */
     public static void gradientBorder(MatrixStack m, float x, float y, float w, float h, float radius, int fill) {
         // при w/h < 2 внутренняя заливка не помещается — рамка превратилась
@@ -149,7 +163,7 @@ public final class UiRender implements QuickImports {
             return;
         }
         int[] g = Theme.accentGradient();
-        gradient(m, x, y, w, h, g[0], g[1], g[2], g[3]);
+        gradientRounded(m, x, y, w, h, radius, g[0], g[1], g[2], g[3]);
         punchInterior(m, x, y, w, h, radius, fill);
     }
 
@@ -161,7 +175,7 @@ public final class UiRender implements QuickImports {
         int a = (accent >>> 24) & 0xFF;
         int lo = withAlpha(mix(accent, 0xFFFFFFFF, 0.18f), a);
         int hi = withAlpha(mix(accent, 0xFFFFFFFF, 0.36f), a);
-        gradient(m, x, y, w, h, accent, lo, hi, lo);
+        gradientRounded(m, x, y, w, h, radius, accent, lo, hi, lo);
         punchInterior(m, x, y, w, h, radius, fill);
     }
 
