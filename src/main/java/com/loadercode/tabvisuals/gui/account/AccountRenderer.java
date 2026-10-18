@@ -32,6 +32,7 @@ import net.minecraft.entity.damage.DamageScaling;
 import net.minecraft.entity.damage.DamageType;
 import net.minecraft.entity.damage.DamageTypes;
 import net.minecraft.registry.DynamicRegistryManager;
+import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.RegistryKeys;
@@ -737,11 +738,13 @@ public final class AccountRenderer {
             DamageTypes.GENERIC_KILL);
 
     /**
-     * Менеджер реестров preview-мира. DynamicRegistryManager.of(Registries.REGISTRIES)
-     * даёт только статические реестры, а World ctor'у нужен DAMAGE_TYPE
-     * (World → DamageSources) — создание мира падало и 3D-превью мёртво показывало
-     * плейсхолдер. Достаточно одного динамического реестра: ClientWorld больше
-     * ничего не запрашивает (проверено по декомпилированному World/ClientWorld).
+     * Менеджер реестров preview-мира. {@code ClientPlayNetworkHandler} ctor'у
+     * нужны и статические реестры (ITEM — через {@code FuelRegistry.createDefault}),
+     * и динамический DAMAGE_TYPE (World → DamageSources). Статические берутся
+     * из общего менеджера статических реестров, DAMAGE_TYPE подменяется заглушкой:
+     * preview-мир урона не порождает, а статические реестры не содержат
+     * динамический DAMAGE_TYPE. Иначе создание превью падало и 3D-модель
+     * мёртво показывала плейсхолдер.
      */
     private static DynamicRegistryManager.Immutable previewRegistries() {
         SimpleRegistry<DamageType> damage =
@@ -754,7 +757,11 @@ public final class AccountRenderer {
         return new PreviewRegistries(damage);
     }
 
-    /** Минимальный менеджер: знает только DAMAGE_TYPE, остальное — пусто. */
+    /** Статические реестры клиента (ITEM, BLOCK, ...) — общий источник для preview-менеджера. */
+    private static final DynamicRegistryManager.Immutable STATIC_REGISTRIES =
+            DynamicRegistryManager.of(Registries.REGISTRIES);
+
+    /** Минимальный менеджер: DAMAGE_TYPE — заглушка, остальное — статические реестры. */
     private record PreviewRegistries(Registry<DamageType> damageTypes) implements DynamicRegistryManager.Immutable {
         @Override
         public <E> Optional<Registry<E>> getOptional(RegistryKey<? extends Registry<? extends E>> registryRef) {
@@ -763,7 +770,8 @@ public final class AccountRenderer {
                 Registry<E> cast = (Registry<E>) damageTypes;
                 return Optional.of(cast);
             }
-            return Optional.empty();
+            // статические реестры (ITEM, BLOCK, ...) — из общего менеджера клиента
+            return STATIC_REGISTRIES.getOptional(registryRef);
         }
 
         @Override
