@@ -19,6 +19,7 @@ import net.minecraft.client.network.ClientConnectionState;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.OtherClientPlayerEntity;
 import net.minecraft.client.network.PlayerListEntry;
+import net.minecraft.client.render.Camera;
 import net.minecraft.client.render.DiffuseLighting;
 import net.minecraft.client.render.entity.EntityRenderDispatcher;
 import net.minecraft.client.session.Session;
@@ -46,6 +47,11 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.math.intprovider.ConstantIntProvider;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.World;
+import net.minecraft.world.biome.Biome;
+import net.minecraft.world.biome.BiomeEffects;
+import net.minecraft.world.biome.BiomeKeys;
+import net.minecraft.world.biome.GenerationSettings;
+import net.minecraft.world.biome.SpawnSettings;
 import net.minecraft.world.dimension.DimensionType;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
@@ -740,11 +746,11 @@ public final class AccountRenderer {
     /**
      * Менеджер реестров preview-мира. {@code ClientPlayNetworkHandler} ctor'у
      * нужны и статические реестры (ITEM — через {@code FuelRegistry.createDefault}),
-     * и динамический DAMAGE_TYPE (World → DamageSources). Статические берутся
-     * из общего менеджера статических реестров, DAMAGE_TYPE подменяется заглушкой:
-     * preview-мир урона не порождает, а статические реестры не содержат
-     * динамический DAMAGE_TYPE. Иначе создание превью падало и 3D-модель
-     * мёртво показывала плейсхолдер.
+     * и динамические реестры мира: DAMAGE_TYPE (World → DamageSources) и BIOME
+     * (ClientChunkManager). Статические берутся из общего менеджера статических
+     * реестров, динамические подменяются заглушками (preview-мир не порождает
+     * урона и не грузит чанки). Иначе создание превью падало по «Missing
+     * registry» и 3D-модель мёртво показывала плейсхолдер.
      */
     private static DynamicRegistryManager.Immutable previewRegistries() {
         SimpleRegistry<DamageType> damage =
@@ -754,21 +760,41 @@ public final class AccountRenderer {
                     new DamageType("generic", DamageScaling.WHEN_CAUSED_BY_LIVING_NON_PLAYER, 0.1f),
                     RegistryEntryInfo.DEFAULT);
         }
-        return new PreviewRegistries(damage);
+        // ClientChunkManager ctor'у нужен сам реестр биомов и в нём — конкретный
+        // plains (getOrThrow(BiomeKeys.PLAINS)) для пустого чанка; сам биом в
+        // preview не тикает и не ищется, поэтому хватает минимальной заглушки.
+        SimpleRegistry<Biome> biomes =
+                new SimpleRegistry<>(RegistryKeys.BIOME, Lifecycle.stable());
+        biomes.add(BiomeKeys.PLAINS, new Biome.Builder()
+                .temperature(0.8f)
+                .precipitation(true)
+                .downfall(0.4f)
+                .effects(new BiomeEffects.Builder()
+                        .waterColor(0x3F76E4)
+                        .waterFogColor(0x050533)
+                        .fogColor(0xC0D8FF)
+                        .skyColor(0x78A7FF)
+                        .build())
+                .spawnSettings(SpawnSettings.INSTANCE)
+                .generationSettings(new GenerationSettings.Builder().build())
+                .build(), RegistryEntryInfo.DEFAULT);
+        return new PreviewRegistries(damage, biomes);
     }
 
     /** Статические реестры клиента (ITEM, BLOCK, ...) — общий источник для preview-менеджера. */
     private static final DynamicRegistryManager.Immutable STATIC_REGISTRIES =
             DynamicRegistryManager.of(Registries.REGISTRIES);
 
-    /** Минимальный менеджер: DAMAGE_TYPE — заглушка, остальное — статические реестры. */
-    private record PreviewRegistries(Registry<DamageType> damageTypes) implements DynamicRegistryManager.Immutable {
+    /** Минимальный менеджер: DAMAGE_TYPE/BIOME — заглушки, остальное — статические реестры. */
+    private record PreviewRegistries(Registry<DamageType> damageTypes, Registry<Biome> biomes)
+            implements DynamicRegistryManager.Immutable {
         @Override
         public <E> Optional<Registry<E>> getOptional(RegistryKey<? extends Registry<? extends E>> registryRef) {
             if (RegistryKeys.DAMAGE_TYPE.equals(registryRef)) {
-                @SuppressWarnings("unchecked")
-                Registry<E> cast = (Registry<E>) damageTypes;
-                return Optional.of(cast);
+                return Optional.of(cast(damageTypes));
+            }
+            if (RegistryKeys.BIOME.equals(registryRef)) {
+                return Optional.of(cast(biomes));
             }
             // статические реестры (ITEM, BLOCK, ...) — из общего менеджера клиента
             return STATIC_REGISTRIES.getOptional(registryRef);
@@ -776,7 +802,13 @@ public final class AccountRenderer {
 
         @Override
         public Stream<Entry<?>> streamAllRegistries() {
-            return Stream.of(new Entry<>(RegistryKeys.DAMAGE_TYPE, damageTypes));
+            return Stream.of(new Entry<>(RegistryKeys.DAMAGE_TYPE, damageTypes),
+                    new Entry<>(RegistryKeys.BIOME, biomes));
+        }
+
+        @SuppressWarnings("unchecked")
+        private static <E> Registry<E> cast(Registry<?> r) {
+            return (Registry<E>) r;
         }
     }
 
@@ -1131,6 +1163,15 @@ public final class AccountRenderer {
                                             Quaternionf camera_orientation, float tilt_deg,
                                             OtherClientPlayerEntity entity) {
         EntityRenderDispatcher dispatcher = MinecraftClient.getInstance().getEntityRenderDispatcher();
+        // Камеру диспетчера normally задаёт world-render каждый кадр; на
+        // титульном экране мира нет, камера null и render падает на
+        // camera.getPos(). Наводим одноразовую камеру на entity (дистанция ~0),
+        // чтобы разрешился distance-to-camera. Мир/цель остаются preview-мира —
+        // их перезапишет следующий реальный world-render.
+        Camera prev_cam = dispatcher.camera;
+        Camera preview_cam = new Camera();
+        preview_cam.update(entity.getWorld(), entity, false, false, 0f);
+        dispatcher.configure(entity.getWorld(), preview_cam, null);
         matrices.push();
         try {
             matrices.translate(cx, cy, 50.0);
@@ -1148,6 +1189,7 @@ public final class AccountRenderer {
                     ctx.getMatrices(), vcp, 15728880));
             ctx.draw();
         } finally {
+            dispatcher.camera = prev_cam;
             dispatcher.setRenderShadows(true);
             matrices.pop();
             DiffuseLighting.method_34742();           // vanilla entity lights back
