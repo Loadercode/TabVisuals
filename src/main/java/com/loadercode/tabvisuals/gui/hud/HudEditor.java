@@ -615,14 +615,14 @@ public final class HudEditor {
         UiRender.outline(m, ox, oy, ow, oh, HudTheme.PANEL_ROUND,
                 UiRender.mulAlpha(grabbed ? HudTheme.clientColor() : HOVER_C, outlineA), 0.5f);
 
-        draw_label(m, id, bx, by, hover, lift);
+        draw_label(m, id, bx, by, bh, hover, lift, sh);
         if (hover > 0.02f) {
             draw_coord(m, x, y, w, h, hover * open, sh);
         }
     }
 
-    /** Name tag над боксом (внутрь — если сверху нет места). */
-    private static void draw_label(MatrixStack m, String id, float bx, float by, float hover, float lift) {
+    /** Name tag над боксом (под ним — если сверху нет места; внутрь — крайний случай). */
+    private static void draw_label(MatrixStack m, String id, float bx, float by, float bh, float hover, float lift, float sh) {
         String text = labelOf(id);
         if (text == null || text.isEmpty()) {
             return;
@@ -630,7 +630,11 @@ public final class HudEditor {
         float lw = F_BADGE.getStringWidth(text) + 10f;
         float ly = by - LABEL_H - 3f - 2f * lift;
         if (ly < 2f) {
-            ly = by + 3f;
+            // элемент у верхнего края: tag под панелью, а не поверх её контента
+            ly = by + bh + 3f;
+            if (ly + LABEL_H > sh - 2f) {
+                ly = by + 3f;   // и сверху, и снизу нет места — внутрь, как раньше
+            }
         }
         float a = open * (0.75f + 0.25f * hover);
         UiRender.rect(m, bx, ly, lw, LABEL_H, 3.5f, UiRender.mulAlpha(BADGE_BG, a));

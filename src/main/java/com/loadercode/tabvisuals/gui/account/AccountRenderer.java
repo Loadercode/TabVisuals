@@ -11,6 +11,7 @@ import com.loadercode.tabvisuals.gui.icon.Icons;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
 import com.mojang.authlib.yggdrasil.ProfileResult;
+import com.mojang.serialization.Lifecycle;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
@@ -27,10 +28,16 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.network.ClientConnection;
 import net.minecraft.network.NetworkSide;
+import net.minecraft.entity.damage.DamageScaling;
+import net.minecraft.entity.damage.DamageType;
+import net.minecraft.entity.damage.DamageTypes;
 import net.minecraft.registry.DynamicRegistryManager;
-import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.RegistryKeys;
+import net.minecraft.registry.SimpleRegistry;
 import net.minecraft.registry.entry.RegistryEntry;
+import net.minecraft.registry.entry.RegistryEntryInfo;
 import net.minecraft.registry.tag.TagKey;
 import net.minecraft.resource.featuretoggle.FeatureFlags;
 import net.minecraft.server.ServerLinks;
@@ -56,8 +63,10 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
@@ -68,6 +77,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 /**
  * Full-body 3D player skin preview for the account manager: the whole model
@@ -682,7 +692,7 @@ public final class AccountRenderer {
                 ClientConnectionState state = new ClientConnectionState(
                         session,
                         new WorldSession(TelemetrySender.NOOP, false, Duration.ofHours(1), "TabVisuals"),
-                        DynamicRegistryManager.of(Registries.REGISTRIES),
+                        previewRegistries(),
                         FeatureFlags.VANILLA_FEATURES,
                         "TabVisuals",
                         null, null, Map.of(), null, Map.of(),
@@ -705,6 +715,60 @@ public final class AccountRenderer {
                 TabVisualsClient.LOGGER.error("Preview world creation failed", t);
                 return null;
             }
+        }
+    }
+
+    // --------------------------------------------------- preview registries
+
+    /**
+     * Ключи damage-типов, которые {@code DamageSources} тянет при ctor'е мира.
+     * Значения — заглушки: preview-мир событий урона не порождает, важны только
+     * присутствие ключей (иначе «Missing registry: damage_type»).
+     */
+    private static final List<RegistryKey<DamageType>> PREVIEW_DAMAGE_KEYS = List.of(
+            DamageTypes.IN_FIRE, DamageTypes.CAMPFIRE, DamageTypes.LIGHTNING_BOLT,
+            DamageTypes.ON_FIRE, DamageTypes.LAVA, DamageTypes.HOT_FLOOR,
+            DamageTypes.IN_WALL, DamageTypes.CRAMMING, DamageTypes.DROWN,
+            DamageTypes.STARVE, DamageTypes.CACTUS, DamageTypes.FALL,
+            DamageTypes.ENDER_PEARL, DamageTypes.FLY_INTO_WALL, DamageTypes.OUT_OF_WORLD,
+            DamageTypes.GENERIC, DamageTypes.MAGIC, DamageTypes.WITHER,
+            DamageTypes.DRAGON_BREATH, DamageTypes.DRY_OUT, DamageTypes.SWEET_BERRY_BUSH,
+            DamageTypes.FREEZE, DamageTypes.STALAGMITE, DamageTypes.OUTSIDE_BORDER,
+            DamageTypes.GENERIC_KILL);
+
+    /**
+     * Менеджер реестров preview-мира. DynamicRegistryManager.of(Registries.REGISTRIES)
+     * даёт только статические реестры, а World ctor'у нужен DAMAGE_TYPE
+     * (World → DamageSources) — создание мира падало и 3D-превью мёртво показывало
+     * плейсхолдер. Достаточно одного динамического реестра: ClientWorld больше
+     * ничего не запрашивает (проверено по декомпилированному World/ClientWorld).
+     */
+    private static DynamicRegistryManager.Immutable previewRegistries() {
+        SimpleRegistry<DamageType> damage =
+                new SimpleRegistry<>(RegistryKeys.DAMAGE_TYPE, Lifecycle.stable());
+        for (RegistryKey<DamageType> key : PREVIEW_DAMAGE_KEYS) {
+            damage.add(key,
+                    new DamageType("generic", DamageScaling.WHEN_CAUSED_BY_LIVING_NON_PLAYER, 0.1f),
+                    RegistryEntryInfo.DEFAULT);
+        }
+        return new PreviewRegistries(damage);
+    }
+
+    /** Минимальный менеджер: знает только DAMAGE_TYPE, остальное — пусто. */
+    private record PreviewRegistries(Registry<DamageType> damageTypes) implements DynamicRegistryManager.Immutable {
+        @Override
+        public <E> Optional<Registry<E>> getOptional(RegistryKey<? extends Registry<? extends E>> registryRef) {
+            if (RegistryKeys.DAMAGE_TYPE.equals(registryRef)) {
+                @SuppressWarnings("unchecked")
+                Registry<E> cast = (Registry<E>) damageTypes;
+                return Optional.of(cast);
+            }
+            return Optional.empty();
+        }
+
+        @Override
+        public Stream<Entry<?>> streamAllRegistries() {
+            return Stream.of(new Entry<>(RegistryKeys.DAMAGE_TYPE, damageTypes));
         }
     }
 
