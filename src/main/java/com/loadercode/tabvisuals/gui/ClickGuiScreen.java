@@ -1944,9 +1944,11 @@ public final class ClickGuiScreen extends Screen {
         tmy = (mouseY - cy) / sc + cy;
     }
 
-    /** The header search field only exists on RENDER/MISC (LoxeDLC) — the one test for draw, hint and clicks. */
+    /** The header search field exists on every module tab — the filter below already
+     *  searches across all categories when the query is non-empty. CONFIGS is excluded
+     *  (its list is configs, not modules, and the header layout differs). */
     private boolean searchVisible() {
-        return activeCategory == Category.RENDER || activeCategory == Category.MISC;
+        return activeCategory != Category.CONFIGS;
     }
 
     /**
