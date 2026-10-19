@@ -7,6 +7,7 @@ public final class DoubleSetting extends Setting {
     private final double max;
     private final double step;
     private final String suffix;
+    private final double def;
     private double value;
 
     public DoubleSetting(String name, double value, double min, double max, double step, String suffix) {
@@ -24,6 +25,7 @@ public final class DoubleSetting extends Setting {
         this.step = step > 0.0 && step < Double.POSITIVE_INFINITY ? step : 0.1;
         this.suffix = suffix != null ? suffix : "";
         this.value = clamp(value);
+        this.def = this.value;
     }
 
     public double get() {
@@ -32,6 +34,11 @@ public final class DoubleSetting extends Setting {
 
     public void set(double v) {
         this.value = clamp(v);
+    }
+
+    @Override
+    public void resetToDefault() {
+        this.value = def;
     }
 
     public double min() {

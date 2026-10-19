@@ -3,10 +3,12 @@ package com.loadercode.tabvisuals.gui.setting;
 
 /** Checkbox row. */
 public final class BooleanSetting extends Setting {
+    private final boolean def;
     private boolean value;
 
     public BooleanSetting(String name, boolean value) {
         super(name);
+        this.def = value;
         this.value = value;
     }
 
@@ -20,5 +22,10 @@ public final class BooleanSetting extends Setting {
 
     public void toggle() {
         this.value = !this.value;
+    }
+
+    @Override
+    public void resetToDefault() {
+        this.value = def;
     }
 }

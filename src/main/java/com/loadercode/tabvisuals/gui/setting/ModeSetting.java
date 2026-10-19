@@ -4,12 +4,14 @@ package com.loadercode.tabvisuals.gui.setting;
 /** Dropdown row. Click opens the option list; value is an index into options. */
 public final class ModeSetting extends Setting {
     private final String[] options;
+    private final int defIndex;
     private int index;
 
     public ModeSetting(String name, int index, String... options) {
         super(name);
         this.options = options != null && options.length > 0 ? options : new String[]{"-"};
         this.index = Math.max(0, Math.min(this.options.length - 1, index));
+        this.defIndex = this.index;
     }
 
     public String get() {
@@ -22,6 +24,11 @@ public final class ModeSetting extends Setting {
 
     public void setIndex(int i) {
         this.index = Math.max(0, Math.min(options.length - 1, i));
+    }
+
+    @Override
+    public void resetToDefault() {
+        this.index = defIndex;
     }
 
     /** Sets by option name (old configs stored names); unknown → first option. */

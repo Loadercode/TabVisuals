@@ -35,6 +35,11 @@ public final class ColorSetting extends Setting {
         this.value = def;
     }
 
+    @Override
+    public void resetToDefault() {
+        reset();
+    }
+
     public int[] presetList() {
         return presets;
     }

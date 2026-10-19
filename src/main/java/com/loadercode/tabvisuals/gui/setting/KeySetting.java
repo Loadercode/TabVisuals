@@ -12,14 +12,21 @@ public class KeySetting extends Setting {
 
     /** GLFW key code; GLFW_KEY_UNKNOWN (-1) = unbound. */
     private int key;
+    private final int def;
 
     public KeySetting(String name, int defaultKey) {
         super(name);
         this.key = defaultKey;
+        this.def = defaultKey;
     }
 
     public int get() {
         return key;
+    }
+
+    @Override
+    public void resetToDefault() {
+        this.key = def;
     }
 
     public void set(int key) {

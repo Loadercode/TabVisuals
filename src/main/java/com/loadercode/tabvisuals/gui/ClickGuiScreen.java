@@ -977,7 +977,20 @@ public final class ClickGuiScreen extends Screen {
         }
         UiRender.iconCentered(m, Icons.CLOSE, closeX + 8f, closeY + 8f, 11,
                 UiRender.mulAlpha(UiRender.mix(t.textSecondary(), t.text(), chv), 0.85f * a));
-        // header hairline rides the same slide/scale as the panel it belongs to
+        // reset-to-defaults: same 16x16 box as close, one slot to its left
+        float resetX = closeX - 18;
+        boolean canReset = !popupModule.settings().isEmpty();
+        float rhv = canReset
+                ? easeHover("pop:reset", UiRender.inside(tmx, tmy, resetX, closeY, 16, 16) && !popupClosing)
+                : 0f;
+        float rpr = easePress("pop:reset", "pop:reset".equals(pressedBtn));
+        pushScale(m, resetX + 8f, closeY + 8f, UiRender.pressScale(rpr));
+        if (rhv > 0.01f) {
+            UiRender.rect(m, resetX, closeY, 16, 16, FIELD_R, UiRender.mulAlpha(t.text(), 0.08f * rhv * a));
+        }
+        UiRender.iconCentered(m, Icons.REFRESH, resetX + 8f, closeY + 8f, 11,
+                UiRender.mulAlpha(UiRender.mix(t.textSecondary(), t.text(), rhv), canReset ? 0.75f * a : 0.3f * a));
+        m.pop();
         UiRender.hairline(m, popX + 10, popY + 22, popW - 20,
                 UiRender.mulAlpha(t.text(), 0.2f * a));
         m.pop();
@@ -2463,6 +2476,12 @@ public final class ClickGuiScreen extends Screen {
                 closePopup();
                 return true;
             }
+            // reset button (one slot left of close): armed here, applied on release
+            // while still hovering — so a press that drifts away can't wipe settings
+            if (UiRender.inside(tmx, tmy, popX + popW - 37, popY + 4, 16, 16)) {
+                pressedBtn = "pop:reset";
+                return true;
+            }
             for (PopRow r : popRows) {
                 // rows outside the clipped viewport are not interactive
                 if (r.y + r.h < popViewTop || r.y > popViewTop + popViewH) {
@@ -2633,6 +2652,15 @@ public final class ClickGuiScreen extends Screen {
         pickerDrag = 0;
         dragging2 = null;
         if (button == 0) {
+            // Reset fires on release while the cursor is still on the button —
+            // armed in mouseClicked, so a press that drifts away can't wipe values.
+            if ("pop:reset".equals(pressedBtn) && popupModule != null
+                    && UiRender.inside(tmx, tmy, popX + popW - 37, popY + 4, 16, 16)) {
+                for (Setting s : popupModule.settings()) {
+                    s.resetToDefault();
+                }
+                ConfigManager.autosave();
+            }
             pressedId = null; // release the card press sink
             pressedBtn = null; // release the shared button press sink
         }

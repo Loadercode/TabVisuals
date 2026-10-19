@@ -12,4 +12,8 @@ public abstract class Setting {
     public String name() {
         return name;
     }
+
+    /** Restores the constructor default (the settings popup's Reset button). */
+    public void resetToDefault() {
+    }
 }
