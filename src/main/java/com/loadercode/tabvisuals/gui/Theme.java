@@ -159,14 +159,21 @@ public record Theme(String id, String name,
         return ALL[0];
     }
 
-    /** Built-ins plus the current Custom palette. */
+    /** Built-ins plus the current Custom palette. The list shape never changes —
+     *  cached to skip a per-frame alloc; the tail is refreshed in refreshCustom(). */
     public static List<Theme> all() {
+        return ALL_WITH_CUSTOM;
+    }
+
+    private static List<Theme> ALL_WITH_CUSTOM = buildAll();
+
+    private static List<Theme> buildAll() {
         List<Theme> out = new ArrayList<>(ALL.length + 1);
         for (Theme t : ALL) {
             out.add(t);
         }
         out.add(customTheme);
-        return out;
+        return java.util.Collections.unmodifiableList(out);
     }
 
     // ------------------------------------------------------- custom palette
@@ -223,6 +230,7 @@ public record Theme(String id, String name,
             active = customTheme; // instant follow — the picker drags continuously
         }
         animCached = null; // новый инстанс — старый кадровый кэш неактуален
+        ALL_WITH_CUSTOM = buildAll(); // refreshCustom runs on colour edits only, not per frame
     }
 
     /** Derives the secondary slots from the five editable ones. */

@@ -754,19 +754,25 @@ public final class ClickGuiScreen extends Screen {
     private List<String> wrapDesc(String desc, float maxWidth) {
         List<String> lines = new ArrayList<>();
         StringBuilder cur = new StringBuilder();
-        for (String word : desc.split(" ")) {
+        String[] words = desc.split(" ");
+        for (String word : words) {
             String try2 = cur.isEmpty() ? word : cur + " " + word;
             if (F_BODY.getStringWidth(try2) > maxWidth && !cur.isEmpty()) {
+                if (lines.size() == 2) {
+                    // Third (last) line is already as full as it gets and this
+                    // word still doesn't fit — the description is cut off. Put
+                    // an ellipsis on the last visible line and drop the rest.
+                    String base = cur.toString().stripTrailing();
+                    lines.add(base + "…");
+                    return lines;
+                }
                 lines.add(cur.toString());
                 cur = new StringBuilder(word);
             } else {
                 cur = new StringBuilder(try2);
             }
-            if (lines.size() == 3) {
-                break;
-            }
         }
-        if (lines.size() < 3 && !cur.isEmpty()) {
+        if (!cur.isEmpty() && lines.size() < 3) {
             lines.add(cur.toString());
         }
         return lines;
