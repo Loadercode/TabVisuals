@@ -35,10 +35,15 @@ public class KeySetting extends Setting {
         return key <= 0 ? "—" : keyLabel(key);
     }
 
-    /** Human-readable GLFW key label; mirrors the ModuleStub list. */
+    /** Human-readable GLFW key label — the single source of truth for bind
+     *  naming (ClickGUI chips, HotKeys/Binds HUD rows all delegate here). */
     public static String keyLabel(int key) {
         if (key <= 0) {
             return "—";
+        }
+        // GLFW mouse buttons occupy 0..7
+        if (key <= GLFW.GLFW_MOUSE_BUTTON_8) {
+            return "MOUSE " + (key + 1);
         }
         return switch (key) {
             case GLFW.GLFW_KEY_END -> "END";
@@ -59,6 +64,11 @@ public class KeySetting extends Setting {
             case GLFW.GLFW_KEY_ENTER -> "ENTER";
             case GLFW.GLFW_KEY_KP_ENTER -> "NUMENTER";
             case GLFW.GLFW_KEY_BACKSPACE -> "BKSP";
+            case GLFW.GLFW_KEY_ESCAPE -> "ESC";
+            case GLFW.GLFW_KEY_UP -> "UP";
+            case GLFW.GLFW_KEY_DOWN -> "DOWN";
+            case GLFW.GLFW_KEY_LEFT -> "LEFT";
+            case GLFW.GLFW_KEY_RIGHT -> "RIGHT";
             default -> {
                 if (key >= GLFW.GLFW_KEY_A && key <= GLFW.GLFW_KEY_Z) {
                     yield String.valueOf((char) ('A' + key - GLFW.GLFW_KEY_A));

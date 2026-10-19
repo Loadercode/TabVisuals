@@ -23,16 +23,10 @@ public final class StringHelper {
                 .collect(Collectors.joining());
     }
 
-    /** GLFW key → "W", "1", "MOUSE 4", "LSHIFT" style label. */
+    /** GLFW key → bind label; delegates to the single source of truth
+     *  ({@code KeySetting.keyLabel}) so HUD rows and ClickGUI chips always match. */
     public static String getBindName(int key) {
-        if (key < 0) {
-            return "N/A";
-        }
-        return HudHelper.getKeyType(key).createFromCode(key).getTranslationKey()
-                .replace("key.keyboard.", "")
-                .replace("key.mouse.", "mouse ")
-                .replace(".", " ")
-                .toUpperCase(Locale.ROOT);
+        return com.loadercode.tabvisuals.gui.setting.KeySetting.keyLabel(key);
     }
 
     public static String wrap(String input, int width, int size) {

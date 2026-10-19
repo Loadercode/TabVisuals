@@ -2141,39 +2141,22 @@ public final class ClickGuiScreen extends Screen {
         return visibleCats;
     }
 
-    /** Key name for the bind chip; module binds use GLFW keycodes. Cached — the chip is drawn per card per frame. */
+    /** Key name for the bind chip; delegates to {@link KeySetting#keyLabel}
+     *  (cached — the chip is drawn per card per frame). F-keys/arrows used to
+     *  fall through to "K290" here because glfwGetKeyName returns null for them. */
     private String keyLabel(int key) {
         if (key < 0) {
             return "";
         }
         String cached = keyLabelCache.get(key);
-        if (cached != null) {
-            return cached;
+        if (cached == null) {
+            cached = com.loadercode.tabvisuals.gui.setting.KeySetting.keyLabel(key);
+            if (keyLabelCache.size() > 256) {
+                keyLabelCache.clear(); // bounded by keycodes anyway; this is a hard stop
+            }
+            keyLabelCache.put(key, cached);
         }
-        String name = GLFW.glfwGetKeyName(key, 0);
-        String out;
-        if (name != null) {
-            out = name.toUpperCase(Locale.ROOT);
-        } else {
-            out = switch (key) {
-                case GLFW.GLFW_KEY_RIGHT_SHIFT -> "RSHIFT";
-                case GLFW.GLFW_KEY_LEFT_SHIFT -> "LSHIFT";
-                case GLFW.GLFW_KEY_RIGHT_CONTROL -> "RCTRL";
-                case GLFW.GLFW_KEY_LEFT_CONTROL -> "LCTRL";
-                case GLFW.GLFW_KEY_RIGHT_ALT -> "RALT";
-                case GLFW.GLFW_KEY_LEFT_ALT -> "LALT";
-                case GLFW.GLFW_KEY_SPACE -> "SPACE";
-                case GLFW.GLFW_KEY_TAB -> "TAB";
-                case GLFW.GLFW_KEY_INSERT -> "INSERT";
-                case GLFW.GLFW_KEY_DELETE -> "DELETE";
-                default -> "K" + key;
-            };
-        }
-        if (keyLabelCache.size() > 256) {
-            keyLabelCache.clear(); // bounded by keycodes anyway; this is a hard stop
-        }
-        keyLabelCache.put(key, out);
-        return out;
+        return cached;
     }
 
     /** Ease-out-back — the LoxeDLC window pop (slight overshoot, no bounce). */
