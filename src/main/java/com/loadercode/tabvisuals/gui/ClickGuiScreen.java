@@ -1437,7 +1437,7 @@ public final class ClickGuiScreen extends Screen {
             boolean lh = UiRender.inside(tmx, tmy, loadX, btnY, 16, 12);
             boolean dh = UiRender.inside(tmx, tmy, delX, btnY, 16, 12);
             int loadFg = UiRender.mix(t.textSecondary(), t.accent(), easeHover(CFG_LOAD + name, lh));
-            int delFg = UiRender.mix(t.textSecondary(), 0xFFFF6B81, easeHover(CFG_DEL + name, dh));
+            int delFg = UiRender.mix(t.textSecondary(), UiRender.DANGER, easeHover(CFG_DEL + name, dh));
             drawButton(m, null, CFG_LOAD + name, loadX, btnY, 16, 12, FIELD_R, "", lh,
                     UiRender.withAlpha(t.text(), 30), loadFg, false);
             pushScale(m, loadX + 8, btnY + 6, UiRender.pressScale(btnPressAnim.getOrDefault(CFG_LOAD + name, 0f)));
@@ -1549,7 +1549,7 @@ public final class ClickGuiScreen extends Screen {
                 float bx = tx + DELETE_X;
                 drawButton(m, F_TINY, "theme:del", bx, ay, DEL_W, ACTION_H, FIELD_R, "Сброс",
                         UiRender.inside(mouseX, mouseY, bx, ay, DEL_W, ACTION_H),
-                        UiRender.mix(t.cardHover(), 0xFFFF6B81, 0.30f), 0xFFFF8FA0, false);
+                        UiRender.mix(t.cardHover(), UiRender.DANGER, 0.30f), UiRender.DANGER_SOFT, false);
             }
 
             // value column: the Custom slots, or a preview of the preset palette
@@ -1636,7 +1636,7 @@ public final class ClickGuiScreen extends Screen {
         } else {
             // a cleared field rejects the rename — the old name stays, but the
             // commit must not look like it was swallowed
-            NotificationManager.push("Theme ", customName, " rename ", "failed", 0xFFFF6B81);
+            NotificationManager.push("Theme ", customName, " rename ", "failed", UiRender.DANGER);
         }
         renameActive = false;
         renameBuf = "";
@@ -2745,7 +2745,7 @@ public final class ClickGuiScreen extends Screen {
             case "loaded" -> "load";
             default -> "delete";
         };
-        NotificationManager.push("Config ", label, " failed to ", action, 0xFFFF6B81);
+        NotificationManager.push("Config ", label, " failed to ", action, UiRender.DANGER);
     }
 
     private boolean clickConfigs(double mouseX, double mouseY) {

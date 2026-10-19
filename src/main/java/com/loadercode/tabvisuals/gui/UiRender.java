@@ -12,6 +12,13 @@ import net.minecraft.client.util.math.MatrixStack;
 /** Thin wrappers over the ported render stack for GUI drawing. All colors are ARGB ints. */
 public final class UiRender implements QuickImports {
 
+    /** Single source for the destructive-action / error accent (delete, failed op). */
+    public static final int DANGER = 0xFFFF6B81;
+    /** Lighter companion of {@link #DANGER} for fills/tints. */
+    public static final int DANGER_SOFT = 0xFFFF8FA0;
+    /** Success accent, paired with {@link #DANGER} in notifications. */
+    public static final int SUCCESS = 0xFF2ED573;
+
     private UiRender() {
     }
 

@@ -113,13 +113,16 @@ public final class NotificationManager {
 
     public static void moduleToggle(String moduleName, boolean enabled) {
         push("Module ", moduleName, " was ", enabled ? "enabled" : "disabled",
-                enabled ? 0xFF2ED573 : 0xFFFF6B81);
+                enabled ? com.loadercode.tabvisuals.gui.UiRender.SUCCESS
+                        : com.loadercode.tabvisuals.gui.UiRender.DANGER);
     }
 
     /** verb: "saved" / "loaded" (green) or "deleted" (red). */
     public static void configEvent(String configName, String verb) {
         boolean positive = !"deleted".equals(verb);
-        push("Config ", configName, " was ", verb, positive ? 0xFF2ED573 : 0xFFFF6B81);
+        push("Config ", configName, " was ", verb,
+                positive ? com.loadercode.tabvisuals.gui.UiRender.SUCCESS
+                         : com.loadercode.tabvisuals.gui.UiRender.DANGER);
     }
 
     public static List<Toast> queue() {
