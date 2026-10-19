@@ -841,7 +841,9 @@ public final class ClickGuiScreen extends Screen {
         // description: first line tagged with the info glyph, continuations aligned
         // to the same text column so the block reads straight
         List<String> lines = descLines(mod);
-        int descCol = UiRender.mulAlpha(UiRender.withAlpha(t.textSecondary(), 186), alpha);
+        // 186/255 (73%) fell under WCAG AA for body text on the light theme;
+        // 215 keeps the secondary feel while staying readable.
+        int descCol = UiRender.mulAlpha(UiRender.withAlpha(t.textSecondary(), 215), alpha);
         int glyphCol = UiRender.mulAlpha(t.textSecondary(), alpha);
         float dy = y + 19;
         for (int i = 0; i < lines.size(); i++) {
@@ -1143,7 +1145,7 @@ public final class ClickGuiScreen extends Screen {
                 UiRender.mulAlpha(UiRender.mix(t.text(), t.accent(), hv * 0.5f), a));
         String cnt = String.valueOf(r.count);
         FontRenderer.drawRight(F_TINY, m, cnt, r.x + r.w - ROW_RIGHT,
-                centerBoxY(F_TINY, cnt, r.y, SEC_H), UiRender.mulAlpha(t.textSecondary(), 0.55f * a));
+                centerBoxY(F_TINY, cnt, r.y, SEC_H), UiRender.mulAlpha(t.textSecondary(), 0.75f * a));
     }
 
     private void drawPopupRow(MatrixStack m, Theme t, PopRow row) {
