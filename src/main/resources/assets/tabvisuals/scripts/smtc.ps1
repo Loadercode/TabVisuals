@@ -66,6 +66,7 @@ $coverPath = Join-Path $env:TEMP 'tabvisuals_cover.jpg'
 $cmdPath = Join-Path $PSScriptRoot 'media_cmd.txt'
 $lastCmdStamp = [int64]-1
 $lastKey = ''
+$mgr = $null
 $lastPosSent = [int64]-1
 $status = ''
 $coverPending = 'false'
@@ -83,7 +84,8 @@ while ($true) {
             if ($null -eq (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { exit 0 }
         }
 
-        $mgr = AwaitOp ($mgrType::RequestAsync()) $mgrType
+        # the manager is long-lived: request it once, re-request after a failure
+        if (-not $mgr) { $mgr = AwaitOp ($mgrType::RequestAsync()) $mgrType }
         if (-not $mgr) { Start-Sleep -Milliseconds 2000; continue }
         $session = $mgr.GetCurrentSession()
 
@@ -107,6 +109,9 @@ while ($true) {
                         if ($session) {
                             switch ($cmd) {
                                 'playPause' { [void]$session.TryPlayPauseAsync() }
+                                'play'      { [void]$session.TryPlayAsync() }
+                                'pause'     { [void]$session.TryPauseAsync() }
+                                'stop'      { [void]$session.TryStopAsync() }
                                 'next'      { [void]$session.TrySkipNextAsync() }
                                 'prev'      { [void]$session.TrySkipPreviousAsync() }
                             }
@@ -151,7 +156,9 @@ while ($true) {
         $st = "$($info.PlaybackStatus)"
         $posMs = [int64]$timeline.Position.TotalMilliseconds
         $endMs = [int64]$timeline.EndTime.TotalMilliseconds
-        $key = "$app|$title|$artist|$album"
+        # unit separator (U+001F): a '|' inside a title can't make two tracks collide
+        $sep = [string][char]31
+        $key = $app + $sep + $title + $sep + $artist + $sep + $album
 
         if ($key -ne $lastKey) {
             $lastKey = $key
@@ -194,6 +201,7 @@ while ($true) {
         }
         $errStreak = 0
     } catch {
+        $mgr = $null
         # подряд идущие ошибки не должны шуметь и жечь CPU — сообщаем первые
         # три, дальше растим паузу до 5 секунд
         $errStreak++

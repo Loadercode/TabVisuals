@@ -44,7 +44,9 @@ public abstract class CameraMixin {
         float camPitch = inverseView ? -FreeLook.cameraPitch() : FreeLook.cameraPitch();
         float camYaw = FreeLook.cameraYaw() - (inverseView ? 180 : 0);
         setRotation(camYaw, camPitch);
-        moveBy(-clipToSpace(4.0F), 0.0F, 0.0F);
+        // vanilla 1.21.4 scales the third-person distance by the entity scale —
+        // a fixed 4.0 jumped the camera on toggle for scaled players
+        moveBy(-clipToSpace(4.0F * player.getScale()), 0.0F, 0.0F);
         ci.cancel();
     }
 }

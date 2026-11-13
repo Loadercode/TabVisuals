@@ -84,7 +84,7 @@ public final class HudEditor {
     /** Bounds registered by the renderer for the current frame. */
     private static final Map<String, float[]> BOUNDS = new LinkedHashMap<>();
     /** Bounds of the previous frame — hit-testing runs before the render pass. */
-    private static final Map<String, float[]> LAST = new LinkedHashMap<>();
+    private static final LinkedHashMap<String, float[]> LAST = new LinkedHashMap<>();
     /** Per-element hover highlight 0..1 (exponential ease, see ease_exp). */
     private static final Map<String, float[]> HOVER = new HashMap<>();
 
@@ -223,8 +223,10 @@ public final class HudEditor {
     static void syncDraggable(AbstractDraggable d) {
         String n = d.getName();
         BOUNDS.put(n, new float[]{d.getX(), d.getY(), d.getWidth(), d.getHeight()});
-        if (POS.containsKey(n)) {
-            POS.put(n, new float[]{d.getX(), d.getY()});
+        float[] p = POS.get(n);
+        if (p != null && p.length >= 2) {
+            p[0] = d.getX();
+            p[1] = d.getY();
         }
     }
 
@@ -251,6 +253,17 @@ public final class HudEditor {
             long handle = MinecraftClient.getInstance().getWindow().getHandle();
             lastLeft = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
             lastRight = GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
+        } else if (!active && wasActive) {
+            // chat closed mid-drag / with the menu open: drop that state, otherwise
+            // the menu reappears (and the drag resumes) the next time chat opens
+            if (dragging != null) {
+                dragging = null;
+                ConfigManager.autosave();
+            }
+            GUIDES.clear();
+            menuFor = null;
+            menuDrag = false;
+            hovered = null;
         }
         wasActive = active;
     }
@@ -503,7 +516,8 @@ public final class HudEditor {
     }
 
     private static String hitTest(float mx, float my) {
-        for (Map.Entry<String, float[]> e : LAST.entrySet()) {
+        // draw order = insertion order: walk backwards so the topmost box wins
+        for (Map.Entry<String, float[]> e : LAST.sequencedEntrySet().reversed()) {
             float[] b = e.getValue();
             if (UiRender.inside(mx, my, b[0], b[1], b[2], b[3])) {
                 return e.getKey();

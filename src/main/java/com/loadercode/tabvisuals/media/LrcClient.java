@@ -61,8 +61,11 @@ public final class LrcClient {
     /** Minimum gap between real network fetches. */
     private static final long FETCH_THROTTLE_MS = 1500;
 
-    private static volatile Lyrics cache = Lyrics.EMPTY;
-    private static volatile String cacheKey = "";
+    /** Key + lyrics as ONE reference: two volatiles could pair a new key with old lyrics. */
+    private record Cached(String key, Lyrics lyrics) {
+    }
+
+    private static volatile Cached cache = new Cached("", Lyrics.EMPTY);
     private static volatile Around aroundCache;
 
     private static final Object LOCK = new Object();
@@ -92,7 +95,7 @@ public final class LrcClient {
     }
 
     public static Lyrics cached() {
-        return cache;
+        return cache.lyrics();
     }
 
     /**
@@ -105,8 +108,9 @@ public final class LrcClient {
         String key = (title + "|" + artist).toLowerCase(Locale.ROOT);
         // cache by key alone: a fetched "no lyrics" result IS Lyrics.EMPTY, and
         // requiring a different identity made every no-lyrics track refetch forever
-        if (key.equals(cacheKey)) {
-            safeAccept(onReady, cache);
+        Cached c = cache;
+        if (key.equals(c.key())) {
+            safeAccept(onReady, c.lyrics());
             return;
         }
         boolean startWorker;
@@ -137,14 +141,16 @@ public final class LrcClient {
                     pending = null;
                     if (req == null) return;
                 }
-                if (req.key().equals(cacheKey)) {
-                    safeAccept(req.onReady(), cache);
+                Cached c = cache;
+                if (req.key().equals(c.key())) {
+                    safeAccept(req.onReady(), c.lyrics());
                     continue;
                 }
                 // the throttle lives on the worker thread: tracks that flipped
                 // faster than the limit collapse into pending instead of losing
                 // their lyrics until the next track change
-                long wait = FETCH_THROTTLE_MS - (System.currentTimeMillis() - lastFetchAt);
+                long wait = lastFetchAt == 0 ? 0
+                        : FETCH_THROTTLE_MS - (System.nanoTime() - lastFetchAt) / 1_000_000L;
                 if (wait > 0) {
                     try {
                         Thread.sleep(wait);
@@ -156,10 +162,15 @@ public final class LrcClient {
                 synchronized (LOCK) {
                     if (pending != null) continue; // a fresher track arrived — skip this one
                 }
-                lastFetchAt = System.currentTimeMillis();
+                lastFetchAt = System.nanoTime();
                 Lyrics result = fetch(req.title(), req.artist(), req.durationMs());
-                cacheKey = req.key();
-                cache = result;
+                if (result == null) {
+                    // transient network failure: answer "no lyrics" but don't
+                    // cache it, so the next request for this track retries
+                    safeAccept(req.onReady(), Lyrics.EMPTY);
+                    continue;
+                }
+                cache = new Cached(req.key(), result);
                 safeAccept(req.onReady(), result);
             }
         } finally {
@@ -200,7 +211,9 @@ public final class LrcClient {
         Line prev = null, cur = null, next = null;
         for (Line line : lines) {
             if (line.timeMs() <= posMs) {
-                prev = cur == null ? line : cur;
+                // on the first line there is no previous one (the old code
+                // returned the current line as prev too)
+                prev = cur;
                 cur = line;
             } else {
                 next = line;
@@ -239,42 +252,51 @@ public final class LrcClient {
             }
             String t = str(o, "trackName"), a = str(o, "artistName");
             return new Lyrics(t.isBlank() ? title : t, a.isBlank() ? artist : a, lines);
+        } catch (java.io.IOException e) {
+            // offline / timeout: null = "don't cache, retry later"
+            TabVisualsClient.LOGGER.debug("lrclib unreachable: {}", e.toString());
+            return null;
         } catch (Exception e) {
             TabVisualsClient.LOGGER.debug("lrclib failed: {}", e.toString());
             return Lyrics.EMPTY;
         }
     }
 
-    private static JsonObject search(String title, String artist) {
+    /** IOException = transport failure (propagates); malformed JSON = null. */
+    private static JsonObject search(String title, String artist) throws java.io.IOException {
+        String body = getBody("https://lrclib.net/api/search?track_name=" + enc(title)
+                + "&artist_name=" + enc(artist) + "&limit=1");
         try {
-            String body = getBody("https://lrclib.net/api/search?track_name=" + enc(title)
-                    + "&artist_name=" + enc(artist) + "&limit=1");
             if (body == null || body.isBlank() || body.charAt(0) != '[') return null;
             var arr = JsonParser.parseString(body).getAsJsonArray();
-            return arr.isEmpty() ? null : arr.get(0).getAsJsonObject();
-        } catch (Exception e) {
+            if (arr.isEmpty() || !arr.get(0).isJsonObject()) return null;
+            return arr.get(0).getAsJsonObject();
+        } catch (RuntimeException e) {
             return null;
         }
     }
 
-    private static JsonObject get(String url) {
+    private static JsonObject get(String url) throws java.io.IOException {
+        String body = getBody(url);
         try {
-            String body = getBody(url);
             if (body == null || body.isBlank() || body.charAt(0) != '{') return null;
             return JsonParser.parseString(body).getAsJsonObject();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return null;
         }
     }
 
-    private static String getBody(String url) throws Exception {
+    private static String getBody(String url) throws java.io.IOException {
         HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
         conn.setConnectTimeout(4000);
         conn.setReadTimeout(6000);
         conn.setRequestProperty("User-Agent", "TabVisuals/1.0 (github.com/Loadercode/TabVisuals)");
         conn.setRequestProperty("Accept", "application/json");
         try {
-            if (conn.getResponseCode() != 200) return null;
+            int code = conn.getResponseCode();
+            // 429 / 5xx are transient — surface as IO so the miss isn't cached
+            if (code == 429 || code >= 500) throw new java.io.IOException("HTTP " + code);
+            if (code != 200) return null;
             try (BufferedReader r = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 StringBuilder sb = new StringBuilder();
@@ -296,7 +318,7 @@ public final class LrcClient {
         // [offset:±ms] applies to every line: per the LRC spec a positive
         // offset makes a line appear EARLIER than its timestamp
         long offset = 0;
-        String[] rawLines = lrc.split("\r?\n");
+        String[] rawLines = lrc.split("\r\n|\r|\n");
         for (String raw : rawLines) {
             String line = raw.trim();
             if (line.regionMatches(true, 0, "[offset:", 0, 8)) {
@@ -309,18 +331,24 @@ public final class LrcClient {
                 }
             }
         }
+        List<Long> stamps = new ArrayList<>(4);
         for (String raw : rawLines) {
             String line = raw.trim();
             int i = 0;
-            // a line may carry several timestamps: [00:10.00][00:50.00]Chorus
+            stamps.clear();
+            // a line may carry several timestamps: [00:10.00][00:50.00]Chorus —
+            // every stamp gets the text AFTER the last tag (the old code gave
+            // the first stamp "[00:50.00]Chorus")
             while (i < line.length() && line.charAt(i) == '[') {
                 int close = line.indexOf(']', i);
                 if (close < 0) break;
                 long ms = parseTag(line.substring(i + 1, close));
                 i = close + 1;
-                if (ms < 0) continue; // metadata tags ([ar:], [ti:]) and junk
-                out.add(new Line(Math.max(0, ms - offset), line.substring(i).trim()));
+                if (ms >= 0) stamps.add(ms); // metadata tags ([ar:], [ti:]) and junk are skipped
             }
+            if (stamps.isEmpty()) continue;
+            String text = line.substring(i).trim();
+            for (long ms : stamps) out.add(new Line(Math.max(0, ms - offset), text));
         }
         out.sort(Comparator.comparingLong(Line::timeMs));
         return out;
@@ -333,6 +361,8 @@ public final class LrcClient {
         try {
             long min = Long.parseLong(tag.substring(0, colon).trim());
             String rest = tag.substring(colon + 1).trim();
+            // some files write [mm:ss:xx] — treat the second colon as the fraction dot
+            if (rest.indexOf('.') < 0) rest = rest.replace(':', '.');
             long sec;
             long fracMs = 0;
             int dot = rest.indexOf('.');
@@ -342,6 +372,7 @@ public final class LrcClient {
                 String frac = rest.substring(dot + 1).trim();
                 if (frac.isEmpty()) return -1;
                 long f = Long.parseLong(frac.substring(0, Math.min(3, frac.length())));
+                if (f < 0) return -1;
                 fracMs = frac.length() == 1 ? f * 100 : frac.length() == 2 ? f * 10 : f;
             } else {
                 sec = Long.parseLong(rest);

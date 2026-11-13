@@ -12,6 +12,7 @@ import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.gl.ShaderProgramKey;
 import net.minecraft.client.render.BufferBuilder;
 import net.minecraft.client.render.BufferRenderer;
+import net.minecraft.client.render.BuiltBuffer;
 import net.minecraft.client.render.Tessellator;
 import net.minecraft.client.render.VertexFormat.DrawMode;
 import net.minecraft.client.render.VertexFormats;
@@ -35,6 +36,11 @@ public record BuiltText(
 	
 	@Override
     public void render(Matrix4f matrix, float x, float y, float z) {
+		// Nothing to draw: end() on an empty builder throws, and it did so
+		// after blend / cull / texture state had already been changed.
+		if (this.font == null || this.text == null || this.text.isEmpty()) {
+			return;
+		}
 		boolean outlineEnabled = (this.outlineThickness > 0.0f);
 		ShaderProgram shader = RenderSystem.setShader(MSDF_FONT_SHADER_KEY);
 		GlUniform rangeUniform = ShaderUniforms.get(shader, "msdf_font", "Range");
@@ -71,7 +77,11 @@ public record BuiltText(
 			(this.thickness + this.outlineThickness * 0.5f) * 0.5f * this.size, this.spacing,
 				x, y + this.font.getMetrics().baselineHeight() * this.size, z, this.color);
 		
-		BufferRenderer.drawWithGlobalProgram(builder.end());
+		// endNullable: a string made only of glyphs the atlas lacks emits no vertices.
+		BuiltBuffer built = builder.endNullable();
+		if (built != null) {
+			BufferRenderer.drawWithGlobalProgram(built);
+		}
 
 		RenderSystem.setShaderTexture(0, 0);
 

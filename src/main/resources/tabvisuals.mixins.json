@@ -9,6 +9,7 @@
 		"BossBarHudMixin",
 		"CameraMixin",
 		"ClientPlayNetworkMixin",
+		"ConnectScreenMixin",
 		"GameRendererMixin",
 		"InGameHudAccessor",
 		"InGameHudMixin",

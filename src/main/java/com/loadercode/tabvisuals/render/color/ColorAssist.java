@@ -333,7 +333,8 @@ public class ColorAssist {
     }
 
     public static int interpolateInt(int oldValue, int newValue, double interpolationValue) {
-        return interpolateD(oldValue, newValue, interpolationValue).intValue();
+        // primitive math: interpolateD boxes a Double, four of them per colour
+        return (int) (oldValue + (newValue - oldValue) * interpolationValue);
     }
 
     public static int getRed(final int hex)   { return (hex >> 16) & 255; }
@@ -602,8 +603,9 @@ public class ColorAssist {
         public static float[] rgb(final int color) {
             return new float[]{ (color>>16&0xFF)/255f, (color>>8&0xFF)/255f, (color&0xFF)/255f, (color>>24&0xFF)/255f };
         }
-        public static int rgba(int r, int g, int b, int a) { return a<<24|r<<16|g<<8|b; }
-        public static int rgb(int r, int g, int b)         { return 255<<24|r<<16|g<<8|b; }
+        // masked: an out-of-range or negative channel used to spill into its neighbours
+        public static int rgba(int r, int g, int b, int a) { return (a&255)<<24|(r&255)<<16|(g&255)<<8|(b&255); }
+        public static int rgb(int r, int g, int b)         { return 255<<24|(r&255)<<16|(g&255)<<8|(b&255); }
         public static int getRed(final int hex)            { return hex>>16&255; }
         public static int getGreen(final int hex)          { return hex>>8&255; }
         public static int getBlue(final int hex)           { return hex&255; }

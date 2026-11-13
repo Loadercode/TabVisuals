@@ -148,11 +148,12 @@ public record Theme(String id, String name,
     }
 
     public static Theme byId(String id) {
-        if ("custom".equals(id)) {
+        // case-insensitive: hand-edited configs ("Crimson") must not fall back to Midnight
+        if ("custom".equalsIgnoreCase(id)) {
             return customTheme;
         }
         for (Theme t : ALL) {
-            if (t.id().equals(id)) {
+            if (t.id().equalsIgnoreCase(id)) {
                 return t;
             }
         }

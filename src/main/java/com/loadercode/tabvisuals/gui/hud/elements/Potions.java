@@ -106,6 +106,18 @@ public class Potions extends AbstractDraggable {
         known.retainAll(activeNow);
 
         list.removeIf(p -> p.anim.isFinished(Direction.BACKWARDS));
+        // A re-applied/upgraded effect keeps its row (known already has it), so
+        // the private copy would keep counting down the OLD duration and hit 0
+        // (row invisible) while the effect is still active — resync it.
+        for (int i = 0; i < list.size(); i++) {
+            Potion p = list.get(i);
+            if (p.anim.getDirection() != Direction.FORWARDS) continue;
+            StatusEffectInstance live = mc.player.getStatusEffect(p.effect.getEffectType());
+            if (live != null && (live.getAmplifier() != p.effect.getAmplifier()
+                    || Math.abs(live.getDuration() - p.effect.getDuration()) > 1)) {
+                list.set(i, new Potion(new StatusEffectInstance(live), p.anim, p.bornMs));
+            }
+        }
         activeEffectCount = 0;
         for (Potion potion : list) {
             // Runnable, а не null: по истечении копии эффекта vanilla зовёт
@@ -143,8 +155,8 @@ public class Potions extends AbstractDraggable {
         long nowNs = System.nanoTime();
         last_frame_ns = nowNs;
         float dt = prev_ns == 0L ? 0.016f : (nowNs - prev_ns) / 1_000_000_000f;
-        if (dt > 0.1f) dt = 0.1f;
-        if (prev_ns == 0L || nowNs - prev_ns > 250_000_000L) entrance_t = 0f;
+        if (dt > 0.05f) dt = 0.05f;
+        if (prev_ns == 0L || isReentered()) entrance_t = 0f;
         entrance_t = Math.min(1f, entrance_t + dt / 0.30f);
         float enterInv = 1f - entrance_t;
         final float enter = 1f - enterInv * enterInv * enterInv;
@@ -274,9 +286,16 @@ public class Potions extends AbstractDraggable {
         }
         });
         matrix.pop();
-        setWidth((int) Math.ceil(draw_max_width));
+        // width eases instead of snapping when a longer/shorter row appears
+        shown_width = shown_width < 0f || isReentered()
+                ? draw_max_width
+                : HudHelper.hud_anim_approach(shown_width, draw_max_width, 16f, dt);
+        setWidth((int) Math.ceil(shown_width - 0.01f));
         setHeight((int) Math.ceil(draw_offset));
     }
+
+    /** Eased panel width; -1 until the first frame. */
+    private float shown_width = -1f;
 
     private static float clamp01(float value) {
         return value < 0f ? 0f : Math.min(1f, value);

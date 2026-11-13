@@ -44,6 +44,42 @@ public abstract class AbstractDraggable implements Draggable, QuickImports, Quic
      */
     private float lift;
 
+    /** Счётчик HUD-кадров (включая кадры со скрытым HUD) — см. {@link #isReentered()}. */
+    private static long hudFrame;
+    /** После такой паузы без HUD-кадров (меню, загрузка мира) вход играется заново. */
+    private static final long REENTER_GAP_NS = 1_000_000_000L;
+
+    @Getter(lombok.AccessLevel.NONE)
+    @Setter(lombok.AccessLevel.NONE)
+    private long drawnFrame = Long.MIN_VALUE;
+    @Getter(lombok.AccessLevel.NONE)
+    @Setter(lombok.AccessLevel.NONE)
+    private long drawnNanos;
+    @Getter(lombok.AccessLevel.NONE)
+    @Setter(lombok.AccessLevel.NONE)
+    private boolean reentered = true;
+
+    /** Вызывается драйвером HUD в начале каждого кадра, даже если HUD скрыт. */
+    public static void beginHudFrame() {
+        hudFrame++;
+    }
+
+    /** Драйвер HUD отмечает, что элемент рисуется в этом кадре (до drawDraggable). */
+    public final void markDrawn() {
+        long now = System.nanoTime();
+        reentered = drawnFrame != hudFrame - 1 || now - drawnNanos > REENTER_GAP_NS;
+        drawnFrame = hudFrame;
+        drawnNanos = now;
+    }
+
+    /**
+     * true в первом кадре после того, как элемент не рисовался (скрыт, выключен,
+     * F1). Пропуск считается по кадрам, а не по времени: лаг-спайк вход не перезапускает.
+     */
+    public final boolean isReentered() {
+        return reentered;
+    }
+
     /**
      * Плавный snap/lift при захвате элемента — независимо от FPS: значение
      * идёт к цели по {@code 1 - exp(-dt * k)}, поэтому на 30 и на 300 FPS

@@ -18,13 +18,19 @@ public class ScissorAssist implements QuickImports {
     Pool<Scissor> scissorPool = new Pool<>(Scissor::new);
     Stack<Scissor> scissorStack = new Stack<>();
 
+    Vector3f cornerA = new Vector3f();
+    Vector3f cornerB = new Vector3f();
+
     public void push(Matrix4f matrix4f, float x, float y, float width, float height) {
         Scissor currentScissor = scissorPool.get();
 
-        Vector3f pos = matrix4f.transformPosition(x, y, 0, new Vector3f());
-        Vector3f size = matrix4f.getScale(new Vector3f()).mul(width, height, 0);
+        // Both corners go through the matrix (getScale() dropped mirroring),
+        // into reused vectors instead of two allocations per push.
+        // A negative size (overshooting collapse animation) clips everything, as before.
+        Vector3f a = matrix4f.transformPosition(x, y, 0, cornerA);
+        Vector3f b = matrix4f.transformPosition(x + Math.max(0f, width), y + Math.max(0f, height), 0, cornerB);
 
-        currentScissor.set(pos.x, pos.y, size.x, size.y);
+        currentScissor.set(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x), Math.max(a.y, b.y));
 
         if (!scissorStack.isEmpty()) {
             Scissor parent = scissorStack.peek();
@@ -70,45 +76,44 @@ public class ScissorAssist implements QuickImports {
         if (currentWindow == null) {
             return;
         }
-        // Без (int)-усечения: дробный scale factor (GUI Scale = Auto даёт
-        // нецелые значения) сдвигал и обрезал область срезки на полпикселя.
         double scaleFactor = currentWindow.getScaleFactor();
-        int x = (int) Math.round(scissor.x * scaleFactor);
-        int y = (int) Math.round(currentWindow.getHeight() - (scissor.y * scaleFactor + scissor.height * scaleFactor));
-        int width = (int) Math.round(scissor.width * scaleFactor);
-        int height = (int) Math.round(scissor.height * scaleFactor);
+        // Edges are rounded, not origin and size separately: rounding both
+        // independently moved the far edge by a pixel for some fractional
+        // positions. Framebuffer height: glScissor works in framebuffer pixels,
+        // which differ from window pixels on HiDPI displays.
+        int left = toPixel(scissor.x1 * scaleFactor);
+        int right = toPixel(scissor.x2 * scaleFactor);
+        int top = toPixel(scissor.y1 * scaleFactor);
+        int bottom = toPixel(scissor.y2 * scaleFactor);
 
-        RenderSystem.enableScissor(x, y, width, height);
+        RenderSystem.enableScissor(left, currentWindow.getFramebufferHeight() - bottom,
+                Math.max(0, right - left), Math.max(0, bottom - top));
+    }
+
+    private static int toPixel(double value) {
+        // NaN -> 0; the clamp keeps huge animated values from overflowing int
+        return (int) Math.round(Math.max(-1.0e6, Math.min(1.0e6, value)));
     }
 
 
+    /** Edges in GUI units; kept fractional so the box is rounded once, in device pixels. */
     private static class Scissor {
-        public int x, y;
-        public int width, height;
+        public float x1, y1, x2, y2;
 
-        public void set(double x, double y, double width, double height) {
-            this.x = Math.max(0, (int) Math.round(x));
-            this.y = Math.max(0, (int) Math.round(y));
-            this.width = Math.max(0, (int) Math.round(width));
-            this.height = Math.max(0, (int) Math.round(height));
+        public void set(float x1, float y1, float x2, float y2) {
+            // Clamp the edges, not the origin: clamping x alone kept the full
+            // width and pushed the far edge outwards for boxes starting off-screen.
+            this.x1 = Math.max(0f, x1);
+            this.y1 = Math.max(0f, y1);
+            this.x2 = Math.max(this.x1, x2);
+            this.y2 = Math.max(this.y1, y2);
         }
 
         public void intersect(Scissor parent) {
-            int x1 = Math.max(this.x, parent.x);
-            int y1 = Math.max(this.y, parent.y);
-            int x2 = Math.min(this.x + this.width, parent.x + parent.width);
-            int y2 = Math.min(this.y + this.height, parent.y + parent.height);
-
-            this.x = x1;
-            this.y = y1;
-            this.width = Math.max(0, x2 - x1);
-            this.height = Math.max(0, y2 - y1);
-        }
-
-        Scissor copy() {
-            Scissor newScissor = new Scissor();
-            newScissor.set(this.x, this.y, this.width, this.height);
-            return newScissor;
+            x1 = Math.max(x1, parent.x1);
+            y1 = Math.max(y1, parent.y1);
+            x2 = Math.max(x1, Math.min(x2, parent.x2));
+            y2 = Math.max(y1, Math.min(y2, parent.y2));
         }
     }
 }

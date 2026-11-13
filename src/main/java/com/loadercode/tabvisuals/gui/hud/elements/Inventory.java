@@ -87,6 +87,7 @@ public class Inventory extends AbstractDraggable {
         setWidth(Math.max(BASE_WIDTH, 105 + (int) Math.ceil(itemsCached.getStringWidth(itemCountText)) + 4));
 
         matrix.push();
+        try {
         matrix.translate(0f, (1f - enter) * 6f, 0f);
 
         int[] gradientColors = ColorAssist.getRectangleGradientColors();
@@ -175,8 +176,9 @@ public class Inventory extends AbstractDraggable {
                 offsetX = 4;
             }
         }
-
-        matrix.pop();
+        } finally {
+            matrix.pop();
+        }
     }
 
     /** FPS-независимый шаг кадра: dt в секундах с защитой от фризов/alt-tab. */
@@ -186,9 +188,9 @@ public class Inventory extends AbstractDraggable {
             animDt = 1f / 60f;
             entranceStartNs = now;
         } else {
-            animDt = Math.min((now - animLastNs) / 1_000_000_000f, 0.1f);
-            // Долгая пауза без отрисовки = элемент скрыт — вход заново
-            if (now - animLastNs > 250_000_000L) entranceStartNs = now;
+            animDt = Math.min((now - animLastNs) / 1_000_000_000f, 0.05f);
+            // Пропущенные кадры (элемент был скрыт) — вход заново; лаг-спайк не считается
+            if (isReentered()) entranceStartNs = now;
         }
         animLastNs = now;
     }

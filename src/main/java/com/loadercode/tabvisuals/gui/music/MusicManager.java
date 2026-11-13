@@ -27,11 +27,18 @@ import javax.imageio.ImageIO;
  */
 public final class MusicManager {
 
-    private static final Path COVER_PATH =
-            Path.of(System.getProperty("java.io.tmpdir", "."), "tabvisuals_cover.jpg");
+    /** Must match the script's $env:TEMP — launchers often override java.io.tmpdir. */
+    private static final Path COVER_PATH = Path.of(coverDir(), "tabvisuals_cover.jpg");
     private static final Identifier COVER_ID = Identifier.of("tabvisuals", "cover");
 
-    private static volatile LrcClient.Lyrics lyrics = LrcClient.Lyrics.EMPTY;
+    /** Lyrics tagged with their track: a late result can never show under another song. */
+    private record TrackLyrics(long trackId, LrcClient.Lyrics lyrics) {
+    }
+
+    private static final TrackLyrics NO_LYRICS = new TrackLyrics(0, LrcClient.Lyrics.EMPTY);
+
+    private static volatile TrackLyrics lyrics = NO_LYRICS;
+    /** Track whose lyrics were last requested (bridge listener + render thread). */
     private static volatile long lyricsForTrack;
 
     /** Registered cover texture + its width in pixels once the file decodes. */
@@ -49,17 +56,8 @@ public final class MusicManager {
     static {
         MediaBridge.start();
         DiscordBridge.start();
-        MediaBridge.addListener(s -> {
-            long id = s.trackId();
-            if (s.active() && s.endMs() > 0) {
-                // результат применяем только если трек не сменился — иначе
-                // ответ на старый запрос затёр бы текст нового трека
-                LrcClient.request(s.title(), s.artist(), s.endMs(),
-                        result -> { if (MediaBridge.current().trackId() == id) lyrics = result; });
-            } else if (!s.active()) {
-                lyrics = LrcClient.Lyrics.EMPTY;
-            }
-        });
+        // prefetch on the bridge thread; ticks for an already requested track are no-ops
+        MediaBridge.addListener(MusicManager::requestLyrics);
     }
 
     /** Explicit bootstrap hook — forces the static init at client startup. */
@@ -97,10 +95,64 @@ public final class MusicManager {
         return track().playing();
     }
 
+    /** Album of the current track, "" when unknown. */
+    public static String album() {
+        return track().album();
+    }
+
+    /** SMTC source app id (e.g. "Spotify.exe"), "" when nothing plays. */
+    public static String sourceApp() {
+        return track().app();
+    }
+
+    /** Interpolated playback position in ms (0 when idle). */
+    public static long positionMs() {
+        return track().posMs();
+    }
+
+    /** Track length in ms; 0 when the source doesn't report one. */
+    public static long durationMs() {
+        return track().endMs();
+    }
+
+    /** Full interpolated snapshot — read once per frame and use its fields together. */
+    public static MediaBridge.Snapshot snapshot() {
+        return track();
+    }
+
+    /** False on non-Windows: the SMTC bridge never runs, every accessor stays empty. */
+    public static boolean mediaSupported() {
+        return MediaBridge.isSupported();
+    }
+
+    private static final java.util.Set<String> COMMANDS =
+            java.util.Set.of("playPause", "play", "pause", "stop", "next", "prev");
+    private static final java.util.concurrent.ExecutorService CONTROL =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "tabvisuals-media-control");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /**
+     * Fire-and-forget transport command, safe on the render thread (file IO
+     * runs on a daemon worker). Accepts playPause, play, pause, stop, next,
+     * prev; returns false for anything else or when SMTC is unavailable.
+     */
+    public static boolean control(String command) {
+        if (!MediaBridge.isSupported() || command == null || !COMMANDS.contains(command)) return false;
+        try {
+            CONTROL.execute(() -> com.loadercode.tabvisuals.gui.hud.elements.MediaPlayer.sendCommand(command));
+            return true;
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            return false;
+        }
+    }
+
     /** True when lrclib returned timed lines for the current track. */
     public static boolean hasLyrics() {
         syncCache();
-        return lyrics.hasSync();
+        return lyricsFor(track()).hasSync();
     }
 
     /** Previous synchronized lyric line — small dim text above the current one in the menu. */
@@ -120,16 +172,26 @@ public final class MusicManager {
 
     private static String lineAt(int idx) {
         syncCache();
-        LrcClient.Line[] around = LrcClient.around(lyrics, track().posMs());
+        MediaBridge.Snapshot s = track();
+        LrcClient.Line[] around = LrcClient.around(lyricsFor(s), s.posMs());
         LrcClient.Line line = around[idx];
         return line == null ? "" : line.text();
     }
 
-    /** Replaces the cached lyrics when the track rolled over without an event. */
+    /** Lyrics of exactly this track, EMPTY while they're loading or belong to another track. */
+    private static LrcClient.Lyrics lyricsFor(MediaBridge.Snapshot s) {
+        TrackLyrics l = lyrics;
+        return s.active() && l.trackId() == s.trackId() ? l.lyrics() : LrcClient.Lyrics.EMPTY;
+    }
+
+    /** Requests lyrics when the track rolled over without an event. */
     private static void syncCache() {
-        MediaBridge.Snapshot s = track();
+        requestLyrics(track());
+    }
+
+    private static void requestLyrics(MediaBridge.Snapshot s) {
         if (!s.active()) {
-            if (lyrics != LrcClient.Lyrics.EMPTY) lyrics = LrcClient.Lyrics.EMPTY;
+            lyrics = NO_LYRICS;
             return;
         }
         // без длительности lrclib не найдёт совпадение, а ключ зафиксировался бы
@@ -138,8 +200,10 @@ public final class MusicManager {
         long id = s.trackId();
         if (lyricsForTrack == id) return;
         lyricsForTrack = id;
-        LrcClient.request(s.title(), s.artist(), s.endMs(),
-                result -> { if (MediaBridge.current().trackId() == id) lyrics = result; });
+        LrcClient.request(s.title(), s.artist(), s.endMs(), result -> {
+            // tagged with the id: lyricsFor() ignores it if the track moved on
+            if (result != null) lyrics = new TrackLyrics(id, result);
+        });
     }
 
     // --- Discord profile row -------------------------------------------------
@@ -251,11 +315,22 @@ public final class MusicManager {
                 // pinned until the next successful load. This runs on the cover
                 // worker; TextureManager must be touched on the client thread,
                 // so hop over via mc.execute (same as the register path above).
-                MinecraftClient.getInstance().execute(MusicManager::dropCover);
+                // re-check on the client thread: a newer track may have
+                // registered its cover meanwhile and must not be dropped
+                MinecraftClient.getInstance().execute(() -> {
+                    if (coverForTrack == id) dropCover();
+                });
             }
         }, "tabvisuals-cover");
         t.setDaemon(true);
         t.start();
+    }
+
+    private static String coverDir() {
+        String temp = System.getenv("TEMP");
+        if (temp == null || temp.isBlank()) temp = System.getenv("TMP");
+        if (temp == null || temp.isBlank()) temp = System.getProperty("java.io.tmpdir", ".");
+        return temp;
     }
 
     /** Client thread: frees the registered cover texture when nothing draws it. */

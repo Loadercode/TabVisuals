@@ -149,8 +149,8 @@ public class HotKeys extends AbstractDraggable {
         long now = System.nanoTime();
         last_frame_ns = now;
         float dt = prev_ns == 0L ? 0.016f : (now - prev_ns) / 1_000_000_000f;
-        if (dt > 0.1f) dt = 0.1f;
-        if (prev_ns == 0L || now - prev_ns > 250_000_000L) entrance_t = 0f;
+        if (dt > 0.05f) dt = 0.05f;
+        if (prev_ns == 0L || isReentered()) entrance_t = 0f;
         entrance_t = Math.min(1f, entrance_t + dt / 0.30f);
         float enterInv = 1f - entrance_t;
         final float enter = 1f - enterInv * enterInv * enterInv;
@@ -281,9 +281,23 @@ public class HotKeys extends AbstractDraggable {
         });
         matrix.pop();
         row_anims.keySet().retainAll(live_rows);
-        setWidth((int) (draw_max_width + 10));
-        setHeight((int) draw_offset);
+        // panel size eases when a row is added/removed instead of jumping by 11px
+        float targetW = draw_max_width + 10;
+        float targetH = draw_offset;
+        if (shown_w < 0f || isReentered()) {
+            shown_w = targetW;
+            shown_h = targetH;
+        } else {
+            shown_w = HudHelper.hud_anim_approach(shown_w, targetW, 16f, dt);
+            shown_h = HudHelper.hud_anim_approach(shown_h, targetH, 16f, dt);
+        }
+        setWidth(Math.round(shown_w));
+        setHeight(Math.round(shown_h));
     }
+
+    /** Eased panel size; -1 until the first frame. */
+    private float shown_w = -1f;
+    private float shown_h = -1f;
 
     /** Акцентная подложка строки при срабатывании бинда: плавный всплеск alpha. */
     private void draw_row_highlight(MatrixStack matrix, float centerY, float highlight) {

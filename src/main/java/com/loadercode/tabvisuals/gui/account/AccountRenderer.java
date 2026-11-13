@@ -260,6 +260,24 @@ public final class AccountRenderer {
         }
     }
 
+    /**
+     * Skin texture for a small head icon (account lists): the resolved or
+     * cached Mojang skin when this session knows it, the offline default skin
+     * of the nick otherwise. Render thread; never fetches.
+     */
+    public static Identifier skinFor(String raw) {
+        String n = AccountManager.clean(raw);
+        if (n.isEmpty()) {
+            return net.minecraft.client.util.DefaultSkinHelper.getTexture();
+        }
+        GameProfile p = cache_get(n.toLowerCase(Locale.ROOT));
+        if (!has_textures(p)) {
+            p = offline_profile(n);
+            return net.minecraft.client.util.DefaultSkinHelper.getSkinTextures(p.getId()).texture();
+        }
+        return MinecraftClient.getInstance().getSkinProvider().getSkinTextures(p).texture();
+    }
+
     private static boolean has_textures(GameProfile p) {
         return p != null && p.getProperties().containsKey("textures");
     }

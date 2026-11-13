@@ -17,8 +17,8 @@ import org.lwjgl.glfw.GLFW;
  */
 public final class Zoom {
 
-    /** LoxeDLC lerp speed: frame duration divided by 1.6. */
-    private static final float SMOOTH = 16f * 1.6f;
+    /** Time constant of the exponential ease: 1 - e^(-16/16.3) ≈ 0.63 per 60 fps frame. */
+    private static final float SMOOTH_TAU_MS = 16.3f;
 
     private static float fov = 30f;
     private static float smoothFov = 30f;
@@ -88,8 +88,11 @@ public final class Zoom {
         }
         prevDown = down;
 
+        // a NaN from a broken frame delta must not stick in the state forever
+        if (!Float.isFinite(smoothFov)) smoothFov = base;
         smoothFov = MathHelper.lerp(frameLerp(), smoothFov, fov);
-        int out = (int) MathHelper.clamp(smoothFov + 1f, 10f, base);
+        if (Math.abs(smoothFov - fov) < 0.01f) smoothFov = fov;
+        int out = Math.round(MathHelper.clamp(smoothFov, 10f, base));
         lastFov = out;
         return out;
     }
@@ -119,13 +122,16 @@ public final class Zoom {
     }
 
     /**
-     * Per-frame lerp factor: LoxeDLC divided the last tick duration by 1.6
-     * (~0.63 at 60 fps); we measure the real frame time the same way.
+     * Per-frame lerp factor, exponential in the real frame time so the ease
+     * takes the same wall time at any FPS (the old linear ms/25.6 converged
+     * faster per second at high FPS). Tuned to ~0.63 at 60 fps like LoxeDLC.
      */
     private static float frameLerp() {
         long now = System.nanoTime();
         float ms = lastNanos == 0 ? 16f : (now - lastNanos) / 1_000_000f;
         lastNanos = now;
-        return MathHelper.clamp(ms / SMOOTH, 0f, 1f);
+        if (!(ms > 0f)) return 0f;          // same-frame second call / clock oddity
+        if (ms > 250f) return 1f;           // long stall (menu, lag): just land on target
+        return 1f - (float) Math.exp(-ms / SMOOTH_TAU_MS);
     }
 }

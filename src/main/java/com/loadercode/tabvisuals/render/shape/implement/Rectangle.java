@@ -37,31 +37,48 @@ public class Rectangle implements Shape, QuickImports {
             return;
         }
 
+        float scale = (float) currentWindow.getScaleFactor();
+        Matrix4f matrix4f = shape.getMatrix().peek().getPositionMatrix();
+        Vector3f size = matrix4f.getScale(sizeScratch).mul(scale);
+        float width = shape.getWidth() * size.x;
+        float height = shape.getHeight() * size.y;
+        // Collapsed / mirrored / NaN rects have no pixels to cover.
+        if (!Blur.drawable(width, height)) {
+            return;
+        }
+
+        // Before begin(): a missing program (failed shader load) used to NPE
+        // with the Tessellator buffer already started.
+        ShaderProgram shader = RenderSystem.setShader(SHADER_KEY);
+        if (shader == null) {
+            return;
+        }
+
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
 
-        float scale = (float) currentWindow.getScaleFactor();
         float alpha = RenderSystem.getShaderColor()[3];
-
-        Matrix4f matrix4f = shape.getMatrix().peek().getPositionMatrix();
         Vector3f pos = matrix4f.transformPosition(shape.getX(), shape.getY(), 0, posScratch).mul(scale);
-        Vector3f size = matrix4f.getScale(sizeScratch).mul(scale);
         // Копия, а не мутация getRound(): умножение на scale прямо в properties
         // компаундилось при повторном рендере одного и того же объекта.
         Vector4f round = roundScratch.set(shape.getRound()).mul(size.y);
 
         // Как в Blur/Arc: softness не домножается на альфу шейдера — при
         // fade-анимациях (alpha < 1) прямоугольник раньше сжимался.
-        float softness = shape.getSoftness();
-        float thickness = shape.getThickness();
-        float width = shape.getWidth() * size.x;
-        float height = shape.getHeight() * size.y;
+        float density = size.y * Blur.REFERENCE_DENSITY;
+        float softness = Blur.softnessPx(shape.getSoftness(), density);
+        float thickness = Blur.strokePx(shape.getThickness(), density);
+        // Without the margin the geometry cut the antialiased fringe off, so
+        // edges jumped by whole pixels while a rect moved at sub-pixel speed.
+        float padX = (softness + Blur.EDGE_PAD_PX) / size.x;
+        float padY = (softness + Blur.EDGE_PAD_PX) / size.y;
 
         BufferBuilder buffer = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION);
-        drawEngine.quad(matrix4f, buffer, shape.getX() - softness / 2, shape.getY() - softness / 2, shape.getWidth() + softness, shape.getHeight() + softness);
+        drawEngine.quad(matrix4f, buffer, shape.getX() - padX, shape.getY() - padY, shape.getWidth() + padX * 2, shape.getHeight() + padY * 2);
 
-        ShaderProgram shader = RenderSystem.setShader(SHADER_KEY);
-        Blur.shader(pos, round, softness, thickness, width, height, shader, currentWindow.getHeight());
+        // Framebuffer height, not window height: gl_FragCoord is in framebuffer
+        // pixels and the two differ on HiDPI displays.
+        Blur.shader(pos, round, softness, thickness, width, height, shader, currentWindow.getFramebufferHeight());
         Blur.ShaderUniform(shape, alpha, shader);
 
         BufferRenderer.drawWithGlobalProgram(buffer.end());

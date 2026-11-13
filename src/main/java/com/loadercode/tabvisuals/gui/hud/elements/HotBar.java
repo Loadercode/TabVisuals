@@ -77,6 +77,11 @@ public class HotBar extends AbstractDraggable {
         float enter = entrance_progress();
 
         // Плавное (FPS-независимое) движение выделенного слота + импульс при смене
+        if (isReentered()) {
+            // shown again: start on the real slot, don't sweep over from a stale one
+            selectItemX = inventory.selectedSlot * 20;
+            lastSelectedSlot = inventory.selectedSlot;
+        }
         if (lastSelectedSlot >= 0 && lastSelectedSlot != inventory.selectedSlot) selectPulse = 1f;
         lastSelectedSlot = inventory.selectedSlot;
         selectItemX = approach_smooth(selectItemX, inventory.selectedSlot * 20, 16f, animDt);
@@ -90,6 +95,7 @@ public class HotBar extends AbstractDraggable {
         final float barX = getX() + OFFHAND_GUTTER;
 
         matrix.push();
+        try {
         matrix.translate(0f, (1f - enter) * 8f, 0f);
 
         // Фон хотбара
@@ -137,8 +143,9 @@ public class HotBar extends AbstractDraggable {
         if (!mc.player.isSpectator() && !mc.player.isCreative()) {
             drawExperienceBar(matrix, enter);
         }
-
-        matrix.pop();
+        } finally {
+            matrix.pop();
+        }
 
         drawOverlayInfo(matrix);
     }
@@ -254,9 +261,9 @@ public class HotBar extends AbstractDraggable {
             animDt = 1f / 60f;
             entranceStartNs = now;
         } else {
-            animDt = Math.min((now - animLastNs) / 1_000_000_000f, 0.1f);
-            // Долгая пауза без отрисовки = элемент скрыт — вход заново
-            if (now - animLastNs > 250_000_000L) entranceStartNs = now;
+            animDt = Math.min((now - animLastNs) / 1_000_000_000f, 0.05f);
+            // Пропущенные кадры (элемент был скрыт) — вход заново; лаг-спайк не считается
+            if (isReentered()) entranceStartNs = now;
         }
         animLastNs = now;
     }

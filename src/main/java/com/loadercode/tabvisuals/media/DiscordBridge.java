@@ -54,6 +54,9 @@ public final class DiscordBridge {
     }
 
     public static void start() {
+        // \\.\pipe\ paths exist only on Windows: elsewhere RandomAccessFile("rw")
+        // would CREATE ten junk files named "\\.\pipe\discord-ipc-N" in the game dir
+        if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).startsWith("windows")) return;
         if (!STARTED.compareAndSet(false, true)) return;
         Thread t = new Thread(DiscordBridge::run, "tabvisuals-discord");
         t.setDaemon(true);
@@ -155,7 +158,9 @@ public final class DiscordBridge {
             globalName = str(user, "global_name");
             String hash = str(user, "avatar");
             String id = str(user, "id");
-            String url = hash.isEmpty() ? ""
+            // only well-formed snowflake/hash go into the CDN URL
+            boolean valid = id.matches("\\d{1,25}") && hash.matches("[A-Za-z0-9_]{1,64}");
+            String url = !valid ? ""
                     : "https://cdn.discordapp.com/avatars/" + id + "/" + hash + ".png?size=128";
             ready = true;
             TabVisualsClient.LOGGER.info("Discord IPC ready: {} ({})", nick(), id);

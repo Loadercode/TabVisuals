@@ -49,11 +49,12 @@ public class EPRender extends AbstractDraggable {
         if (hud == null || mc.player == null || mc.world == null) return;
 
         long now_ns = System.nanoTime();
-        if (last_frame_ns == 0L || now_ns - last_frame_ns > FRAME_GAP_RESTART_NS) {
+        // skipped frames (hidden), not a lag spike, replay the entrance
+        if (last_frame_ns == 0L || isReentered()) {
             entrance_start_ns = now_ns;
         }
         float dt = last_frame_ns == 0L ? 1f / 60f
-                : Math.min((now_ns - last_frame_ns) / 1_000_000_000f, 0.1f);
+                : Math.min((now_ns - last_frame_ns) / 1_000_000_000f, 0.05f);
         last_frame_ns = now_ns;
 
         float enter = HudHelper.hud_anim_cubic_out(

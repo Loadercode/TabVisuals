@@ -2,12 +2,10 @@
 package com.loadercode.tabvisuals.render.font;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-import it.unimi.dsi.fastutil.chars.Char2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2FloatOpenHashMap;
-import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
-import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectList;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.experimental.Accessors;
@@ -32,6 +30,7 @@ import com.loadercode.tabvisuals.render.math.calc.Calculate;
 
 import java.awt.Color;
 import java.awt.Font;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 import static net.minecraft.client.render.VertexFormat.DrawMode.QUADS;
 import static net.minecraft.client.render.VertexFormats.POSITION_TEXTURE_COLOR;
@@ -41,21 +40,34 @@ import static net.minecraft.client.render.VertexFormats.POSITION_TEXTURE_COLOR;
 public class FontRenderer implements QuickImports {
     private static final int WIDTH_CACHE_MAX = 512;
 
-    private final Object2ObjectMap<Identifier, ObjectList<DrawEntry>> GLYPH_PAGE_CACHE = new Object2ObjectOpenHashMap<>();
+    private static final GlyphMap[] NO_MAPS = new GlyphMap[0];
+    /** One atlas page per 128 code points. */
+    private static final int PAGE_SHIFT = 7;
+    private static final int PAGE_SIZE = 1 << PAGE_SHIFT;
+
     /**
-     * Пул записей глифов. Страницы отдаются обратно в пул на каждой отрисовке
-     * (см. {@link #flushGlyphs}), поэтому между кадрами не создаётся ни одного
-     * нового {@code DrawEntry} — только присваивание полей. Пул экземплярный,
-     * потому что и страницы экземплярные: каждый шрифт держит свой кэш.
-     * Потокобезопасность не нужна — рисование идёт только из рендер-потока.
+     * Пул записей глифов. Очереди страниц (GlyphMap.batch) отдаются обратно в
+     * пул на каждой отрисовке (см. {@link #flushGlyphs}), поэтому между кадрами
+     * не создаётся ни одного нового {@code DrawEntry} — только присваивание полей.
+     * Рисование идёт только из рендер-потока.
      */
     private final ObjectList<DrawEntry> drawEntryPool = new ObjectArrayList<>();
     private final StringBuilder colorEscapeBuffer = new StringBuilder(24);
-    private final ObjectList<GlyphMap> maps = new ObjectArrayList<>();
-    private final Char2ObjectOpenHashMap<Glyph> glyphCache = new Char2ObjectOpenHashMap<>();
+    /**
+     * Copy-on-write snapshot of the generated pages. Measuring text is allowed
+     * off the render thread, so the lookup structures must not be plain
+     * collections that a concurrent insert can corrupt mid-read.
+     */
+    @Setter(AccessLevel.NONE)
+    private volatile GlyphMap[] maps = NO_MAPS;
+    /** Lock-free read path: page index (char >> 7) -> glyphs of that page. */
+    private final AtomicReferenceArray<Glyph[]> glyphPages = new AtomicReferenceArray<>(65536 >> PAGE_SHIFT);
+    private final Object glyphLock = new Object();
+    @Setter(AccessLevel.NONE)
+    private int pendingGlyphs;
     private final Object2FloatOpenHashMap<String> widthCache = new Object2FloatOpenHashMap<>();
     @Getter
-    private Font font;
+    private volatile Font font;
 
     public FontRenderer(Font font, float sizePx) {
         init(font, sizePx);
@@ -68,11 +80,24 @@ public class FontRenderer implements QuickImports {
      * getStringWidth вернул бы ширину старого шрифта.
      */
     public FontRenderer setFont(Font font) {
-        this.font = font;
-        widthCache.clear();
-        glyphCache.clear();
-        maps.clear();
-        GLYPH_PAGE_CACHE.clear();
+        synchronized (glyphLock) {
+            this.font = font;
+            GlyphMap[] old = maps;
+            maps = NO_MAPS;
+            for (int i = 0, n = glyphPages.length(); i < n; i++) {
+                glyphPages.set(i, null);
+            }
+            // The pages of the previous font were never released: every
+            // setFont() leaked their atlas textures.
+            for (GlyphMap map : old) {
+                recycle(map.batch);
+                map.destroy();
+            }
+            pendingGlyphs = 0;
+        }
+        synchronized (widthCache) {
+            widthCache.clear();
+        }
         return this;
     }
 
@@ -87,30 +112,35 @@ public class FontRenderer implements QuickImports {
         this.font = font.deriveFont(sizePx * 2);
     }
 
-    private GlyphMap generateMap(char from, char to) {
-        GlyphMap glyphMap = new GlyphMap(from, to, this.font, randomIdentifier(), 5);
-        maps.add(glyphMap);
-        return glyphMap;
+    private Glyph locateGlyph(char glyph) {
+        Glyph[] page = glyphPages.get(glyph >> PAGE_SHIFT);
+        return page != null ? page[glyph & (PAGE_SIZE - 1)] : loadGlyphPage(glyph);
     }
 
-    private Glyph locateGlyph(char glyph) {
-        Glyph cached = glyphCache.get(glyph);
-        if (cached != null) {
-            return cached;
-        }
-
-        for (GlyphMap map : maps) {
-            if (map.contains(glyph)) {
-                Glyph found = map.getGlyph(glyph);
-                glyphCache.put(glyph, found);
-                return found;
+    private Glyph loadGlyphPage(char glyph) {
+        synchronized (glyphLock) {
+            int index = glyph >> PAGE_SHIFT;
+            Glyph[] page = glyphPages.get(index);
+            if (page == null) {
+                int base = index << PAGE_SHIFT;
+                // The last page ended at 0x10000, which wraps to 0 as a char:
+                // the map came out empty, its glyphs were "missing", and every
+                // lookup of U+FF80..U+FFFF (e.g. the replacement char) built
+                // and uploaded a brand new atlas texture.
+                char end = (char) Math.min(base + PAGE_SIZE, Character.MAX_VALUE);
+                GlyphMap map = new GlyphMap((char) base, end, this.font, randomIdentifier(), 5);
+                page = new Glyph[PAGE_SIZE];
+                for (int c = base; c < end; c++) {
+                    page[c - base] = map.getGlyph((char) c);
+                }
+                GlyphMap[] old = maps;
+                GlyphMap[] grown = java.util.Arrays.copyOf(old, old.length + 1);
+                grown[old.length] = map;
+                maps = grown;
+                glyphPages.set(index, page);
             }
+            return page[glyph & (PAGE_SIZE - 1)];
         }
-
-        char base = (char) Calculate.floorNearestMulN(glyph, 128);
-        Glyph created = generateMap(base, (char) (base + 128)).getGlyph(glyph);
-        glyphCache.put(glyph, created);
-        return created;
     }
 
     /** Text pipeline hook point — the name-protect / text-factory layer went out with the feature stack. */
@@ -257,9 +287,8 @@ public class FontRenderer implements QuickImports {
             Glyph glyph = locateGlyph(c);
             if (glyph != null) {
                 if (glyph.value() != ' ') {
-                    Identifier i1 = glyph.owner().bindToTexture;
-                    DrawEntry entry = obtainDrawEntry(xOffset, yOffset, clr, glyph);
-                    GLYPH_PAGE_CACHE.computeIfAbsent(i1, integer -> new ObjectArrayList<>()).add(entry);
+                    glyph.owner().batch.add(obtainDrawEntry(xOffset, yOffset, clr, glyph));
+                    pendingGlyphs++;
                 }
                 xOffset += glyph.advance();
             }
@@ -274,33 +303,31 @@ public class FontRenderer implements QuickImports {
     }
 
     private void flushGlyphs(MatrixStack matrix, double x, double y) {
-        if (!hasPendingGlyphs()) {
+        if (pendingGlyphs == 0) {
             return;
         }
+        GlyphMap[] pages = maps;
         // finally: при исключении внутри drawGlyphs записи всё равно уходят
-        // в пул и страницы очищаются — иначе следующий flush нарисовал бы
+        // в пул и очереди очищаются — иначе следующий flush нарисовал бы
         // те же глифы повторно (дубли) из застрявших в списках записей.
         try {
-            drawGlyphs(matrix, x, y);
-        } finally {
-            // Страницы (и capacity списков) сохраняются, а записи уходят в пул: следующий
-            // кадр обойдётся без новых DrawEntry — только присваивания полей.
-            for (ObjectList<DrawEntry> list : GLYPH_PAGE_CACHE.values()) {
-                for (int i = 0, n = list.size(); i < n; i++) {
-                    drawEntryPool.add(list.get(i));
-                }
-                list.clear();
+            // NaN/Infinity would poison the matrix and the snapping math.
+            if (Double.isFinite(x) && Double.isFinite(y)) {
+                drawGlyphs(matrix, pages, x, y);
             }
+        } finally {
+            for (GlyphMap page : pages) {
+                recycle(page.batch);
+            }
+            pendingGlyphs = 0;
         }
     }
 
-    private boolean hasPendingGlyphs() {
-        for (ObjectList<DrawEntry> list : GLYPH_PAGE_CACHE.values()) {
-            if (!list.isEmpty()) {
-                return true;
-            }
+    private void recycle(ObjectList<DrawEntry> list) {
+        for (int i = 0, n = list.size(); i < n; i++) {
+            drawEntryPool.add(list.get(i));
         }
-        return false;
+        list.clear();
     }
 
     public void drawGradientString(MatrixStack matrix, java.lang.String text, double x, double y, int colorStart, int colorEnd) {
@@ -329,9 +356,8 @@ public class FontRenderer implements QuickImports {
                 if (glyph.value() != ' ') {
                     float t = len <= 1 ? 0f : (float) i / (len - 1);
                     int color = interpolateColor(colorStart, colorEnd, t);
-                    Identifier i1 = glyph.owner().bindToTexture;
-                    DrawEntry entry = obtainDrawEntry(xOffset, yOffset, color, glyph);
-                    GLYPH_PAGE_CACHE.computeIfAbsent(i1, integer -> new ObjectArrayList<>()).add(entry);
+                    glyph.owner().batch.add(obtainDrawEntry(xOffset, yOffset, color, glyph));
+                    pendingGlyphs++;
                 }
                 xOffset += glyph.advance();
             }
@@ -340,53 +366,96 @@ public class FontRenderer implements QuickImports {
         flushGlyphs(matrix, x, y);
     }
 
-    private void drawGlyphs(MatrixStack matrix, double x, double y) {
+    private void drawGlyphs(MatrixStack matrix, GlyphMap[] pages, double x, double y) {
         matrix.push();
-        // Перо сажается на сетку физических пикселей (см. translateSnapped);
-        // базовая линия та же, что и была: y - 3.
-        translateSnapped(matrix, x, y - 3F);
-        matrix.scale(0.5F, 0.5F, 1);
-        Matrix4f matrix4f = matrix.peek().getPositionMatrix();
+        BufferBuilder buffer = null;
+        try {
+            // Перо сажается на сетку физических пикселей (см. translateSnapped);
+            // базовая линия та же, что и была: y - 3.
+            translateSnapped(matrix, x, y - 3F);
+            matrix.scale(0.5F, 0.5F, 1);
+            Matrix4f matrix4f = matrix.peek().getPositionMatrix();
 
-        RenderSystem.enableBlend();
-        RenderSystem.defaultBlendFunc();
-        RenderSystem.setShader(ShaderProgramKeys.POSITION_TEX_COLOR);
-        for (var entry : GLYPH_PAGE_CACHE.object2ObjectEntrySet()) {
-            ObjectList<DrawEntry> entries = entry.getValue();
-            if (entries.isEmpty()) continue;
+            // Device pixels per atlas texel. Glyphs are snapped to whole device
+            // pixels only while that ratio is steady (see isSteadyRatio); while
+            // a scale animation is running they keep their exact positions —
+            // per-glyph rounding made the letters jitter against each other.
+            double guiScale = guiScale();
+            float ratioX = (float) (Math.abs(matrix4f.m00()) * guiScale);
+            float ratioY = (float) (Math.abs(matrix4f.m11()) * guiScale);
+            boolean snap = isAxisAligned(matrix4f) && isSteadyRatio(ratioX) && isSteadyRatio(ratioY);
 
-            RenderSystem.setShaderTexture(0, entry.getKey());
-            BufferBuilder buffer = Tessellator.getInstance().begin(QUADS, POSITION_TEXTURE_COLOR);
-            for (DrawEntry drawEntry : entries) {
-                // Квад в целых текселях: при scale 0.5 границы глифа тогда
-                // ложатся ровно на пиксели устройства, а не на доли пикселя.
-                float x1 = Math.round(drawEntry.atX());
-                float y1 = Math.round(drawEntry.atY());
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+            RenderSystem.setShader(ShaderProgramKeys.POSITION_TEX_COLOR);
+            for (GlyphMap glyphMap : pages) {
+                ObjectList<DrawEntry> entries = glyphMap.batch;
+                int count = entries.size();
+                if (count == 0) continue;
 
-                Glyph glyph = drawEntry.toDraw();
-                GlyphMap glyphMap = glyph.owner();
-
-                float width = glyph.width();
-                float height = glyph.height();
                 float invW = 1.0f / glyphMap.width;
                 float invH = 1.0f / glyphMap.height;
 
-                float u1 = glyph.u() * invW;
-                float v1 = glyph.v() * invH;
-                float u2 = (glyph.u() + width) * invW;
-                float v2 = (glyph.v() + height) * invH;
+                RenderSystem.setShaderTexture(0, glyphMap.bindToTexture);
+                buffer = Tessellator.getInstance().begin(QUADS, POSITION_TEXTURE_COLOR);
+                for (int i = 0; i < count; i++) {
+                    DrawEntry drawEntry = entries.get(i);
+                    float x1 = drawEntry.atX();
+                    float y1 = drawEntry.atY();
+                    if (snap) {
+                        // At ratio 1 this is the old "whole texel" rounding; at
+                        // other GUI scales it keeps every glyph on the same
+                        // sampling phase (at GUI scale 1 odd texel offsets
+                        // would point-sample the 2x atlas instead of averaging).
+                        x1 = Math.round(x1 * ratioX) / ratioX;
+                        y1 = Math.round(y1 * ratioY) / ratioY;
+                    }
 
-                int color = drawEntry.color();
+                    Glyph glyph = drawEntry.toDraw();
 
-                buffer.vertex(matrix4f, x1, y1 + height, 0).texture(u1, v2).color(color);
-                buffer.vertex(matrix4f, x1 + width, y1 + height, 0).texture(u2, v2).color(color);
-                buffer.vertex(matrix4f, x1 + width, y1, 0).texture(u2, v1).color(color);
-                buffer.vertex(matrix4f, x1, y1, 0).texture(u1, v1).color(color);
+                    float width = glyph.width();
+                    float height = glyph.height();
+
+                    float u1 = glyph.u() * invW;
+                    float v1 = glyph.v() * invH;
+                    float u2 = (glyph.u() + width) * invW;
+                    float v2 = (glyph.v() + height) * invH;
+
+                    int color = drawEntry.color();
+
+                    buffer.vertex(matrix4f, x1, y1 + height, 0).texture(u1, v2).color(color);
+                    buffer.vertex(matrix4f, x1 + width, y1 + height, 0).texture(u2, v2).color(color);
+                    buffer.vertex(matrix4f, x1 + width, y1, 0).texture(u2, v1).color(color);
+                    buffer.vertex(matrix4f, x1, y1, 0).texture(u1, v1).color(color);
+                }
+                BufferBuilder built = buffer;
+                buffer = null;
+                BufferRenderer.drawWithGlobalProgram(built.end());
             }
-            BufferRenderer.drawWithGlobalProgram(buffer.end());
+        } finally {
+            // A builder abandoned mid-way keeps its bytes in the shared
+            // Tessellator allocator and corrupts the next draw of that format.
+            if (buffer != null) {
+                BuiltBuffer leftover = buffer.endNullable();
+                if (leftover != null) leftover.close();
+            }
+            RenderSystem.disableBlend();
+            matrix.pop();
         }
-        RenderSystem.disableBlend();
-        matrix.pop();
+    }
+
+    private static boolean isAxisAligned(Matrix4f m) {
+        return Math.abs(m.m10()) < 1e-6f && Math.abs(m.m01()) < 1e-6f;
+    }
+
+    /**
+     * true for the texel-to-pixel ratios of a resting GUI (multiples of 0.5:
+     * GUI scale 1, 2, 3...), false for the in-between values of a scale animation.
+     */
+    private static boolean isSteadyRatio(float ratio) {
+        if (!(ratio >= 0.5f) || ratio > 64f) return false;
+        float doubled = ratio * 2f;
+        return Math.abs(doubled - Math.round(doubled)) < 4e-3f;
     }
 
     /** Шаг сетки: одна GUI-единица равна scale физическим пикселям (окно MC). */
@@ -415,11 +484,13 @@ public class FontRenderer implements QuickImports {
         Matrix4f current = matrix.peek().getPositionMatrix();
         float sx = current.m00();
         float sy = current.m11();
-        boolean axisAligned = Math.abs(current.m10()) < 1e-6f && Math.abs(current.m01()) < 1e-6f;
         double scale = guiScale();
-        if (!axisAligned || Math.abs(sx) < 1e-6f || Math.abs(sy) < 1e-6f) {
-            // поворот или вырожденный масштаб — привязка в локальных единицах
-            matrix.translate(snapCoord(x, scale), snapCoord(y, scale), 0);
+        // Rotated, degenerate or mid-animation matrices: no snapping at all.
+        // Snapping there only turned smooth motion into whole-pixel jumps.
+        if (!isAxisAligned(current)
+                || !isSteadyRatio((float) (Math.abs(sx) * scale * 0.5))
+                || !isSteadyRatio((float) (Math.abs(sy) * scale * 0.5))) {
+            matrix.translate(x, y, 0);
             return;
         }
         double guiX = snapCoord(current.m30() + sx * x, scale);
@@ -471,9 +542,14 @@ public class FontRenderer implements QuickImports {
 
         text = applyTextFactory(text);
 
-        float cached = widthCache.getFloat(text);
-        if (!Float.isNaN(cached)) {
-            return cached;
+        // The cache is shared with whatever thread lays text out (media /
+        // account workers measure too) — an unsynchronized fastutil map can
+        // loop forever or return garbage under a concurrent rehash.
+        synchronized (widthCache) {
+            float cached = widthCache.getFloat(text);
+            if (!Float.isNaN(cached)) {
+                return cached;
+            }
         }
 
         float currentLine = 0;
@@ -508,10 +584,12 @@ public class FontRenderer implements QuickImports {
         }
 
         float width = Math.max(currentLine, maxPreviousLines) / 2;
-        if (widthCache.size() >= WIDTH_CACHE_MAX) {
-            widthCache.clear();
+        synchronized (widthCache) {
+            if (widthCache.size() >= WIDTH_CACHE_MAX) {
+                widthCache.clear();
+            }
+            widthCache.put(text, width);
         }
-        widthCache.put(text, width);
         return width;
     }
 

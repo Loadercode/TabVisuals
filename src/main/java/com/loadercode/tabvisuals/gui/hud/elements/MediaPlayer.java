@@ -459,7 +459,11 @@ public class MediaPlayer extends AbstractDraggable {
 
         String timeDuration = StringHelper.getDuration(duration);
         String timePosition = StringHelper.getDuration(position);
-        widthDuration = MathHelper.clamp(Calculate.interpolateSmooth(1, widthDuration, duration > 0 ? (float) position / duration * maxDurationWidth : 0), 1, maxDurationWidth);
+        // 1 - exp(-dt*k): interpolateSmooth lerped by last frame duration in ticks,
+        // which overshoots (factor > 1) below ~20 FPS and jumps after a hitch
+        float progressTarget = duration > 0 ? (float) position / duration * maxDurationWidth : 0;
+        widthDuration += (progressTarget - widthDuration) * (1f - (float) Math.exp(-dt * 20f));
+        widthDuration = MathHelper.clamp(widthDuration, 1, Math.max(1, maxDurationWidth));
 
         int[] gradientColors = ColorAssist.getRectangleGradientColors();
         blur.render(ShapeProperties.create(matrix, getX(), getY(), getWidth() + 15, getHeight())
@@ -474,9 +478,12 @@ public class MediaPlayer extends AbstractDraggable {
                 .build());
 
         scissor.push(matrix.peek().getPositionMatrix(), getX() + sizeArtwork + 8, getY(), getWidth() - sizeArtwork - 10 + 15, getHeight());
-        bigFont.drawStringWithScroll(matrix, snap.title(), getX() + sizeArtwork + 8, getY() + 7, 56, ColorAssist.getText());
-        miniFont.drawStringWithScroll(matrix, snap.artist(), getX() + sizeArtwork + 8, getY() + 15.5F, 56, ColorAssist.getText(0.75F));
-        scissor.pop();
+        try {
+            bigFont.drawStringWithScroll(matrix, snap.title(), getX() + sizeArtwork + 8, getY() + 7, 56, ColorAssist.getText());
+            miniFont.drawStringWithScroll(matrix, snap.artist(), getX() + sizeArtwork + 8, getY() + 15.5F, 56, ColorAssist.getText(0.75F));
+        } finally {
+            scissor.pop();
+        }
 
         float ax = getX() + 4;
         float ay = getY() + 4;

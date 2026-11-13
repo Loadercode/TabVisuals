@@ -87,6 +87,11 @@ public final class TabVisualsClient implements ClientModInitializer {
 		} catch (Throwable t) {
 			LOGGER.debug("media bridge shutdown failed", t);
 		}
+		try {
+			com.loadercode.tabvisuals.media.LrcClient.shutdown(); // abort an in-flight lrclib fetch
+		} catch (Throwable t) {
+			LOGGER.debug("lyrics client shutdown failed", t);
+		}
 	}
 
 	/** Called from the PlayerListHud render hook, once per frame while the tab list is visible. */

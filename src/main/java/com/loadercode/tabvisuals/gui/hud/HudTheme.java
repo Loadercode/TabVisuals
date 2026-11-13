@@ -24,12 +24,13 @@ public final class HudTheme {
      */
     public static final float PANEL_ROUND = 4f;
 
-    // built-in dark/light constants (LoxeDLC ColorAssist)
+    // built-in dark/light constants (LoxeDLC ColorAssist), ARGB like pack():
+    // these were written RGBA, so light-theme text had alpha 0x1E (near invisible)
     private static final int DARK_TEXT = 0xFFFFFFFF;
-    private static final int DARK_TEXT2 = 0xAFAFAFFF;
-    private static final int DARK_OUTLINE_EL = 0x373746FF;   // (55,55,70,255)
-    private static final int LIGHT_TEXT = 0x1E1E1EFF;
-    private static final int LIGHT_TEXT2 = 0x646464FF;
+    private static final int DARK_TEXT2 = 0xFFAFAFAF;
+    private static final int DARK_OUTLINE_EL = 0xFF373746;   // (55,55,70,255)
+    private static final int LIGHT_TEXT = 0xFF1E1E1E;
+    private static final int LIGHT_TEXT2 = 0xFF646464;
     /** LoxeDLC glass element outline — wins over the light/dark one. */
     private static final int GLASS_OUTLINE_EL = 0xB43C414B;   // (60,65,75,180)
 
@@ -138,15 +139,16 @@ public final class HudTheme {
         if (custom) {
             cText = color("Текст темы", DARK_TEXT);
             cText2 = color("Вторичный текст", DARK_TEXT2);
-            cBlur = multAlpha(color("Цвет блюра", 0x00000000 | blurA), opacity);
-            cRect = multAlpha(color("Фон HUD 1", 0x12131400 | rectA), opacity);
+            // fallbacks only apply when the setting is missing; alpha goes in the top byte
+            cBlur = multAlpha(color("Цвет блюра", pack(0, 0, 0, blurA)), opacity);
+            cRect = multAlpha(color("Фон HUD 1", pack(18, 19, 20, rectA)), opacity);
             // LoxeDLC: alpha of the picked colour is multiplied by outA, not
             // replaced — a translucent custom outline keeps its own weight
             cRectOutline = multAlpha(color("Обводка", DARK_OUTLINE_EL), outA / 255f);
-            int g1 = multAlpha(color("Фон HUD 1", 0x12131400 | rectA), opacity);
-            int g2 = multAlpha(color("Фон HUD 2", 0x00020500 | rectA), opacity);
-            cGradient = new int[]{g1, g2, g2, g1};
-            cRect1 = color("Панель 1", 0x1A1A1FE4);
+            int g1 = cRect;
+            int g2 = multAlpha(color("Фон HUD 2", pack(0, 2, 5, rectA)), opacity);
+            setGradient(g1, g2, g2, g1);
+            cRect1 = color("Панель 1", pack(0x1A, 0x1A, 0x1F, 0xE4));
             cRectDarker1 = color("Панель 2", 0x18181EFF);
             cOutlineEl = color("Обводка", DARK_OUTLINE_EL);
         } else if (light) {
@@ -155,9 +157,8 @@ public final class HudTheme {
             cBlur = pack(255, 255, 255, blurA);
             cRect = pack(255, 255, 255, rectA);
             cRectOutline = pack(224, 224, 224, outA);
-            cGradient = new int[]{
-                    pack(255, 255, 255, rectA), pack(245, 245, 250, rectA),
-                    pack(245, 245, 250, rectA), pack(255, 255, 255, rectA)};
+            setGradient(pack(255, 255, 255, rectA), pack(245, 245, 250, rectA),
+                    pack(245, 245, 250, rectA), pack(255, 255, 255, rectA));
             cRect1 = pack(255, 255, 255, 232);
             cRectDarker1 = pack(240, 240, 240, 255);
             // LoxeDLC: glass outline outranks the light one
@@ -168,14 +169,21 @@ public final class HudTheme {
             cBlur = pack(0, 0, 0, blurA);
             cRect = pack(18, 19, 20, rectA);
             cRectOutline = pack(18, 19, 20, outA);
-            cGradient = new int[]{
-                    pack(18, 19, 20, rectA), pack(0, 2, 5, rectA),
-                    pack(0, 2, 5, rectA), pack(18, 19, 20, rectA)};
+            setGradient(pack(18, 19, 20, rectA), pack(0, 2, 5, rectA),
+                    pack(0, 2, 5, rectA), pack(18, 19, 20, rectA));
             cRect1 = pack(0, 0, 0, 228);
             cRectDarker1 = pack(0x18, 0x18, 0x1E, 255);
             cOutlineEl = glass ? GLASS_OUTLINE_EL : DARK_OUTLINE_EL;
         }
         valid = true;
+    }
+
+    /** Refill the cached gradient in place — no new array every frame. */
+    private static void setGradient(int c1, int c2, int c3, int c4) {
+        cGradient[0] = c1;
+        cGradient[1] = c2;
+        cGradient[2] = c3;
+        cGradient[3] = c4;
     }
 
     // ------------------------------------------------------------ accessors

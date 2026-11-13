@@ -124,6 +124,10 @@ public class CoolDowns extends AbstractDraggable {
      * CooldownUpdateS2CPacket flow.
      */
     public void onCooldownUpdate(Identifier cooldownGroup, int cooldownTicks) {
+        // The HEAD hook fires twice: first on the netty thread (before vanilla's
+        // forceMainThread reschedules the packet), then on the client thread.
+        // Only the client-thread pass may touch list/map read by the renderer.
+        if (!mc.isOnThread()) return;
         if (HudHelper.nullCheck()) return;
         Item item = Registries.ITEM.get(cooldownGroup);
         // Неизвестная группа кулдауна резолвится в AIR — карточка "air" не нужна
@@ -196,8 +200,9 @@ public class CoolDowns extends AbstractDraggable {
         long now = System.currentTimeMillis();
         long prevFrame = last_frame_ms;
         last_frame_ms = now;
-        float dt = prevFrame == 0 ? 0f : Math.min(0.25f, (now - prevFrame) / 1000f);
-        if (prevFrame == 0 || dt > 0.15f) entrance_t = 0f;
+        float dt = prevFrame == 0 ? 0f : Math.min(0.05f, (now - prevFrame) / 1000f);
+        // skipped frames (hidden), not a slow frame, restart the entrance
+        if (prevFrame == 0 || isReentered()) entrance_t = 0f;
         entrance_t = Math.min(1f, entrance_t + dt / 0.25f);
         final float enter = ease_out_cubic(entrance_t);
 

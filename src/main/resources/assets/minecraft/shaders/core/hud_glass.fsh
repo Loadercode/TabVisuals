@@ -25,14 +25,19 @@ out vec4 fragColor;
 #define PI 3.14159265
 #define TAU 6.28318530718
 
-float roundedBoxSDF(vec2 center, vec2 size, vec4 radius) {
+// All distances are in physical pixels (gl_FragCoord space).
+float roundedBoxSDF(vec2 center, vec2 halfSize, vec4 radius) {
     radius.xy = (center.x > 0.0) ? radius.xy : radius.zw;
     radius.x  = (center.y > 0.0) ? radius.x : radius.y;
-    vec2 q = abs(center) - size + radius.x;
-    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius.x;
+    // A radius above half the short side (or below zero) folds the SDF inside out.
+    float r = clamp(radius.x, 0.0, min(halfSize.x, halfSize.y));
+    vec2 q = abs(center) - halfSize + r;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
 }
 
 vec4 createGradient(vec2 coords, vec4 color1, vec4 color2, vec4 color3, vec4 color4){
+    // The quad is padded for the AA fringe: without the clamp the gradient extrapolates there.
+    coords = clamp(coords, 0.0, 1.0);
     vec4 color = mix(mix(color1, color2, coords.y), mix(color3, color4, coords.y), coords.x);
     color += mix(0.0019607843, -0.0019607843, fract(sin(dot(coords.xy, vec2(12.9898, 78.233))) * 43758.5453));
     return color;
@@ -57,15 +62,31 @@ void main() {
     // setup() мог не отработать: InputResolution = (0,0) → 1/0 → Inf → NaN.
     vec2 safeResolution = max(InputResolution, vec2(1.0));
     vec2 uv = gl_FragCoord.xy / safeResolution;
-    float distance = roundedBoxSDF(gl_FragCoord.xy - location - (size / 2.0), size / 2.0, radius);
-    // softness == 0 → smoothstep с равными краями неопределён (NaN-альфа).
-    float safeSoftness = max(softness, 0.0001);
-    float smoothedAlpha = 1.0 - smoothstep(-1.0, thickness > 0. ? 1. : safeSoftness + 1., distance);
+    vec2 halfSize = size * 0.5;
+    float distance = roundedBoxSDF(gl_FragCoord.xy - location - halfSize, halfSize, radius);
 
-    if(smoothedAlpha < 0.49 && thickness > 0.) {
-        float smoothedborderAlpha = (1.0 - smoothstep(-safeSoftness, safeSoftness, distance));
-        fragColor = vec4(outlineColor.rgb, smoothedborderAlpha * outlineColor.a);
+    // Box-filter coverage: exactly one pixel wide, so pixel-aligned edges stay
+    // crisp and curved / moving ones are antialiased.
+    float crisp = clamp(0.5 - distance, 0.0, 1.0);
+    bool outlined = thickness > 0.0;
+
+    float glow = 0.0;
+    float coverage;
+    if (outlined) {
+        if (softness > 0.0001 && distance > 0.0) {
+            glow = 1.0 - smoothstep(-softness, softness, distance);
+        }
+        coverage = max(crisp, glow);
     } else {
+        float soft = 1.0 - smoothstep(-1.0, max(softness, 0.0) + 1.0, distance);
+        coverage = mix(crisp, soft, clamp(softness, 0.0, 1.0));
+    }
+    // Skips the whole sampling loop for the padding and the cut-off corners.
+    if (coverage <= 0.0) {
+        discard;
+    }
+
+    {
         vec4 rectColor = createGradient((gl_FragCoord.xy - location) / max(size, vec2(0.0001)), color1, color2, color3, color4);
 
         // Основной blur в стиле liquid glass (dir=6, qual=4 — облегчённый: 24 выборки вместо 48)
@@ -97,8 +118,20 @@ void main() {
         // Смешивание с overlay (rectColor)
         vec4 blur = vec4((vec4(glassColor, 1.0) * (1.0 - rectColor.a)).rgb, rectColor.a) + rectColor;
 
-        float borderAlpha = 1.0 - smoothstep(thickness - 2.0, thickness, abs(distance));
-        vec4 basicColor = vec4(blur.rgb, blur.a * smoothedAlpha);
-        fragColor = mix(vec4(blur.rgb, 0.), mix(basicColor, thickness > 0. ? outlineColor : basicColor, borderAlpha), smoothedAlpha);
+        vec4 fill = clamp(blur, 0.0, 1.0);
+        if (!outlined) {
+            fragColor = vec4(fill.rgb, fill.a * coverage);
+            return;
+        }
+
+        // Stroke band on the inner side of the edge; its centre line sits at
+        // thickness - 1 px (the convention the callers were tuned against).
+        float band = clamp(thickness - 0.5 - abs(distance), 0.0, 1.0);
+        // Mixed premultiplied: a straight-alpha mix dragged the rgb of a
+        // transparent fill into the stroke (dark fringe on the outline).
+        vec4 pFill = vec4(fill.rgb * fill.a, fill.a);
+        vec4 pLine = vec4(outlineColor.rgb * outlineColor.a, outlineColor.a);
+        vec4 pre = mix(pFill, pLine, band) * crisp + pLine * max(glow - crisp, 0.0);
+        fragColor = vec4(pre.rgb / max(pre.a, 0.00001), pre.a);
     }
 }

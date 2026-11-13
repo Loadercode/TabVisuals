@@ -18,7 +18,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * игроку в мире. Класс generic, поэтому remap = false (имена методов Yarn
  * уже захардкожены ниже).
  */
-@Mixin(value = LivingEntityRenderer.class, remap = false)
+// remap must stay ON: with remap = false the yarn name "hasLabel" was never
+// translated to intermediary and the injector failed outside the dev env
+@Mixin(LivingEntityRenderer.class)
 public abstract class LivingEntityRendererMixin {
 
     @Inject(method = "hasLabel(Lnet/minecraft/entity/LivingEntity;D)Z",

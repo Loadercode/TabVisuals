@@ -67,6 +67,11 @@ public class TargetHud extends AbstractDraggable {
     private int lastHurtTime;
     private long hitFlashStartMs;
     private float hitFlash;
+    /** Reused per frame by drawArmor (render thread only). */
+    private final ItemStack[] armorSlots = new ItemStack[6];
+    private static final int ARC_TRACK = 0x19FFFFFF;           // (255,255,255,25)
+    private static final int ABSORB_GOLD = 0xFFFFD700;         // (255,215,0)
+    private static final int ABSORB_ORANGE = 0xFFFF8000;       // (255,128,0)
 
     public TargetHud() {
         super("Target Hud", 10, 80, 100, 36, true);
@@ -155,13 +160,22 @@ public class TargetHud extends AbstractDraggable {
         long now = System.currentTimeMillis();
         frameDt = frame_delta_seconds(now);
 
-        // затухание при потере цели: гаснет плавно, пока драйвер ещё рисует хвост закрытия
+        // fadeProgress only ever rose and started at 1, so it never did anything:
+        // restart it whenever the element comes back after not being drawn
+        if (isReentered()) {
+            fadeProgress = 0f;
+            lockInTarget = null;
+        }
         fadeProgress += (1f - fadeProgress) * (1f - (float) Math.exp(-frameDt / FADE_TAU));
 
         // scale-in при захвате новой цели (или первом показе)
         if (lastTarget != lockInTarget) {
             lockInTarget = lastTarget;
             lockInStartMs = now;
+            // the previous target's HP/hurtTime must not fire a hit flash on the new one
+            lastHealth = -1f;
+            lastHurtTime = lastTarget.hurtTime;
+            hitFlashStartMs = 0L;
         }
         float lock = ease_out_back(clamp01((now - lockInStartMs) / (float) LOCK_IN_MS));
         float scale = (0.92f + 0.08f * lock) * (0.85f + 0.15f * fadeProgress);
@@ -293,7 +307,7 @@ public class TargetHud extends AbstractDraggable {
         }
 
         arc.render(ShapeProperties.create(matrix, getX() + getWidth() - 28.5f, getY() + 2.5f, 26, 26).round(0.26F).thickness(0.30f).end(361)
-                .color(new Color(255,255,255,25).getRGB()).build());
+                .color(ARC_TRACK).build());
         // медленный «хвост» убытия под основной дугой здоровья
         if (laggedHealth > health + 1f) {
             arc.render(ShapeProperties.create(matrix, getX() + getWidth() - 28.5f, getY() + 2.5f, 26, 26).round(0.26F).thickness(0.30f).end(laggedHealth)
@@ -308,16 +322,19 @@ public class TargetHud extends AbstractDraggable {
         if (absorption > 0) {
             arc.render(ShapeProperties.create(matrix, getX() + getWidth() - 28.5f, getY() + 2.5f, 26, 26).round(0.26F).thickness(0.30f)
                     .end(absorption - 2.5f)
-                    .color(new Color(255, 215, 0, 255).getRGB(), new Color(255, 128, 0, 255).getRGB(), new Color(255, 215, 0, 255).getRGB(), new Color(255, 128, 0, 255).getRGB())
+                    .color(ABSORB_GOLD, ABSORB_ORANGE, ABSORB_GOLD, ABSORB_ORANGE)
                     .build());
         }
 
         if (nameWidth > 50) {
             ScissorAssist scissorManager = ScissorAssist.INSTANCE;
             scissorManager.push(matrix.peek().getPositionMatrix(), getX(), getY(), getWidth() - 29, getHeight());
-            font.drawGradientString(matrix, lastTarget.getName().getString(), getX() + 29, getY() + 9f, ColorAssist.getText(), ColorAssist.getText(0.15F));
-            distancefont.drawString(matrix, "Distance: " + distanceText, getX() + 29, getY() + 19f, ColorAssist.getText());
-            scissorManager.pop();
+            try {
+                font.drawGradientString(matrix, lastTarget.getName().getString(), getX() + 29, getY() + 9f, ColorAssist.getText(), ColorAssist.getText(0.15F));
+                distancefont.drawString(matrix, "Distance: " + distanceText, getX() + 29, getY() + 19f, ColorAssist.getText());
+            } finally {
+                scissorManager.pop();
+            }
         } else {
             font.drawString(matrix, lastTarget.getName().getString(), getX() + 29, getY() + 9f, ColorAssist.getText());
             distancefont.drawString(matrix, "Distance: " + distanceText, getX() + 29, getY() + 19f, ColorAssist.getText());
@@ -350,14 +367,13 @@ public class TargetHud extends AbstractDraggable {
     }
 
     private void drawArmor(DrawContext context, MatrixStack matrix) {
-        ItemStack[] slots = new ItemStack[] {
-                lastTarget.getMainHandStack(),
-                lastTarget.getOffHandStack(),
-                lastTarget.getEquippedStack(net.minecraft.entity.EquipmentSlot.HEAD),
-                lastTarget.getEquippedStack(net.minecraft.entity.EquipmentSlot.CHEST),
-                lastTarget.getEquippedStack(net.minecraft.entity.EquipmentSlot.LEGS),
-                lastTarget.getEquippedStack(net.minecraft.entity.EquipmentSlot.FEET)
-        };
+        ItemStack[] slots = armorSlots;
+        slots[0] = lastTarget.getMainHandStack();
+        slots[1] = lastTarget.getOffHandStack();
+        slots[2] = lastTarget.getEquippedStack(net.minecraft.entity.EquipmentSlot.HEAD);
+        slots[3] = lastTarget.getEquippedStack(net.minecraft.entity.EquipmentSlot.CHEST);
+        slots[4] = lastTarget.getEquippedStack(net.minecraft.entity.EquipmentSlot.LEGS);
+        slots[5] = lastTarget.getEquippedStack(net.minecraft.entity.EquipmentSlot.FEET);
         float x = getX() + 21f;
         float y = getY() + 17;
         float slotSize = 16 * 0.5F + 2;

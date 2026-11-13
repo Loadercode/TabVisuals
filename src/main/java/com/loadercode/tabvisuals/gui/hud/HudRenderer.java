@@ -247,9 +247,20 @@ public final class HudRenderer {
         // vanilla cancelled while nothing draws (blank HUD until restart)
         Hud hud = Hud.getInstance();
         hud.syncFromSettings();
+        // counts hidden frames too, so elements replay their entrance after F1 / HUD off
+        AbstractDraggable.beginHudFrame();
         if (mc.player == null || mc.options.hudHidden || !hudEnabled()) {
             return;
         }
+        try {
+            renderFrame(mc, ctx, hud);
+        } finally {
+            // a throwing toast/editor pass must not leave the blur context on for the GUI
+            Blur.hudContext = false;
+        }
+    }
+
+    private static void renderFrame(MinecraftClient mc, DrawContext ctx, Hud hud) {
         MatrixStack m = ctx.getMatrices();
         float w = mc.getWindow().getScaledWidth();
         float h = mc.getWindow().getScaledHeight();
@@ -296,6 +307,7 @@ public final class HudRenderer {
                         ad.validPosition();
                     }
                     float scale = (float) ad.getScaleAnimation().output();
+                    ad.markDrawn();
                     m.push();
                     try {
                         if (scale >= 0.999f) {
@@ -327,7 +339,6 @@ public final class HudRenderer {
         if (editor) {
             HudEditor.overlay(m, w, h);
         }
-        Blur.hudContext = false;
         FontRenderer.flushDeferred();
     }
 
@@ -424,7 +435,6 @@ public final class HudRenderer {
         FontRenderer fb = Fonts.getSize(12, Fonts.Type.SEMI);
         float textH = f.getStringHeight("Aa");
         boolean boundsBound = false;
-        long now = System.nanoTime();
         for (NotificationManager.Toast t : queue) {
             float pw = f.getStringWidth(t.prefix);
             float nw = fb.getStringWidth(t.name);
@@ -452,10 +462,9 @@ public final class HudRenderer {
 
             panel(m, x, y, dw, dh, 4f, alpha);
 
-            // progress bar on the top edge: shrinks with the remaining lifetime
-            float life = NotificationManager.ENTER_MS + NotificationManager.HOLD_MS + NotificationManager.EXIT_MS;
-            float age = (now - t.bornAt) / 1_000_000f;
-            float prog = Math.max(0f, 1f - age / life);
+            // progress bar on the top edge: the manager's drain curve, which empties
+            // exactly when the exit fade starts (a local linear life ran past removal)
+            float prog = NotificationManager.clamp01(t.progress);
             if (prog > 0.01f) {
                 QuickImports.rectangle.render(ShapeProperties.create(m, x + 2, y + 0.05f, (dw - 4) * prog + 4, 1)
                         .round(0.75f, 0f, 0.75f, 0f)

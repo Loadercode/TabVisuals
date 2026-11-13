@@ -41,6 +41,9 @@ public class Scoreboard extends AbstractDraggable {
     private FontRenderer font;
     private long revealStartMs;
     private long lastDrawMs;
+    /** Eased panel size; -1 until the first frame. */
+    private float shownWidth = -1f;
+    private float shownHeight = -1f;
 
     public Scoreboard() {
         super("Scoreboard", 10, 100, 150, 200, true);
@@ -69,36 +72,49 @@ public class Scoreboard extends AbstractDraggable {
             rebuildCache(scoreboard, objective, worldTime);
         }
 
-        setWidth((int) cachedWidth);
-        setHeight((int) cachedHeight);
+        // пропущенные кадры (скрытие/смена мира) перезапускают вход; лаг-спайк
+        // и обновление счётов при видимой панели анимацию не трогают
+        long nowMs = System.currentTimeMillis();
+        float dt = lastDrawMs <= 0L ? 0f : Math.min(0.05f, (nowMs - lastDrawMs) / 1000f);
+        boolean restart = lastDrawMs <= 0L || isReentered();
+        if (restart) {
+            revealStartMs = nowMs;
+        }
+        lastDrawMs = nowMs;
+
+        // panel size eases when lines are added/removed or get longer
+        if (shownWidth < 0f || restart) {
+            shownWidth = cachedWidth;
+            shownHeight = cachedHeight;
+        } else {
+            shownWidth = HudHelper.hud_anim_approach(shownWidth, cachedWidth, 14f, dt);
+            shownHeight = HudHelper.hud_anim_approach(shownHeight, cachedHeight, 14f, dt);
+        }
+        float panelW = shownWidth;
+        float panelH = shownHeight;
+
+        setWidth((int) Math.ceil(panelW));
+        setHeight((int) Math.ceil(panelH));
         if (font == null) {
             font = Fonts.getSize(16);
         }
 
         Hud hud = Hud.getInstance();
         if (hud != null && hud.shouldDrawHudBlur()) {
-            QuickImports.blur.render(ShapeProperties.create(context.getMatrices(), getX(), getY(), cachedWidth, cachedHeight)
+            QuickImports.blur.render(ShapeProperties.create(context.getMatrices(), getX(), getY(), panelW, panelH)
                     .color(ColorAssist.getBlurColor())
                     .quality(hud.getBlurQuality())
                     .round(4)
                     .build());
         }
 
-        QuickImports.rectangle.render(ShapeProperties.create(context.getMatrices(), getX(), getY(), cachedWidth, cachedHeight)
+        QuickImports.rectangle.render(ShapeProperties.create(context.getMatrices(), getX(), getY(), panelW, panelH)
                 .color(ColorAssist.multAlpha(ColorAssist.getRectangleColor(), 100f / 75f))
                 .round(4)
                 .build());
 
         // Центр/правый край — снап по 0.5-сетке; slide остаётся дробным (это анимация)
-        float titleX = HudHelper.hud_px(getX() + (cachedWidth - cachedTitleWidth) / 2);
-
-        // пауза в отрисовке (выключение/смена мира) перезапускает вход;
-        // обновление счётов при видимой панели анимацию не трогает
-        long nowMs = System.currentTimeMillis();
-        if (lastDrawMs <= 0L || nowMs - lastDrawMs > REVEAL_GAP_MS) {
-            revealStartMs = nowMs;
-        }
-        lastDrawMs = nowMs;
+        float titleX = HudHelper.hud_px(getX() + (panelW - cachedTitleWidth) / 2);
 
         float titleP = ease_out_cubic(clamp01((nowMs - revealStartMs) / (float) REVEAL_TITLE_MS));
         float titleSlide = (1f - titleP) * REVEAL_SLIDE_PX;
@@ -108,12 +124,14 @@ public class Scoreboard extends AbstractDraggable {
         int yOffset = 13;
         int rowIndex = 0;
         for (CachedLine line : cachedLines) {
+            // rows of a growing board appear once the panel has room for them
+            if (yOffset + 9 > panelH + 1f) break;
             float rowP = ease_out_cubic(clamp01(
                     (nowMs - revealStartMs - rowIndex * REVEAL_ROW_DELAY_MS) / (float) REVEAL_ROW_MS));
             float slide = (1f - rowP) * REVEAL_SLIDE_PX;
             font.drawString(context.getMatrices(), line.name, getX() + 4 - slide, getY() + yOffset,
                     ColorAssist.multAlpha(-1, rowP));
-            font.drawString(context.getMatrices(), line.score, HudHelper.hud_px(getX() + cachedWidth - line.scoreWidth - 4) - slide,
+            font.drawString(context.getMatrices(), line.score, HudHelper.hud_px(getX() + panelW - line.scoreWidth - 4) - slide,
                     getY() + yOffset, ColorAssist.multAlpha(SCORE_COLOR, rowP));
             yOffset += 9;
             rowIndex++;

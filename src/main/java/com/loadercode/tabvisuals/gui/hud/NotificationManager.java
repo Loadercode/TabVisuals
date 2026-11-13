@@ -105,6 +105,12 @@ public final class NotificationManager {
      * статуса). Музыкальные уведомления приходят с {@code Icons.PLAY}.
      */
     public static void push(Icons.Glyph glyph, String prefix, String name, String middle, String status, int statusColor) {
+        // QUEUE is iterated by the render thread; hop over instead of racing it
+        net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
+        if (mc != null && !mc.isOnThread()) {
+            mc.execute(() -> push(glyph, prefix, name, middle, status, statusColor));
+            return;
+        }
         if (QUEUE.size() >= MAX_QUEUE) {
             QUEUE.remove(QUEUE.size() - 1); // drop the oldest (bottom-most)
         }
@@ -134,11 +140,15 @@ public final class NotificationManager {
         long now = System.nanoTime();
         float dt = lastNanos == 0 ? 0.016f : (now - lastNanos) / 1_000_000_000f;
         lastNanos = now;
-        if (dt > 0.1f) {
-            dt = 0.1f;
+        // same cap as the rest of the HUD: a hitch must not throw the reflow spring
+        if (dt > 0.05f) {
+            dt = 0.05f;
         }
 
         float startY = screenH / 2f + START_OFFSET + yOffset;
+        // hold is measured after the enter animation, and the strip drains to
+        // zero exactly when the exit fade begins (previously exit began at
+        // HOLD_MS, 400ms before the strip finished)
         float drainMs = ENTER_MS + HOLD_MS;
 
         int index = 0;
@@ -147,8 +157,8 @@ public final class NotificationManager {
             Toast t = it.next();
             float age = (now - t.bornAt) / 1_000_000f;
             t.enterEased = enter_curve(clamp01(age / ENTER_MS));
-            if (age > HOLD_MS) {
-                t.exitP = smoothstep(clamp01((age - HOLD_MS) / EXIT_MS));
+            if (age > drainMs) {
+                t.exitP = smoothstep(clamp01((age - drainMs) / EXIT_MS));
                 if (t.exitP >= 1f) {
                     it.remove();
                     continue;

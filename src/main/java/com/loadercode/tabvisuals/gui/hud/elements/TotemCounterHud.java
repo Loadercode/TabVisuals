@@ -25,7 +25,9 @@ public class TotemCounterHud extends AbstractDraggable {
     private static final float BREAK_FADE_SECONDS = 0.36f;
     private static final float EMPTY_FADE_SECONDS = 0.45f;
     private static final float ROLL_SECONDS = 0.35f;
-    private static final long FRAME_GAP_RESTART_NS = 250_000_000L;
+    /** Shared display stack — one allocation instead of one per frame. */
+    private static final net.minecraft.item.ItemStack TOTEM_STACK =
+            new net.minecraft.item.ItemStack(Items.TOTEM_OF_UNDYING);
 
     private long last_frame_ns;
     private long entrance_start_ns;
@@ -109,7 +111,8 @@ public class TotemCounterHud extends AbstractDraggable {
 
     /** Первый кадр/появление — без ложных анимаций; смена счётчика — запуск поп/фейдов. */
     private void track_animations(int totemCount, long now_ns) {
-        if (last_frame_ns == 0L || now_ns - last_frame_ns > FRAME_GAP_RESTART_NS) {
+        // skipped frames (hidden), not a lag spike, reset — a hitch used to replay the entrance
+        if (last_frame_ns == 0L || isReentered()) {
             entrance_start_ns = now_ns;
             pop_start_ns = 0L;
             break_start_ns = 0L;
@@ -202,7 +205,7 @@ public class TotemCounterHud extends AbstractDraggable {
                 RenderSystem.enableBlend();
                 RenderSystem.defaultBlendFunc();
                 DiffuseLighting.enableGuiDepthLighting();
-                context.drawItem(Items.TOTEM_OF_UNDYING.getDefaultStack(), (int) x, (int) y);
+                context.drawItem(TOTEM_STACK, (int) x, (int) y);
                 DiffuseLighting.disableGuiDepthLighting();
             });
         } finally {

@@ -75,7 +75,7 @@ public final class DoubleSetting extends Setting {
         double v = value;
         String out;
         if (step >= 1) {
-            out = String.valueOf((long) v);
+            out = String.valueOf(Math.round(v)); // (long) truncated 2.9999… to "2"
         } else if (step >= 0.1) {
             out = String.format(java.util.Locale.ROOT, "%.1f", v);
         } else {

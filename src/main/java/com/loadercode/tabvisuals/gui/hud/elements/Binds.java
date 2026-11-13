@@ -289,10 +289,21 @@ public class Binds extends AbstractDraggable {
     public void drawDraggable(DrawContext context) {
         if (!Hud.getInstance().interfaceSettings.isSelected("Binds") || !Hud.getInstance().state || animation.isFinished(Direction.BACKWARDS))
             return;
-        MatrixStack matrix = context.getMatrices();
-        final long now = System.currentTimeMillis();
         float animationValue = animation.getOutput().floatValue();
         if (animationValue <= 0) return;
+        // the pill backgrounds used to stay fully opaque during the 300ms exit
+        // (only text faded) and then pop — fade the whole element instead
+        if (animationValue < 0.999f) {
+            final float a = animationValue;
+            com.loadercode.tabvisuals.render.math.calc.Calculate.setAlpha(a, () -> drawBinds(context, a));
+        } else {
+            drawBinds(context, animationValue);
+        }
+    }
+
+    private void drawBinds(DrawContext context, float animationValue) {
+        MatrixStack matrix = context.getMatrices();
+        final long now = System.currentTimeMillis();
         List<BindInfo> activeBinds = activeBindsCache;
         float padding = 3;
         float iconSize = 16;

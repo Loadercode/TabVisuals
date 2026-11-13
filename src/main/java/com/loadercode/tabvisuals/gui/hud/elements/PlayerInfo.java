@@ -41,18 +41,18 @@ public class PlayerInfo extends AbstractDraggable {
     @Override
     public void drawDraggable(DrawContext context) {
         long now = System.nanoTime();
-        float dt = prevNanos == 0L ? 0f : Math.min(0.1f, (now - prevNanos) / 1_000_000_000f);
+        float dt = prevNanos == 0L ? 0f : Math.min(0.05f, (now - prevNanos) / 1_000_000_000f);
         prevNanos = now;
 
-        if (lastDrawNanos == 0L || entranceStartNanos == 0L
-                || (now - lastDrawNanos) / 1_000_000f > ENTRANCE_GAP_MS) {
+        // skipped frames (hidden), not a lag spike, replay the entrance
+        if (lastDrawNanos == 0L || entranceStartNanos == 0L || isReentered()) {
             entranceStartNanos = now;
         }
         lastDrawNanos = now;
 
         int offset = HudHelper.isChat(mc.currentScreen) ? -28 : -15;
         float targetY = mc.getWindow().getScaledHeight() + offset;
-        if (Float.isNaN(glideY)) {
+        if (Float.isNaN(glideY) || isReentered()) {
             glideY = targetY;
         } else {
             glideY += (targetY - glideY) * (1f - (float) Math.exp(-GLIDE_SPEED * dt));
@@ -88,22 +88,24 @@ public class PlayerInfo extends AbstractDraggable {
 
         MatrixStack matrix = context.getMatrices();
         matrix.push();
-        matrix.translate(0.0, (double) slideY, 0.0);
+        try {
+            matrix.translate(0.0, (double) slideY, 0.0);
 
-        Hud hud = Hud.getInstance();
-        if (hud != null && hud.shouldDrawHudBlur()) {
-            blur.render(ShapeProperties.create(matrix, getX(), getY() + 1, width + 4, 14)
-                    .round(4)
-                    .quality(hud.getBlurQuality())
-                    .color(ColorAssist.multAlpha(ColorAssist.getBlurColor(), alpha))
-                    .build());
+            Hud hud = Hud.getInstance();
+            if (hud != null && hud.shouldDrawHudBlur()) {
+                blur.render(ShapeProperties.create(matrix, getX(), getY() + 1, width + 4, 14)
+                        .round(4)
+                        .quality(hud.getBlurQuality())
+                        .color(ColorAssist.multAlpha(ColorAssist.getBlurColor(), alpha))
+                        .build());
+            }
+
+            font.drawGradientString(matrix, text, getX() + 3, getY() + 6.5F,
+                    ColorAssist.multAlpha(ColorAssist.getText(0.9f), alpha),
+                    ColorAssist.multAlpha(ColorAssist.getText(), alpha));
+        } finally {
+            matrix.pop();
         }
-
-        font.drawGradientString(matrix, text, getX() + 3, getY() + 6.5F,
-                ColorAssist.multAlpha(ColorAssist.getText(0.9f), alpha),
-                ColorAssist.multAlpha(ColorAssist.getText(), alpha));
-
-        matrix.pop();
     }
 
     private static float clamp01(float v) {

@@ -3,6 +3,8 @@ package com.loadercode.tabvisuals.render.font.glyph;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import it.unimi.dsi.fastutil.chars.Char2ObjectArrayMap;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import com.loadercode.tabvisuals.render.font.entry.DrawEntry;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
@@ -15,9 +17,6 @@ import java.awt.font.FontRenderContext;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
-import java.awt.image.ColorModel;
-import java.awt.image.DataBuffer;
-import java.awt.image.WritableRaster;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,6 +33,10 @@ public class GlyphMap {
     private final int pixelPadding;
     public int width, height;
     private volatile boolean generated = false;
+    /** Glyphs queued for the next flush of the owning FontRenderer (render thread only). */
+    public final ObjectArrayList<DrawEntry> batch = new ObjectArrayList<>();
+    private Font lastFallback;
+    private Font defaultFallback;
 
     public GlyphMap(char from, char to, Font font, Identifier identifier, int padding) {
         this.fromIncl = from;
@@ -59,17 +62,48 @@ public class GlyphMap {
 
     private Font getFontForGlyph(char c) {
         if (font.canDisplay(c)) return font;
+        // Neighbouring code points almost always share the fallback font — try
+        // it before walking every installed font again.
+        Font last = lastFallback;
+        if (last != null && last.canDisplay(c)) return last;
+        // Nothing can draw these; scanning all system fonts for each of them
+        // froze the frame for whole pages of unassigned code points.
+        if (!Character.isDefined(c) || Character.isISOControl(c) || Character.isSurrogate(c)
+                || Character.getType(c) == Character.PRIVATE_USE) {
+            return font;
+        }
         Font[] all = systemFonts;
         if (all == null) {
             all = GraphicsEnvironment.getLocalGraphicsEnvironment().getAllFonts();
             systemFonts = all;
         }
-        return Arrays.stream(all).filter(f -> f.canDisplay(c))
-                .map(f -> new Font(f.getFontName(), font.getStyle(), font.getSize()))
-                .findFirst().orElse(new Font("SansSerif", font.getStyle(), font.getSize()));
+        for (Font f : all) {
+            if (f.canDisplay(c)) {
+                Font derived = new Font(f.getFontName(), font.getStyle(), font.getSize());
+                lastFallback = derived;
+                return derived;
+            }
+        }
+        if (defaultFallback == null) {
+            defaultFallback = new Font("SansSerif", font.getStyle(), font.getSize());
+        }
+        return defaultFallback;
     }
 
-    public void generate() {
+    /** Frees the atlas texture; the map must not be drawn afterwards. */
+    public void destroy() {
+        if (!generated) return;
+        Identifier id = bindToTexture;
+        if (RenderSystem.isOnRenderThread()) {
+            MinecraftClient.getInstance().getTextureManager().destroyTexture(id);
+        } else {
+            RenderSystem.recordRenderCall(() -> MinecraftClient.getInstance().getTextureManager().destroyTexture(id));
+        }
+    }
+
+    // synchronized: two threads measuring text at once would both rasterize
+    // and register the same page (and clear glyphs under each other).
+    public synchronized void generate() {
         if (generated) return;
 
         int range = toExcl - fromIncl - 1;
@@ -83,6 +117,7 @@ public class GlyphMap {
         int currentRowMaxY = 0;
 
         List<Glyph> glyphs1 = new ArrayList<>();
+        List<Font> glyphFonts = new ArrayList<>();
         AffineTransform affineTransform = new AffineTransform();
         FontRenderContext fontRenderContext = new FontRenderContext(affineTransform, true, false);
         // Дробные метрики — только для advance пера: целочисленные Java2D
@@ -92,6 +127,7 @@ public class GlyphMap {
         while (generatedChars <= range) {
             char currentChar = (char) (fromIncl + generatedChars);
             Font font = getFontForGlyph(currentChar);
+            glyphFonts.add(font);
 
             Rectangle2D stringBounds = font.getStringBounds(String.valueOf(currentChar), fontRenderContext);
             Rectangle2D exactBounds = font.getStringBounds(String.valueOf(currentChar), exactRenderContext);
@@ -140,11 +176,22 @@ public class GlyphMap {
         g2d.setRenderingHint(KEY_ANTIALIASING, VALUE_ANTIALIAS_OFF);
         g2d.setRenderingHint(KEY_TEXT_ANTIALIASING, VALUE_TEXT_ANTIALIAS_ON);
 
-        for (Glyph glyph : glyphs1) {
-            g2d.setFont(getFontForGlyph(glyph.value()));
-            FontMetrics fontMetrics = g2d.getFontMetrics();
-            g2d.drawString(String.valueOf(glyph.value()), glyph.u(), glyph.v() + fontMetrics.getAscent());
-            glyphs.put(glyph.value(), glyph);
+        try {
+            Font current = null;
+            FontMetrics fontMetrics = null;
+            for (int i = 0, n = glyphs1.size(); i < n; i++) {
+                Glyph glyph = glyphs1.get(i);
+                Font glyphFont = glyphFonts.get(i);
+                if (glyphFont != current) {
+                    current = glyphFont;
+                    g2d.setFont(glyphFont);
+                    fontMetrics = g2d.getFontMetrics();
+                }
+                g2d.drawString(String.valueOf(glyph.value()), glyph.u(), glyph.v() + fontMetrics.getAscent());
+                glyphs.put(glyph.value(), glyph);
+            }
+        } finally {
+            g2d.dispose();
         }
 
         registerBufferedImageTexture(bindToTexture, bufferedImage);
@@ -160,20 +207,17 @@ public class GlyphMap {
         try {
             IntBuffer buffer = MemoryUtil.memIntBuffer(nativeImage.pointer, nativeImage.getWidth() * nativeImage.getHeight());
 
-            WritableRaster raster = inputImage.getRaster();
-            ColorModel colorModel = inputImage.getColorModel();
-
-            Object data = createDataArrayBasedOnRaster(raster);
-
+            // Row-wise getRGB instead of five ColorModel calls per pixel:
+            // same sRGB ARGB values, an order of magnitude less work per page.
+            int[] row = new int[imageWidth];
             for (int y = 0; y < imageHeight; y++) {
+                inputImage.getRGB(0, y, imageWidth, 1, row, 0, imageWidth);
                 for (int x = 0; x < imageWidth; x++) {
-                    raster.getDataElements(x, y, data);
-                    int alpha = colorModel.getAlpha(data);
-                    int red = colorModel.getRed(data);
-                    int green = colorModel.getGreen(data);
-                    int blue = colorModel.getBlue(data);
-                    buffer.put(ColorHelper.getArgb(alpha, blue, green, red));
+                    int argb = row[x];
+                    // ARGB -> ABGR (NativeImage byte order)
+                    row[x] = (argb & 0xFF00FF00) | ((argb >> 16) & 0xFF) | ((argb & 0xFF) << 16);
                 }
+                buffer.put(row);
             }
         } catch (Throwable t) {
             // The NativeImage is off-heap; an exception in the pixel-copy loop
@@ -184,29 +228,23 @@ public class GlyphMap {
             throw new RuntimeException("Failed to prepare glyph texture " + textureIdentifier, t);
         }
 
-        // Ownership transfers to the texture here — upload() must only run on
-        // the GL thread, so it moves inside the isOnRenderThread branch below.
+        // Ownership transfers to the texture here. Its constructor already
+        // uploads the image (directly on the render thread, otherwise through
+        // a recorded render call), so a second explicit upload() only repeated
+        // the whole glTexSubImage2D.
         NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
 
         if (RenderSystem.isOnRenderThread()) {
-            texture.upload();
-            MinecraftClient.getInstance().getTextureManager().registerTexture(textureIdentifier, texture);
+            finishTexture(textureIdentifier, texture);
         } else {
-            RenderSystem.recordRenderCall(() -> {
-                texture.upload();
-                MinecraftClient.getInstance().getTextureManager().registerTexture(textureIdentifier, texture);
-            });
+            RenderSystem.recordRenderCall(() -> finishTexture(textureIdentifier, texture));
         }
     }
 
-    private static Object createDataArrayBasedOnRaster(WritableRaster raster) {
-        return switch (raster.getDataBuffer().getDataType()) {
-            case DataBuffer.TYPE_BYTE -> new byte[raster.getNumDataElements()];
-            case DataBuffer.TYPE_USHORT -> new short[raster.getNumDataElements()];
-            case DataBuffer.TYPE_INT -> new int[raster.getNumDataElements()];
-            case DataBuffer.TYPE_FLOAT -> new float[raster.getNumDataElements()];
-            case DataBuffer.TYPE_DOUBLE -> new double[raster.getNumDataElements()];
-            default -> throw new IllegalArgumentException("Unsupported data buffer type: " + raster.getDataBuffer().getDataType());
-        };
+    private static void finishTexture(Identifier textureIdentifier, NativeImageBackedTexture texture) {
+        // Linear minification: the default (nearest) aliased glyphs whenever
+        // the atlas is drawn below 1:1 — GUI scale 1 or a down-scaled matrix.
+        texture.setFilter(true, false);
+        MinecraftClient.getInstance().getTextureManager().registerTexture(textureIdentifier, texture);
     }
 }

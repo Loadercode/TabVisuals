@@ -44,7 +44,13 @@ public class CoolDownItem extends AbstractDraggable {
         this.time = time;
         this.anim = new Decelerate().setMs(150).setValue(1.0F);
         this.total_ms = Math.max(1f, (float) -time.elapsedTime());
+        this.displayStack = item.getDefaultStack();
+        this.displayName = displayStack.getName().getString();
     }
+
+    /** Built once: a new stack + name lookup per frame was pure garbage. */
+    private final ItemStack displayStack;
+    private final String displayName;
 
     @Override
     public boolean visible() {
@@ -118,8 +124,8 @@ public class CoolDownItem extends AbstractDraggable {
         float expireFade = 1f - expireP * expireP * (3f - 2f * expireP);
         float cardAlpha = animation * expireFade;
 
-        ItemStack displayStack = item.getDefaultStack();
-        String name = displayStack.getName().getString();
+        ItemStack displayStack = this.displayStack;
+        String name = this.displayName;
         String duration = StringHelper.getDuration(timeSeconds);
         
         int textColor = ColorAssist.getText();

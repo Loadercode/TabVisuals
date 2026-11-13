@@ -50,8 +50,10 @@ public class Watermark extends AbstractDraggable {
 
         // Въезд при первом показе и после паузы отрисовки: альфа + сдвиг слева.
         long now = System.nanoTime();
-        if (lastDrawNanos == 0L || entranceStartNanos == 0L
-                || (now - lastDrawNanos) / 1_000_000f > ENTRANCE_GAP_MS) {
+        float dt = lastDrawNanos == 0L ? 0f : Math.min(0.05f, (now - lastDrawNanos) / 1_000_000_000f);
+        // skipped frames (hidden HUD), not a lag spike, replay the entrance
+        boolean restart = lastDrawNanos == 0L || entranceStartNanos == 0L || isReentered();
+        if (restart) {
             entranceStartNanos = now;
         }
         lastDrawNanos = now;
@@ -60,6 +62,17 @@ public class Watermark extends AbstractDraggable {
         float slideX = (float) Math.pow(1f - enterT, 5) * ENTRANCE_SLIDE_X; // сдвиг: длинный хвост
 
         matrix.push();
+        try {
+            drawBar(matrix, alpha, slideX, dt, restart);
+        } finally {
+            matrix.pop();
+        }
+    }
+
+    /** Eased panel width: FPS digits / server change no longer snap the bar. */
+    private float shownWidth = -1f;
+
+    private void drawBar(MatrixStack matrix, float alpha, float slideX, float dt, boolean restart) {
         matrix.translate((double) slideX, 0.0, 0.0);
         String fps = String.valueOf(fpsCount);
         String serverIp = getServerIpCached();
@@ -82,7 +95,11 @@ public class Watermark extends AbstractDraggable {
         float trailingWidth = Icons.width(Icons.BRAND, 11f);
         float totalWidth = iconWidth + 7 + 4 + titleWidth + 9 + 5 + fpsWidth + 2 + clockWidth + 4 + 5
                 + serverIpWidth + 2.5f + trailingWidth;
-        float finalWidth = totalWidth + 9;
+        float targetWidth = totalWidth + 9;
+        shownWidth = shownWidth < 0f || restart
+                ? targetWidth
+                : HudHelper.hud_anim_approach(shownWidth, targetWidth, 14f, dt);
+        float finalWidth = shownWidth;
         // getHeight()+4 росло бы на 4px каждый кадр, стоило лишь где-то вызвать
         // setHeight; заодно хитбокс редактора совпадает с нарисованной панелью
         float finalHeight = PANEL_HEIGHT;
@@ -180,8 +197,6 @@ public class Watermark extends AbstractDraggable {
 
         Icons.draw(matrix, Icons.BRAND, currentX + 2.5f, getY() + 2f, 11f,
                 ColorAssist.multAlpha(ColorAssist.getText(), alpha));
-
-        matrix.pop();
     }
 
     private static float clamp01(float v) {

@@ -46,14 +46,17 @@ public record BuiltBlur(
             tempFbo.resize(mainFbo.textureWidth, mainFbo.textureHeight);
         }
 
-        RenderSystem.enableBlend();
-        RenderSystem.defaultBlendFunc();
-        RenderSystem.disableCull();
-
+        // Copy with blending off: blended, every pixel whose alpha is below 1
+        // was mixed with the previous frame left in tempFbo (ghost trails).
+        RenderSystem.disableBlend();
         tempFbo.beginWrite(false);
         mainFbo.draw(mainFbo.textureWidth, mainFbo.textureHeight);
 
         mainFbo.beginWrite(false);
+
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.disableCull();
 
         RenderSystem.setShaderTexture(0, tempFbo.getColorAttachment());
 

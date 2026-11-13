@@ -25,6 +25,8 @@ import java.util.List;
 @UtilityClass
 public class Render2D implements QuickImports {
     private final List<Quad> QUAD = new ArrayList<>();
+    /** Far above one frame of HUD separators; see {@link #drawQuad}. */
+    private final int QUAD_QUEUE_LIMIT = 2048;
 
     public void onRender(DrawContext context) {
         FontRenderer.flushDeferred();
@@ -35,10 +37,18 @@ public class Render2D implements QuickImports {
             RenderSystem.defaultBlendFunc();
             RenderSystem.setShader(ShaderProgramKeys.POSITION_COLOR);
             BufferBuilder buffer = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
-            QUAD.forEach(quad -> drawEngine.quad(matrix4f, buffer,quad.x,quad.y,quad.width,quad.height,quad.color));
-            BufferRenderer.drawWithGlobalProgram(buffer.end());
-            RenderSystem.disableBlend();
-            QUAD.clear();
+            try {
+                for (int i = 0, n = QUAD.size(); i < n; i++) {
+                    Quad quad = QUAD.get(i);
+                    drawEngine.quad(matrix4f, buffer, quad.x, quad.y, quad.width, quad.height, quad.color);
+                }
+            } finally {
+                // The queue is emptied and the builder finished even if a quad
+                // throws: otherwise the same quads came back every frame.
+                QUAD.clear();
+                endBuilding(buffer);
+                RenderSystem.disableBlend();
+            }
         }
     }
 
@@ -76,10 +86,12 @@ public class Render2D implements QuickImports {
             matrix.scale(size, size, 1);
 
             RenderSystem.enableBlend();
-            drawTexture(matrix, id, 0, 0, 1, 1, size, size, size, size, size, size, -1);
+            RenderSystem.defaultBlendFunc();
+            // u/v = 0: they were passed as size, i.e. the UVs ran 1..2 and the
+            // image only showed up on textures that happen to repeat.
+            drawTexture(matrix, id, 0, 0, 1, 1, 0, 0, size, size, size, size, -1);
             RenderSystem.disableBlend();
 
-            matrix.translate(-x, -y, 0);
             matrix.pop();
         }
     }
@@ -122,11 +134,13 @@ public class Render2D implements QuickImports {
             if (cropBottomRatio > 0 && cropBottomRatio < 1) {
                 RenderSystem.defaultBlendFunc();
                 int regionH = (int) (textureSize * (1f - cropBottomRatio));
-                drawTexture(matrix, id, 0, 0, 1, 1, 0, textureSize, regionH, 0, 0, textureSize, textureSize, color);
+                // 14-arg overload is (x1, x2, y1, y2, z, ...): the old 0, 0, 1, 1
+                // collapsed the quad to zero width and height, nothing was drawn.
+                drawTexture(matrix, id, 0f, 1f, 0f, 1f, 0f, textureSize, regionH, 0f, 0f, textureSize, textureSize, color);
             } else if (uvSize == textureSize && regionSize == textureSize) {
                 // Полная текстура (обложка): стандартный альфа-блендинг, UV (0,0)-(1,1)
                 RenderSystem.defaultBlendFunc();
-                drawTexture(matrix, id, 0, 0, 1, 1, 0, textureSize, textureSize, 0, 0, textureSize, textureSize, color);
+                drawTexture(matrix, id, 0f, 1f, 0f, 1f, 0f, textureSize, textureSize, 0f, 0f, textureSize, textureSize, color);
             } else {
                 // Регион текстуры (голова в TargetHud: 8x8 из 64x64 и т.д.):
                 // стандартный альфа-блендинг, как в соседних ветках — иначе
@@ -137,7 +151,6 @@ public class Render2D implements QuickImports {
             }
             RenderSystem.disableBlend();
 
-            matrix.translate(-x, -y, 0);
             matrix.pop();
         }
     }
@@ -212,7 +225,7 @@ public class Render2D implements QuickImports {
 
         // Мягкая тень: тот же скруглённый прямоугольник под элементом — чуть
         // шире по бокам (ореол) и со смещением 2px вниз (глубина).
-        int shadowColor = new Color(0, 0, 0, 150).getRGB();
+        int shadowColor = 0x96000000; // black, alpha 150
         rectangle.render(ShapeProperties.create(matrix, x - 1f, y + 1f, width + 2f, height + 2f)
                 .round(4)
                 .color(shadowColor)
@@ -225,7 +238,24 @@ public class Render2D implements QuickImports {
             BufferRenderer.drawWithGlobalProgram(builtBuffer);
     }
 
+    /**
+     * Discards a builder that will not be drawn. A BufferBuilder left
+     * unfinished keeps its bytes in the shared Tessellator allocator and they
+     * are prepended to the next buffer built from it.
+     */
+    public static void discard(BufferBuilder bb) {
+        if (bb == null) return;
+        BuiltBuffer builtBuffer = bb.endNullable();
+        if (builtBuffer != null) builtBuffer.close();
+    }
+
     public void drawQuad(float x, float y, float width, float height, int color) {
+        // The queue is only emptied by onRender(); if that hook is not wired
+        // (or a frame skips it) the list grew by a few records every frame,
+        // forever. Stale quads belong to past frames, so drop them.
+        if (QUAD.size() >= QUAD_QUEUE_LIMIT) {
+            QUAD.clear();
+        }
         QUAD.add(new Quad(x, y, width, height, ColorAssist.multAlpha(color,RenderSystem.getShaderColor()[3])));
     }
 

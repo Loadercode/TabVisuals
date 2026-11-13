@@ -7,6 +7,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import com.loadercode.tabvisuals.TabVisualsClient;
 import com.loadercode.tabvisuals.gui.Theme;
 import com.loadercode.tabvisuals.gui.hud.HudEditor;
@@ -70,6 +71,10 @@ public final class ConfigManager {
     /** Last ClickGUI window position (scaled px); null until the window was first placed. */
     private static Float guiX, guiY;
 
+    /** Display name of the Custom theme (renamed from the theme panel). */
+    private static String customThemeName = "Custom";
+    private static final int CUSTOM_NAME_MAX = 18;
+
     /** Serialized GUI state. Public fields for Gson. */
     public static final class GuiState {
         public String themeId = Theme.ALL[0].id();
@@ -81,6 +86,8 @@ public final class ConfigManager {
         /** ClickGUI window position (scaled px); null = never moved — Gson omits nulls. */
         public Float guiX;
         public Float guiY;
+        /** Custom theme display name; null = not present in this config. */
+        public String customName;
     }
 
     public static final class ModuleState {
@@ -135,11 +142,56 @@ public final class ConfigManager {
             }
             state.modules.put(m.id(), ms);
         }
-        state.hud.putAll(HudEditor.positions());
+        // Gson refuses NaN/Infinity: one poisoned HUD position would make every
+        // later save fail, so non-finite entries are left out of the snapshot
+        for (Map.Entry<String, float[]> e : HudEditor.positions().entrySet()) {
+            if (e.getKey() != null && all_finite(e.getValue())) {
+                state.hud.put(e.getKey(), e.getValue());
+            }
+        }
         state.customTheme.putAll(Theme.customColors());
         state.guiX = guiX;
         state.guiY = guiY;
+        state.customName = customThemeName;
         return state;
+    }
+
+    private static boolean all_finite(float[] values) {
+        if (values == null) {
+            return false;
+        }
+        for (float v : values) {
+            if (!Float.isFinite(v)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Display name of the Custom theme (never blank). */
+    public static String customThemeName() {
+        return customThemeName;
+    }
+
+    /** Persists a renamed Custom theme; blank names are ignored. */
+    public static void setCustomThemeName(String name) {
+        String clean = clean_theme_name(name);
+        if (clean == null || clean.equals(customThemeName)) {
+            return;
+        }
+        customThemeName = clean;
+        autosave();
+    }
+
+    private static String clean_theme_name(String name) {
+        if (name == null) {
+            return null;
+        }
+        String clean = name.replaceAll("\\p{Cntrl}", "").trim();
+        if (clean.isEmpty()) {
+            return null;
+        }
+        return clean.length() > CUSTOM_NAME_MAX ? clean.substring(0, CUSTOM_NAME_MAX).trim() : clean;
     }
 
     /**
@@ -162,8 +214,21 @@ public final class ConfigManager {
     }
 
     public static void apply(GuiState state) {
+        apply(state, true);
+    }
+
+    /**
+     * @param windowPosition false for named configs: the ClickGUI window position
+     *                       is a per-install preference, a shared config must not
+     *                       move the window on the next open
+     */
+    private static void apply(GuiState state, boolean windowPosition) {
         if (state == null) {
             return;
+        }
+        String themeName = clean_theme_name(state.customName);
+        if (themeName != null) {
+            customThemeName = themeName;
         }
         // custom colours first: the theme id below may point at the Custom slot
         if (state.customTheme != null) {
@@ -172,7 +237,7 @@ public final class ConfigManager {
         // окно ClickGUI: позиция применяется при следующем открытии экрана
         // (там же зажимается под текущее разрешение — старый конфиг не должен
         // выкидывать окно за пределы меньшего экрана)
-        if (state.guiX != null && state.guiY != null
+        if (windowPosition && state.guiX != null && state.guiY != null
                 && Float.isFinite(state.guiX) && Float.isFinite(state.guiY)) {
             guiX = state.guiX;
             guiY = state.guiY;
@@ -240,7 +305,9 @@ public final class ConfigManager {
                 md.set_by_name(sv);
             }
         } else if (s instanceof ColorSetting cs && v instanceof Number n) {
-            cs.set(n.intValue());
+            // via long: a hand-written unsigned 0xAARRGGBB (> Integer.MAX_VALUE)
+            // must wrap to the same ARGB int, not saturate to 0x7FFFFFFF
+            cs.set((int) n.longValue());
         } else if (s instanceof KeySetting ks && v instanceof Number n) {
             ks.set(n.intValue());
         }
@@ -270,7 +337,8 @@ public final class ConfigManager {
     }
 
     public static void loadAutosave() {
-        if (Files.exists(AUTOSAVE)) {
+        // read() falls back to the .bak copy, so a lost primary file still loads
+        if (Files.exists(AUTOSAVE) || Files.exists(backup_of(AUTOSAVE))) {
             apply(read(AUTOSAVE));
         }
     }
@@ -283,12 +351,16 @@ public final class ConfigManager {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(CONFIGS_DIR, "*.json")) {
             for (Path p : stream) {
                 String fn = p.getFileName().toString();
+                if (fn.length() <= 5 || !Files.isRegularFile(p)) {
+                    continue; // a directory named "x.json" is not a config
+                }
                 String name = fn.substring(0, fn.length() - 5);
                 if (!name.isBlank()) {
                     names.add(name);
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            // RuntimeException: DirectoryIteratorException from the stream iterator
             TabVisualsClient.LOGGER.error("Config list failed", e);
         }
         names.sort(Comparator.naturalOrder());
@@ -300,35 +372,65 @@ public final class ConfigManager {
         if (clean.isEmpty()) {
             return false;
         }
-        return write(CONFIGS_DIR.resolve(clean + ".json"), snapshot());
+        Path file = config_path(clean);
+        return file != null && write(file, snapshot());
+    }
+
+    /** null instead of InvalidPathException — a hostile name must fail the action, not the game. */
+    private static Path config_path(String fileBase) {
+        try {
+            return CONFIGS_DIR.resolve(fileBase + ".json");
+        } catch (RuntimeException e) {
+            TabVisualsClient.LOGGER.warn("Config name not usable as a file name: {}", fileBase);
+            return null;
+        }
+    }
+
+    /**
+     * File of an existing config. A name exactly as listed on disk wins over
+     * its sanitised form, so a hand-dropped file whose name sanitize() would
+     * alter (long, trailing dot…) can still be loaded and deleted from the tab.
+     */
+    private static Path existing_config(String name) {
+        if (name == null) {
+            return null;
+        }
+        if (listConfigs().contains(name)) {
+            return config_path(name); // came from the directory listing — a plain file name
+        }
+        String clean = sanitize(name);
+        if (clean.isEmpty()) {
+            return null;
+        }
+        Path file = config_path(clean);
+        return file != null && Files.exists(file) ? file : null;
     }
 
     /** true when the file existed and parsed — callers use it to report honestly. */
     public static boolean loadConfig(String name) {
-        String clean = sanitize(name);
-        if (clean.isEmpty()) {
-            return false;
-        }
-        Path file = CONFIGS_DIR.resolve(clean + ".json");
-        if (!Files.exists(file)) {
+        Path file = existing_config(name);
+        if (file == null) {
             return false;
         }
         GuiState state = read(file);
         if (state == null) {
             return false;
         }
-        apply(state);
+        apply(state, false);
         return true;
     }
 
     public static boolean deleteConfig(String name) {
-        String clean = sanitize(name);
-        if (clean.isEmpty()) {
+        Path file = existing_config(name);
+        if (file == null) {
             return false;
         }
         try {
-            return Files.deleteIfExists(CONFIGS_DIR.resolve(clean + ".json"));
-        } catch (IOException e) {
+            boolean deleted = Files.deleteIfExists(file);
+            // the backup would otherwise linger forever next to nothing
+            Files.deleteIfExists(backup_of(file));
+            return deleted;
+        } catch (IOException | RuntimeException e) {
             TabVisualsClient.LOGGER.error("Config delete failed", e);
             return false;
         }
@@ -344,12 +446,14 @@ public final class ConfigManager {
         if (name == null) {
             return "";
         }
-        String s = name.trim()
-                .replaceAll("[\\\\/:*?\"<>|]", "")
-                .replaceAll("^[.\\s]+|[.\\s]+$", "");
+        // control chars are as path-hostile on Windows as the punctuation set
+        String s = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "");
         if (s.length() > 32) {
-            s = s.substring(0, 32);
+            // never cut a surrogate pair in half — a lone surrogate is not encodable
+            s = s.substring(0, Character.isHighSurrogate(s.charAt(31)) ? 31 : 32);
         }
+        // trimmed AFTER the cut: the cut itself can expose a trailing dot/space
+        s = s.replaceAll("^[.\\s]+|[.\\s]+$", "");
         if (RESERVED_NAMES.matcher(s).matches()) {
             s = "_" + s;
         }
@@ -441,6 +545,14 @@ public final class ConfigManager {
             return null;
         }
         GuiState state = new GuiState();
+        // absent keys must keep the live values: no implicit default theme
+        state.themeId = null;
+        try {
+            if (root.has("customName") && root.get("customName").isJsonPrimitive()) {
+                state.customName = root.get("customName").getAsString();
+            }
+        } catch (RuntimeException ignored) {
+        }
         try {
             if (root.has("themeId") && root.get("themeId").isJsonPrimitive()) {
                 state.themeId = root.get("themeId").getAsString();
@@ -480,14 +592,77 @@ public final class ConfigManager {
                 continue;
             }
             try {
-                ModuleState ms = GSON.fromJson(e.getValue(), ModuleState.class);
-                if (ms != null) {
-                    state.modules.put(e.getKey(), ms);
-                }
+                state.modules.put(e.getKey(), read_module(e.getValue().getAsJsonObject()));
             } catch (RuntimeException ignored) {
                 // один битый модуль не должен отменять весь конфиг
             }
         }
+    }
+
+    /**
+     * Field-by-field instead of Gson reflection: one wrong-typed field
+     * ("enabled": "yes", a nested object as a setting value) used to throw and
+     * drop the whole module, including every setting that was still valid.
+     */
+    private static ModuleState read_module(JsonObject o) {
+        ModuleState ms = new ModuleState();
+        ms.enabled = as_bool(o.get("enabled"));
+        ms.favorite = as_bool(o.get("favorite"));
+        JsonElement bind = o.get("bind");
+        if (bind != null && bind.isJsonPrimitive() && bind.getAsJsonPrimitive().isNumber()) {
+            try {
+                ms.bind = (int) bind.getAsDouble();
+            } catch (RuntimeException ignored) {
+            }
+        }
+        JsonElement settings = o.get("settings");
+        if (settings == null || !settings.isJsonObject()) {
+            return ms;
+        }
+        for (Map.Entry<String, JsonElement> e : settings.getAsJsonObject().entrySet()) {
+            JsonElement v = e.getValue();
+            if (v == null || !v.isJsonPrimitive()) {
+                continue;
+            }
+            JsonPrimitive p = v.getAsJsonPrimitive();
+            try {
+                if (p.isBoolean()) {
+                    ms.settings.put(e.getKey(), p.getAsBoolean());
+                } else if (p.isNumber()) {
+                    ms.settings.put(e.getKey(), p.getAsDouble());
+                } else if (p.isString()) {
+                    ms.settings.put(e.getKey(), p.getAsString());
+                }
+            } catch (RuntimeException ignored) {
+                // unparsable number literal — skip this value only
+            }
+        }
+        return ms;
+    }
+
+    /** Tolerant boolean: true/false, 0/1, "true"/"false"; anything else = absent. */
+    private static Boolean as_bool(JsonElement e) {
+        if (e == null || !e.isJsonPrimitive()) {
+            return null;
+        }
+        JsonPrimitive p = e.getAsJsonPrimitive();
+        try {
+            if (p.isBoolean()) {
+                return p.getAsBoolean();
+            }
+            if (p.isNumber()) {
+                return p.getAsDouble() != 0.0;
+            }
+            String s = p.getAsString().trim();
+            if (s.equalsIgnoreCase("true")) {
+                return Boolean.TRUE;
+            }
+            if (s.equalsIgnoreCase("false")) {
+                return Boolean.FALSE;
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return null;
     }
 
     private static void read_hud(JsonObject root, GuiState state) {

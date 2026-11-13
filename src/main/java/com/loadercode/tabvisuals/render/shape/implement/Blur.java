@@ -14,6 +14,7 @@ import org.joml.Matrix4f;
 import org.joml.Vector2f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
+import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import com.loadercode.tabvisuals.render.font.FontRenderer;
 import com.loadercode.tabvisuals.render.shape.Shape;
@@ -73,11 +74,21 @@ public class Blur implements Shape, QuickImports {
             rectangle.render(shape);
             return;
         }
+        float scale = (float) currentWindow.getScaleFactor();
+        Matrix4f matrix4f = shape.getMatrix().peek().getPositionMatrix();
+        Vector3f size = matrix4f.getScale(sizeScratch).mul(scale);
+        float width = shape.getWidth() * size.x;
+        float height = shape.getHeight() * size.y;
+        // Collapsed / mirrored / NaN rects have no pixels to cover.
+        if (!drawable(width, height)) {
+            return;
+        }
+
         // Shader load failure / GL fallback gives a null ShaderProgram here.
         // The old path called shader.getUniformOrDefault → NPE in the render
         // loop. Fall back to the plain rectangle (same as quality<=0).
-        ShaderProgram shader0 = RenderSystem.setShader(useGlass ? GLASS_KEY : BLUR_KEY);
-        if (shader0 == null) {
+        ShaderProgram shader = RenderSystem.setShader(useGlass ? GLASS_KEY : BLUR_KEY);
+        if (shader == null) {
             rectangle.render(shape);
             return;
         }
@@ -85,26 +96,23 @@ public class Blur implements Shape, QuickImports {
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
 
-        float scale = (float) currentWindow.getScaleFactor();
         float alpha = RenderSystem.getShaderColor()[3];
-        Matrix4f matrix4f = shape.getMatrix().peek().getPositionMatrix();
         Vector3f pos = matrix4f.transformPosition(shape.getX(), shape.getY(), 0, posScratch).mul(scale);
-        Vector3f size = matrix4f.getScale(sizeScratch).mul(scale);
         // Копия, а не мутация getRound(): повторный рендер того же properties
         // раньше компаундил радиус умножением на scale.
         Vector4f round = roundScratch.set(shape.getRound()).mul(size.y);
-        float softness = shape.getSoftness();
-        float thickness = shape.getThickness();
-        float width = shape.getWidth() * size.x;
-        float height = shape.getHeight() * size.y;
+        float density = size.y * REFERENCE_DENSITY;
+        float softness = softnessPx(shape.getSoftness(), density);
+        float thickness = strokePx(shape.getThickness(), density);
+        float padX = (softness + EDGE_PAD_PX) / size.x;
+        float padY = (softness + EDGE_PAD_PX) / size.y;
 
         BufferBuilder buffer = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION);
-        drawEngine.quad(matrix4f, buffer, shape.getX() - softness / 2, shape.getY() - softness / 2, shape.getWidth() + softness, shape.getHeight() + softness);
+        drawEngine.quad(matrix4f, buffer, shape.getX() - padX, shape.getY() - padY, shape.getWidth() + padX * 2, shape.getHeight() + padY * 2);
 
         GlStateManager._activeTexture(GL13.GL_TEXTURE0);
-        if (input != null) RenderSystem.bindTexture(input.getColorAttachment());
-        ShaderProgram shader = shader0;
-        shader(pos, round, softness, thickness, width, height, shader, currentWindow.getHeight());
+        RenderSystem.bindTexture(input.getColorAttachment());
+        shader(pos, round, softness, thickness, width, height, shader, currentWindow.getFramebufferHeight());
         shader.getUniformOrDefault("Quality").set(quality);
         shader.getUniformOrDefault("SampleCount").set((float) samples);
         ShaderUniform(shape, alpha, shader);
@@ -118,6 +126,34 @@ public class Blur implements Shape, QuickImports {
 
         BufferRenderer.drawWithGlobalProgram(buffer.end());
         RenderSystem.disableBlend();
+    }
+
+    /** softness / thickness are authored at GUI scale 2: one unit there is one physical pixel. */
+    static final float REFERENCE_DENSITY = 0.5f;
+    /** Extra quad margin so the antialiased fringe is not cut by the geometry. */
+    static final float EDGE_PAD_PX = 1f;
+
+    static boolean drawable(float width, float height) {
+        return width > 0f && height > 0f && width < 1e7f && height < 1e7f;
+    }
+
+    /**
+     * Falloff in physical pixels. It follows the matrix / GUI scale exactly
+     * like the padded quad that carries it — it used to stay a fixed pixel
+     * count, so the halo was clipped at GUI scale 1 and under scale animations.
+     */
+    static float softnessPx(float softness, float density) {
+        return softness > 0f ? softness * density : 0f;
+    }
+
+    /**
+     * Stroke width in physical pixels. The shader centres the stroke edge at
+     * {@code thickness - 1}; only that part grows on denser GUI scales, and it
+     * never shrinks below the authored width (a scaled-down hairline vanished).
+     */
+    static float strokePx(float thickness, float density) {
+        if (!(thickness > 0f)) return 0f;
+        return Math.max((thickness - 1f) * Math.max(1f, density) + 1f, 1e-3f);
     }
 
     static void ShaderUniform(ShapeProperties shape, float alpha, ShaderProgram shader) {
@@ -169,6 +205,12 @@ public class Blur implements Shape, QuickImports {
             // Resize before copy — old path copied then resized (wasted a full blit).
             input.resize(fbW, fbH);
         }
+        // The Vogel taps land between texels; nearest sampling made the blur
+        // grainy. resize() resets the filter, hence every call (no-op if set).
+        input.setTexFilter(GL11.GL_LINEAR);
+        // Blit with blending off: with it on, pixels whose alpha is below 1
+        // were mixed with last frame's copy (ghost trails inside blurred panels).
+        RenderSystem.disableBlend();
         input.beginWrite(false);
         buffer.draw(input.textureWidth, input.textureHeight);
         buffer.beginWrite(false);

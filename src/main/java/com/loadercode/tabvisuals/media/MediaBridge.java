@@ -63,10 +63,29 @@ public final class MediaBridge {
      */
     private static volatile Snapshot extrapolated;
 
+    /** SMTC exists only on Windows — elsewhere the bridge stays inert (never spawns a process). */
+    private static final boolean SUPPORTED =
+            System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).startsWith("windows");
+
+    /** Backward drift below this is treated as tick latency, not a seek: the playhead holds instead of rewinding. */
+    private static final long MAX_HOLD_BACK_MS = 1500;
+
     private MediaBridge() {
     }
 
+    /** True on Windows, where the SMTC bridge can run at all. */
+    public static boolean isSupported() {
+        return SUPPORTED;
+    }
+
+    /** True while the PowerShell bridge process is alive. */
+    public static boolean isRunning() {
+        Process p = process;
+        return p != null && p.isAlive();
+    }
+
     public static void start() {
+        if (!SUPPORTED) return;
         synchronized (LOCK) {
             if (started) return;
             started = true;
@@ -77,6 +96,7 @@ public final class MediaBridge {
     }
 
     public static void stop() {
+        if (!SUPPORTED) return;
         Thread t = worker;
         if (t != null) t.interrupt();
         Process p = process;
@@ -94,21 +114,32 @@ public final class MediaBridge {
         State st = state;
         Snapshot s = st.snap();
         if (!s.active()) return s;
-        Playhead a = st.anchor();
-        long pos = a.basePosMs();
-        if (a.playing()) {
-            pos += (System.nanoTime() - a.baseNano()) / 1_000_000L;
-            if (s.endMs() > 0 && pos > s.endMs()) pos = s.endMs();
-        }
+        long pos = extrapolate(st);
         Snapshot cached = extrapolated;
-        if (cached != null && cached.trackId() == s.trackId() && cached.playing() == a.playing()
-                && Math.abs(cached.posMs() - pos) < 100) {
+        // exact-ms reuse only: the old 100 ms quantization made progress bars
+        // and lyric switches visibly step at ~10 fps
+        if (cached != null && cached.trackId() == s.trackId() && cached.playing() == st.anchor().playing()
+                && cached.posMs() == pos && cached.endMs() == s.endMs() && cached.cover() == s.cover()) {
             return cached;
         }
+        Playhead a = st.anchor();
         Snapshot out = new Snapshot(true, s.app(), s.title(), s.artist(), s.album(), a.playing(),
                 pos, s.endMs(), s.cover(), s.trackId());
         extrapolated = out;
         return out;
+    }
+
+    /** Monotonic-clock position of the given state, clamped to [0, endMs]. */
+    private static long extrapolate(State st) {
+        Snapshot s = st.snap();
+        Playhead a = st.anchor();
+        long pos = a.basePosMs();
+        if (a.playing()) {
+            long dt = (System.nanoTime() - a.baseNano()) / 1_000_000L;
+            if (dt > 0) pos += dt;
+        }
+        if (s.endMs() > 0 && pos > s.endMs()) pos = s.endMs();
+        return Math.max(0L, pos);
     }
 
     public static void addListener(Consumer<Snapshot> listener) {
@@ -144,6 +175,9 @@ public final class MediaBridge {
                 TabVisualsClient.LOGGER.error("SMTC bridge crashed", t);
                 exit = -1;
             }
+            // a dead bridge must not leave a "playing" snapshot extrapolating
+            // for the whole backoff period
+            if (state.snap().active()) publish(Snapshot.NONE);
             if (Thread.currentThread().isInterrupted()) break;
             // ran for over a minute before dying → the bridge itself works,
             // the exit was a one-off; restart quickly without escalating
@@ -184,10 +218,13 @@ public final class MediaBridge {
             return -1;
         }
         process = proc;
+        // stop() may have run between pb.start() and the assignment above —
+        // it could not see this process, so honour the interrupt here
+        if (Thread.currentThread().isInterrupted()) proc.destroyForcibly();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) {
+            while (!Thread.currentThread().isInterrupted() && (line = reader.readLine()) != null) {
                 // a redirected console may start the stream with a BOM, which
                 // trim() does not strip — the first event would be lost
                 if (!line.isEmpty() && line.charAt(0) == '\uFEFF') line = line.substring(1);
@@ -195,7 +232,7 @@ public final class MediaBridge {
                 if (line.isEmpty() || line.charAt(0) != '{') continue;
                 try {
                     handle(JsonParser.parseString(line).getAsJsonObject());
-                } catch (Exception parse) {
+                } catch (RuntimeException | StackOverflowError parse) {
                     TabVisualsClient.LOGGER.debug("bad bridge line: {}", line);
                 }
             }
@@ -222,17 +259,34 @@ public final class MediaBridge {
         switch (st) {
             case "none" -> publish(Snapshot.NONE);
             case "track" -> {
-                trackCounter++;
-                publish(new Snapshot(true, str(o, "app"), str(o, "title"), str(o, "artist"), str(o, "album"),
+                String app = str(o, "app"), title = str(o, "title"), artist = str(o, "artist"), album = str(o, "album");
+                Snapshot prev = state.snap();
+                // same metadata (e.g. the bridge restarted and re-announced the
+                // song) keeps its id — lyrics/cover consumers don't reset
+                long id = prev.active() && prev.app().equals(app) && prev.title().equals(title)
+                        && prev.artist().equals(artist) && prev.album().equals(album)
+                        ? prev.trackId() : ++trackCounter;
+                publish(new Snapshot(true, app, title, artist, album,
                         "Playing".equalsIgnoreCase(str(o, "status")), num(o, "posMs"), num(o, "endMs"),
-                        bool(o, "cover"), trackCounter));
+                        bool(o, "cover"), id));
             }
             case "tick" -> {
-                Snapshot s = state.snap();
+                State live = state;
+                Snapshot s = live.snap();
                 if (!s.active()) return;
+                boolean playing = "Playing".equalsIgnoreCase(str(o, "status"));
+                long end = num(o, "endMs");
+                long pos = num(o, "posMs");
+                if (playing && live.anchor().playing()) {
+                    // a reported position slightly behind our extrapolation is
+                    // tick latency, not a seek: hold the playhead, never rewind
+                    long cur = extrapolate(live);
+                    long drift = pos - cur;
+                    if (drift < 0 && drift > -MAX_HOLD_BACK_MS) pos = cur;
+                }
+                if (end > 0 && pos > end) pos = end;
                 publish(new Snapshot(true, s.app(), s.title(), s.artist(), s.album(),
-                        "Playing".equalsIgnoreCase(str(o, "status")), num(o, "posMs"), num(o, "endMs"),
-                        s.cover(), s.trackId()));
+                        playing, Math.max(0L, pos), end, s.cover(), s.trackId()));
             }
             case "cover" -> {
                 // artwork arrived after the track event — same track, flip the
@@ -253,7 +307,10 @@ public final class MediaBridge {
 
     private static long num(JsonObject o, String key) {
         try {
-            return o.has(key) ? (long) o.get(key).getAsDouble() : 0L;
+            if (!o.has(key) || !o.get(key).isJsonPrimitive()) return 0L;
+            double d = o.get(key).getAsDouble();
+            // NaN / negative / absurd values (bad SMTC timelines) degrade to 0
+            return Double.isFinite(d) && d > 0 ? (long) Math.min(d, 1e12) : 0L;
         } catch (Exception e) {
             return 0L;
         }

@@ -42,6 +42,10 @@ public class DynamicIsland extends AbstractDraggable {
     private float slideAnim = 1f;
     private float currentWidth = 48f;
     private float currentHeight = 20f;
+    /** Eased island Y; NaN until the first frame. */
+    private float currentY = Float.NaN;
+    /** Max horizontal slide of incoming status content (was 256px, drawn unclipped outside the island). */
+    private static final float STATUS_SLIDE_PX = 12f;
     private long lastStatusLookupTime;
     private long lastTimeUpdate;
     /** Момент предыдущего кадра — из него считается dt для FPS-независимого сглаживания. */
@@ -76,12 +80,17 @@ public class DynamicIsland extends AbstractDraggable {
         long now = System.nanoTime();
         float dt = lastFrameNs == 0L ? 0.0166f : (now - lastFrameNs) / 1_000_000_000f;
         lastFrameNs = now;
-        if (dt > 0.1f) dt = 0.1f;
+        if (dt > 0.05f) dt = 0.05f;
 
         MatrixStack matrix = context.getMatrices();
         float screenW = mc.getWindow().getScaledWidth();
         float x = screenW / 2f - currentWidth / 2f;
-        float y = Y_OFFSET + getBossBarYOffsetBelowBars();
+        // boss bars appearing/disappearing used to teleport the island by 19px rows
+        float targetY = Y_OFFSET + getBossBarYOffsetBelowBars();
+        currentY = Float.isNaN(currentY) || isReentered()
+                ? targetY
+                : HudHelper.hud_anim_approach(currentY, targetY, 12f, dt);
+        float y = currentY;
 
         // Обновляем позицию/размер перед выбором активного статуса
         setX((int) x);
@@ -159,7 +168,7 @@ public class DynamicIsland extends AbstractDraggable {
 
         // 0.02 — ниже alpha byte 4 ванильный текст форсировал бы непрозрачность
         if (activeStatus != null && statusAlpha > 0.02f) {
-            float slideX = -256f * (1f - slideAnim);
+            float slideX = -STATUS_SLIDE_PX * (1f - slideAnim);
             activeStatus.draw(context, x + slideX, y, currentWidth - slideX, currentHeight, statusAlpha, slideAnim);
         }
     }

@@ -231,7 +231,8 @@ public class MusicStatus extends IslandStatus implements QuickImports {
 
         // 2) Окно управления — отдельная разметка, когда controlsActive
         if (controlsActive) {
-            drawControlsLayout(context, x, y, title, artist, info, playing, alpha);
+            // island (eased) bounds, same as click(): scissor and buttons match the drawn panel
+            drawControlsLayout(context, x, y, islandWidth, islandHeight, title, artist, info, playing, alpha);
         }
     }
 
@@ -328,6 +329,8 @@ public class MusicStatus extends IslandStatus implements QuickImports {
     private void drawControlsLayout(DrawContext context,
                                     float x,
                                     float y,
+                                    float width,
+                                    float height,
                                     String title,
                                     String artist,
                                     MediaBridge.Snapshot info,

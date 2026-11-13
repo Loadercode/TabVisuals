@@ -228,13 +228,13 @@ public class Armor extends AbstractDraggable {
         float currentX = x;
         float currentY = y;
 
-        matrix.push();
-        matrix.translate(0f, (1f - enter) * 6f, 0f);
         int lowestPercent = 101;
-
         int fadeBlur = ColorAssist.multAlpha(ColorAssist.getBlurColor(), enter);
         int fadeSlotBg = ColorAssist.multAlpha(ColorAssist.getRectangleColor(), 180f / 75f * enter);
 
+        matrix.push();
+        try {
+        matrix.translate(0f, (1f - enter) * 6f, 0f);
         for (int i = 0; i < SLOT_COUNT; i++) {
             ItemStack stack = resolveArmorStack(armorSlots, i, previewMode);
 
@@ -305,6 +305,9 @@ public class Armor extends AbstractDraggable {
                 }
             } else {
                 lastPercent[i] = -1;
+                // next piece put in this slot fills its bar from empty, not from the old value
+                barFill[i] = 0f;
+                damageFlash[i] = 0f;
             }
 
             if (vertical) {
@@ -313,8 +316,9 @@ public class Armor extends AbstractDraggable {
                 currentX += iconSize + padding + 3f;
             }
         }
-
-        matrix.pop();
+        } finally {
+            matrix.pop();
+        }
 
         // Меню под элементом (как Select в настройках)
         menuX = getX();
@@ -343,8 +347,13 @@ public class Armor extends AbstractDraggable {
             float sx = HudHelper.hud_text_center_x(warnFont, warnText, screenW / 2f);
             float sy = HudHelper.hud_px(screenH / 2f - textH / 2f);
 
-            warnFont.drawString(matrix, warnText, sx + 1.5f, sy + 1.5f, WARN_SHADOW);
-            warnFont.drawString(matrix, warnText, sx, sy, WARN_RED);
+            // fade in/out at the ends instead of popping on and off
+            long age = now - lastWarnTimeMs;
+            float warnA = Math.min(1f, Math.min(age / 120f, (WARNING_DURATION_MS - age) / 300f));
+            if (warnA > 0.01f) {
+                warnFont.drawString(matrix, warnText, sx + 1.5f, sy + 1.5f, ColorAssist.multAlpha(WARN_SHADOW, warnA));
+                warnFont.drawString(matrix, warnText, sx, sy, ColorAssist.multAlpha(WARN_RED, warnA));
+            }
         }
     }
 
@@ -374,9 +383,9 @@ public class Armor extends AbstractDraggable {
             animDt = 1f / 60f;
             entranceStartNs = now;
         } else {
-            animDt = Math.min((now - animLastNs) / 1_000_000_000f, 0.1f);
-            // Долгая пауза без отрисовки = элемент скрыт — вход заново
-            if (now - animLastNs > 250_000_000L) entranceStartNs = now;
+            animDt = Math.min((now - animLastNs) / 1_000_000_000f, 0.05f);
+            // Пропущенные кадры (элемент был скрыт) — вход заново; лаг-спайк не считается
+            if (isReentered()) entranceStartNs = now;
         }
         animLastNs = now;
     }
