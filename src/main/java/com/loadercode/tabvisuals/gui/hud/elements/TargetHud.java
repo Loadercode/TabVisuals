@@ -422,6 +422,7 @@ public class TargetHud extends AbstractDraggable {
             float y = getY() + 4;
             ScissorAssist scissorManager = ScissorAssist.INSTANCE;
             scissorManager.push(matrix.peek().getPositionMatrix(), getX() - 50, getY(), 50, getHeight());
+            try {
             Calculate.setAlpha(anim, () -> {
                 blur.render(ShapeProperties.create(matrix, x, y, size, size).quality(com.loadercode.tabvisuals.gui.hud.Hud.getInstance().getBlurQuality())
                         .round(12).softness(1).thickness(2).outlineColor(ColorAssist.getOutline(0)).color(ColorAssist.getRect(0.7F)).build());
@@ -429,7 +430,9 @@ public class TargetHud extends AbstractDraggable {
                         .color(ColorAssist.fade(0), ColorAssist.fade(200), ColorAssist.fade(0), ColorAssist.fade(200)).build());
                 Render2D.defaultDrawStack(context, lastItem.getDefaultStack(), x + 3f, y + 3f, false, false, 1f);
             });
-            scissorManager.pop();
+            } finally {
+                scissorManager.pop();
+            }
         }
     }
 

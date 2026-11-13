@@ -197,7 +197,7 @@ public final class HudEditor {
                 }
                 continue;
             }
-            float maxX = Math.max(2f, sw - Math.max(8f, d.getWidth()));
+            float maxX = Math.max(2f, sw - Math.max(8f, d.boundsWidth()));
             float maxY = Math.max(2f, sh - Math.max(8f, d.getHeight()));
             float cx = (int) clamp(p[0], 2f, maxX);
             float cy = (int) clamp(p[1], 2f, maxY);
@@ -222,7 +222,7 @@ public final class HudEditor {
     /** A drawn element reports its box; saved entries follow the live coords. */
     static void syncDraggable(AbstractDraggable d) {
         String n = d.getName();
-        BOUNDS.put(n, new float[]{d.getX(), d.getY(), d.getWidth(), d.getHeight()});
+        BOUNDS.put(n, new float[]{d.getX(), d.getY(), d.boundsWidth(), d.getHeight()});
         float[] p = POS.get(n);
         if (p != null && p.length >= 2) {
             p[0] = d.getX();
@@ -400,7 +400,7 @@ public final class HudEditor {
                     // дефолт из конструктора мог устареть (Totem Counter живёт на
                     // координатах большой разрешения) — зажимаем в текущий экран
                     float[] b = LAST.get(menuFor);
-                    float bw = Math.max(1f, b != null ? b[2] : d.getWidth());
+                    float bw = Math.max(1f, b != null ? b[2] : d.boundsWidth());
                     float bh = Math.max(1f, b != null ? b[3] : d.getHeight());
                     d.setX((int) clamp(def[0], 2f, Math.max(2f, sw - bw - 2f)));
                     d.setY((int) clamp(def[1], 2f, Math.max(2f, sh - bh - 2f)));

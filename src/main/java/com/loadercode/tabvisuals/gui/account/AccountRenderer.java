@@ -858,6 +858,17 @@ public final class AccountRenderer {
         }
         try {
             OtherClientPlayerEntity created = new OtherClientPlayerEntity(world, p) {
+                {
+                    // all skin layers on (hat, jacket, sleeves, pants, cape): the
+                    // tracked byte defaults to 0 and only a server packet sets it
+                    this.getDataTracker().set(PLAYER_MODEL_PARTS, (byte) 0x7F);
+                }
+
+                @Override
+                public boolean isPartVisible(net.minecraft.entity.player.PlayerModelPart part) {
+                    return true; // belt and braces vs. any later tracker reset
+                }
+
                 @Override
                 protected PlayerListEntry getPlayerListEntry() {
                     return null; // no tab list on the title screen
@@ -1011,10 +1022,37 @@ public final class AccountRenderer {
      * derived from the box, no extra parameters needed.
      */
     public void render(DrawContext ctx, MatrixStack m, float x, float y, float w, float h, float dt) {
+        render(ctx, m, x, y, w, h, dt, 1f);
+    }
+
+    /** Same as {@link #render(DrawContext, MatrixStack, float, float, float, float, float)}, faded by alpha. */
+    public void render(DrawContext ctx, MatrixStack m, float x, float y, float w, float h, float dt,
+                       float alpha) {
         step(dt);
         if (!(w > 0f) || !(h > 0f)) {
             return;
         }
+        alpha = clamp(alpha, 0f, 1f);
+        if (alpha < 0.004f) {
+            return;
+        }
+        boolean faded = alpha < 0.999f;
+        if (faded) {
+            ctx.draw();
+            com.mojang.blaze3d.systems.RenderSystem.enableBlend();
+            com.mojang.blaze3d.systems.RenderSystem.setShaderColor(1f, 1f, 1f, alpha);
+        }
+        try {
+            render_body(ctx, m, x, y, w, h);
+        } finally {
+            if (faded) {
+                ctx.draw();
+                com.mojang.blaze3d.systems.RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+            }
+        }
+    }
+
+    private void render_body(DrawContext ctx, MatrixStack m, float x, float y, float w, float h) {
 
         // half-pixel snap: the pedestal stays crisp at every GUI scale
         float cx = Math.round((x + w / 2f) * 2f) / 2f;
@@ -1026,7 +1064,8 @@ public final class AccountRenderer {
 
         OtherClientPlayerEntity entity = render_entity;
         if (entity != null) {
-            float size = clamp(Math.min(h * 0.52f, w * 0.75f), 6f, 512f);
+            // 1.8 blocks tall + hat overlay + bob must fit: ~0.47h keeps head and feet in
+            float size = clamp(Math.min((h - 2f * BOB_PX - 4f) * 0.47f, w * 0.62f), 4f, 512f);
             float feet_y = cy + 0.9f * size + bob;
             draw_floor_shadow(m, cx, feet_y, size, skin_a);
 
@@ -1035,7 +1074,7 @@ public final class AccountRenderer {
             float tilt_deg = clamp(tilt
                             + BREATH_TILT_DEG * (float) Math.sin(anim_time * wave + 0.4f) * rest_blend,
                     -MAX_TILT - 2f, MAX_TILT + 2f);
-            draw_model(ctx, m, entity, cx, cy, size, body_yaw, tilt_deg);
+            draw_model(ctx, m, entity, cx, cy + bob, size, body_yaw, tilt_deg);
         }
 
         // crossfade veil: the panel colour hides the model until it settles

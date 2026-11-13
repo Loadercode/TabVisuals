@@ -310,7 +310,9 @@ public final class UiRender implements QuickImports {
 
     /** Lighten toward white by k (alpha kept). */
     public static int lighten(int argb, float k) {
-        return mix(argb, 0xFFFFFFFF, clamp01(k));
+        // RGB only: mixing toward 0xFFFFFFFF also pulled alpha up to 255, so a
+        // translucent colour turned more opaque on hover / in tints
+        return withAlpha(mix(argb, 0xFFFFFFFF, clamp01(k)), (argb >>> 24) & 0xFF);
     }
 
     /** Uniform press sink: pressT 0..1 -> scale (1 at rest, 0.96 fully pressed). */

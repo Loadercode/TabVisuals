@@ -35,6 +35,11 @@ public abstract class AbstractDraggable implements Draggable, QuickImports, Quic
         this.canDrag = canDrag;
     }
 
+    /** Ширина реально рисуемого бокса (для hit-test/clamp редактора). */
+    public int boundsWidth() {
+        return getWidth();
+    }
+
     public final Animation scaleAnimation = new Decelerate().setValue(1).setMs(200);
 
     /**

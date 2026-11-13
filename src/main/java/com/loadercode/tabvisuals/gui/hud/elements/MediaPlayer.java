@@ -98,6 +98,11 @@ public class MediaPlayer extends AbstractDraggable {
     }
 
     @Override
+    public int boundsWidth() {
+        return getWidth() + 15; // фон рисуется на 15px шире getWidth()
+    }
+
+    @Override
     public boolean visible() {
         return !lastMedia.finished(2000) || HudHelper.isChat(mc.currentScreen) || (media.active() && media.playing());
     }

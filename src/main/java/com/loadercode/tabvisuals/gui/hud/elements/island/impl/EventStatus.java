@@ -149,27 +149,25 @@ public class EventStatus extends IslandStatus implements QuickImports {
 
         ScissorAssist scissor = ScissorAssist.INSTANCE;
         scissor.push(context.getMatrices().peek().getPositionMatrix(), x, y, islandWidth, islandHeight);
-
-        if (!showList) {
-            long remaining = (long) ((primary.timeEnd() - System.currentTimeMillis()) / 1000);
-            if (remaining <= 0) {
-                scissor.pop();
+        try {
+            if (!showList) {
+                long remaining = (long) ((primary.timeEnd() - System.currentTimeMillis()) / 1000);
+                if (remaining > 0) {
+                    drawEventRow(context, x, y, primary, remaining, font7, alpha);
+                }
                 return;
             }
-            drawEventRow(context, x, y, primary, remaining, font7, alpha);
+
+            float dy = y;
+            for (FTHelper.ServerEvent e : rows) {
+                long remaining = (long) ((e.timeEnd() - System.currentTimeMillis()) / 1000);
+                if (remaining <= 0) continue;
+                drawEventRow(context, x, dy, e, remaining, font7, alpha);
+                dy += ROW_H + ROW_GAP;
+            }
+        } finally {
             scissor.pop();
-            return;
         }
-
-        float dy = y;
-        for (FTHelper.ServerEvent e : rows) {
-            long remaining = (long) ((e.timeEnd() - System.currentTimeMillis()) / 1000);
-            if (remaining <= 0) continue;
-            drawEventRow(context, x, dy, e, remaining, font7, alpha);
-            dy += ROW_H + ROW_GAP;
-        }
-
-        scissor.pop();
     }
 
     private void drawEventRow(DrawContext context, float x, float y, FTHelper.ServerEvent event, long remainingSec, FontRenderer font7, float alpha) {

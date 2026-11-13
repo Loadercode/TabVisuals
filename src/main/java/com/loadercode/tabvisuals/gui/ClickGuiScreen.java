@@ -974,7 +974,12 @@ public final class ClickGuiScreen extends Screen {
         // rows first: the panel height and the scroll follow the animated stack
         layoutPopup();
         popH = 24 + rowsH + 10;
-        popPanelH = Math.min(popH, Math.max(60f, height - popY - 12f));
+        float popBottom = fitScale() < 1f ? winY + WIN_H - 4f : height - 12f;
+        if (fitScale() < 1f) {
+            popY = winY + Math.max(4f, (WIN_H - popH) / 2f);
+            popViewTop = popY + 24;
+        }
+        popPanelH = Math.min(popH, Math.max(60f, popBottom - popY));
         popViewTop = popY + 24;
         popViewH = Math.max(14f, popPanelH - 34f);
         float maxScroll = Math.max(0f, rowsH - popViewH);
@@ -1275,7 +1280,7 @@ public final class ClickGuiScreen extends Screen {
             // colour row: the BRUSH glyph in the gutter is tinted with the live
             // colour (readable even at 11px, unlike a bare dot); swatch on the right
             UiRender.iconCentered(m, Icons.BRUSH, x + ROW_GLYPH_X + 3.5f, y + base / 2f, 11,
-                    UiRender.mulAlpha(UiRender.lighten(cs.get(), 0.22f), a));
+                    UiRender.mulAlpha(UiRender.lighten(cs.get() | 0xFF000000, 0.22f), a));
             String nm = truncate(F_BODY, cs.name(), w - ROW_TEXT_X - 30);
             F_BODY.drawString(m, nm, x + ROW_TEXT_X, centerBoxY(F_BODY, nm, y, base), textCol);
 
@@ -1286,7 +1291,7 @@ public final class ClickGuiScreen extends Screen {
             float pr = easePress(row.key, row.key.equals(pressedBtn));
             pushScale(m, sx + sw / 2f, sy + sw / 2f,
                     UiRender.pressScale(pr) * (1f + 0.20f * pulse));
-            UiRender.rect(m, sx, sy, sw, sw, 4, UiRender.mulAlpha(UiRender.lighten(cs.get(), 0.12f * Math.max(hv, pulse)), a));
+            UiRender.rect(m, sx, sy, sw, sw, 4, UiRender.mulAlpha(UiRender.lighten(cs.get() | 0xFF000000, 0.12f * Math.max(hv, pulse)), a));
             int ring = UiRender.mix(UiRender.withAlpha(t.outline(), 180), t.accent(),
                     Math.max(hv, Math.max(pulse, pickerColor == cs && pickerOpen ? 1f : 0f)));
             UiRender.outline(m, sx, sy, sw, sw, 4, UiRender.mulAlpha(ring, a), 1.2f);
@@ -1610,7 +1615,7 @@ public final class ClickGuiScreen extends Screen {
                     float pulse = pulseEase("sw:" + slot);
                     boolean picked = pickerOpen && pickerColor == null && pickerSlot.equals(slot);
                     pushScale(m, sx + 6f, ry + 16f, 1f + 0.18f * pulse);
-                    UiRender.rect(m, sx, ry + 10, 12, 12, 6, UiRender.mulAlpha(UiRender.lighten(c, 0.12f * (sh ? 1f : 0f)), a));
+                    UiRender.rect(m, sx, ry + 10, 12, 12, 6, UiRender.mulAlpha(UiRender.lighten(c | 0xFF000000, 0.12f * (sh ? 1f : 0f)), a));
                     int ring = UiRender.mix(UiRender.withAlpha(t.outline(), 160), t.accent(),
                             Math.max(picked ? 1f : 0f, sh ? 0.7f : 0f));
                     UiRender.outline(m, sx, ry + 10, 12, 12, 6, UiRender.mulAlpha(ring, a), 1.2f);
@@ -1886,7 +1891,7 @@ public final class ClickGuiScreen extends Screen {
         float hv = easeHover(id, hover);
         float pr = easePress(id, id.equals(pressedBtn));
         pushScale(m, sx + w2 / 2f, sy + h2 / 2f, UiRender.pressScale(pr) * (1f + 0.05f * hv));
-        UiRender.rect(m, sx, sy, w2, h2, 4, UiRender.mulAlpha(color, a));
+        UiRender.rect(m, sx, sy, w2, h2, 4, UiRender.mulAlpha(color | 0xFF000000, a)); // opaque, like the preview
         int ring = UiRender.mix(UiRender.withAlpha(t.outline(), 160), t.accent(),
                 Math.max(sel ? 1f : 0f, hv));
         UiRender.outline(m, sx, sy, w2, h2, 4, UiRender.mulAlpha(ring, a), sel ? 1.5f : 1f);
@@ -1912,7 +1917,11 @@ public final class ClickGuiScreen extends Screen {
         if (!hexCacheValid || hexCacheColor != color) {
             hexCacheColor = color;
             hexCacheValid = true;
-            hexCache = String.format(Locale.ROOT, "#%06X", color & 0xFFFFFF);
+            // translucent colours show their alpha too (#AARRGGBB) — the opaque
+            // preview alone hid that a HUD background is 30% visible
+            hexCache = (color >>> 24) == 0xFF
+                    ? String.format(Locale.ROOT, "#%06X", color & 0xFFFFFF)
+                    : String.format(Locale.ROOT, "#%08X", color);
         }
         return hexCache;
     }
@@ -2046,8 +2055,15 @@ public final class ClickGuiScreen extends Screen {
 
     /** Keeps a grabbable {@link #GRAB_MIN} slice of the window on screen — the header can never be lost. */
     private void clampWindowPos() {
+        if (fitScale() < 1f) {
+            // window is scaled to fit the screen: keep it centred, fully visible
+            winX = width / 2f - WIN_W / 2f;
+            winY = height / 2f - WIN_H / 2f;
+            return;
+        }
         winX = Math.max(-(WIN_W - GRAB_MIN), Math.min(width - GRAB_MIN, winX));
-        winY = Math.max(-(WIN_H - GRAB_MIN), Math.min(height - GRAB_MIN, winY));
+        // header sits at the top edge: never let it go above the screen
+        winY = Math.max(0f, Math.min(height - GRAB_MIN, winY));
     }
 
     /**
@@ -2296,7 +2312,16 @@ public final class ClickGuiScreen extends Screen {
 
     /** Current panel scale of the open animation (mouse transform matches it). */
     private float openScale() {
-        return OPEN_MIN + (1f - OPEN_MIN) * easeOutBack(openT);
+        return (OPEN_MIN + (1f - OPEN_MIN) * easeOutBack(openT)) * fitScale();
+    }
+
+    /** Shrinks the whole window (draw + hit-test share the transform) when the
+     *  scaled screen is smaller than WIN_W x WIN_H, e.g. 854x480 at GUI scale 3-4. */
+    private float fitScale() {
+        if (width <= 0 || height <= 0) {
+            return 1f;
+        }
+        return Math.min(1f, Math.min((width - 8f) / WIN_W, (height - 8f) / WIN_H));
     }
 
     /** Eased 0..1 toggle state shared by module and setting pills. */
@@ -2829,6 +2854,12 @@ public final class ClickGuiScreen extends Screen {
             popX = Math.min(winX + WIN_W + RAIL_GAP, Math.max(8, width - popW - 8));
         }
         popY = Math.max(8, Math.min(winY, height - popH - 8));
+        if (fitScale() < 1f) {
+            // the popup is drawn in the window's scaled space and there is no room
+            // beside a fitted window: centre it over the window instead
+            popX = winX + (WIN_W - popW) / 2f;
+            popY = winY + Math.max(4f, (WIN_H - popH) / 2f);
+        }
     }
 
     /** Ends the window drag on the release of the button that owns it — even outside the window. */

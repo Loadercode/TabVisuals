@@ -308,6 +308,11 @@ public final class ConfigManager {
             // via long: a hand-written unsigned 0xAARRGGBB (> Integer.MAX_VALUE)
             // must wrap to the same ARGB int, not saturate to 0x7FFFFFFF
             cs.set((int) n.longValue());
+        } else if (s instanceof ColorSetting cs && v instanceof String sv) {
+            Integer c = parse_hex_color(sv); // hand-edited "#RRGGBB" / "#AARRGGBB" / "0x..."
+            if (c != null) {
+                cs.set(c);
+            }
         } else if (s instanceof KeySetting ks && v instanceof Number n) {
             ks.set(n.intValue());
         }
@@ -689,6 +694,25 @@ public final class ConfigManager {
         }
     }
 
+    /** "#RGB"-less hex: 6 digits = opaque RGB, 8 digits = ARGB; null if unparsable. */
+    private static Integer parse_hex_color(String raw) {
+        String h = raw.trim();
+        if (h.startsWith("#")) {
+            h = h.substring(1);
+        } else if (h.startsWith("0x") || h.startsWith("0X")) {
+            h = h.substring(2);
+        }
+        if (h.length() != 6 && h.length() != 8) {
+            return null;
+        }
+        try {
+            long v = Long.parseLong(h, 16); // 8 digits overflow parseInt
+            return h.length() == 6 ? (int) v | 0xFF000000 : (int) v;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
     private static void read_custom_theme(JsonObject root, GuiState state) {
         if (!root.has("customTheme") || !root.get("customTheme").isJsonObject()) {
             return;
@@ -698,7 +722,11 @@ public final class ConfigManager {
                 if (!e.getValue().isJsonPrimitive()) {
                     continue;
                 }
-                state.customTheme.put(e.getKey(), e.getValue().getAsInt());
+                JsonPrimitive p = e.getValue().getAsJsonPrimitive();
+                Integer c = p.isString() ? parse_hex_color(p.getAsString()) : (Integer) (int) p.getAsLong();
+                if (c != null) {
+                    state.customTheme.put(e.getKey(), c);
+                }
             } catch (RuntimeException ignored) {
             }
         }

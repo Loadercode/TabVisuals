@@ -375,16 +375,6 @@ public final class TabVisualsTitleScreen extends Screen {
 
         Identifier logo = LogoManager.textureFor(h / (LG_V1 - LG_V0) * unitPx());
         if (logo != null) {
-            // logo.png has a transparent seam between its glass outline and the
-            // letters; a dilated violet underlay turns it into a glow instead of
-            // a dotted dark line
-            float d = Math.max(0.6f, h * 0.022f);
-            int under = alpha(0xFF8A6CFF, 0.55f * entry);
-            for (int i = 0; i < 8; i++) {
-                double ang = i * Math.PI / 4.0;
-                texture(m, logo, x + (float) Math.cos(ang) * d, y + (float) Math.sin(ang) * d, w, h, 0f,
-                        LG_U0, LG_V0, LG_U1, LG_V1, under, true);
-            }
             texture(m, logo, x, y, w, h, 0f, LG_U0, LG_V0, LG_U1, LG_V1, alpha(0xFFFFFFFF, entry), true);
         } else if (LogoManager.failed()) {
             pushScale(m, cx, cy, h / bigH);
@@ -560,6 +550,11 @@ public final class TabVisualsTitleScreen extends Screen {
             }
             float hx = st.hover * 3f;
             pushScale(m, navX + navW / 2f, y, st.scale());
+            // soft glass pill under the hovered item
+            if (st.hover > 0.01f && !active) {
+                rect(m, navX - 4f + slide, y - navH / 2f + 1f, navW + 6f, navH - 2f, (navH - 2f) / 2f,
+                        alpha(0x0FFFFFFF, a * st.hover));
+            }
             int col = active ? TEXT : mix(TEXT_3, TEXT, st.hover);
             if (i == NAV_QUIT) {
                 col = mix(TEXT_4, DANGER, st.hover);

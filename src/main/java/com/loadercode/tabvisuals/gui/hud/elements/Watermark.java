@@ -179,7 +179,7 @@ public class Watermark extends AbstractDraggable {
         // odd blob at 17px (dj's photo) — теперь единый Icons.CLOCK
         Icons.draw(matrix, Icons.Glyph.CLOCK, currentX,
                 UiRender.iconY(Icons.Glyph.CLOCK, CLOCK_SIZE, getY() + finalHeight / 2f),
-                CLOCK_SIZE, ColorAssist.multAlpha(0xFFFFFFFF, alpha));
+                CLOCK_SIZE, ColorAssist.multAlpha(ColorAssist.getText(), alpha)); // was hard white: vanished on the light theme
 
         currentX += clockWidth + 4;
 
@@ -195,7 +195,7 @@ public class Watermark extends AbstractDraggable {
 
         currentX += serverIpWidth;
 
-        Icons.draw(matrix, Icons.BRAND, currentX + 2.5f, getY() + 2f, 11f,
+        Icons.draw(matrix, Icons.BRAND, currentX + 2.5f, UiRender.iconY(Icons.BRAND, 11f, getY() + finalHeight / 2f), 11f,
                 ColorAssist.multAlpha(ColorAssist.getText(), alpha));
     }
 

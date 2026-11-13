@@ -283,11 +283,7 @@ public final class AccountsSection implements MenuSection {
         pvH = Math.min(170f, h * 0.40f);
         if (a > 0.05f) {
             preview.setNick(nick);
-            preview.render(f.ctx, m, pvX, pvY, pvW, pvH, f.dt);
-            if (a < 0.999f) {
-                // the model renders opaque; a veil in the panel colour fades it with the page
-                rect(m, pvX - 1f, pvY - 1f, pvW + 2f, pvH + 2f, 10f, alpha(0xFF0D0B18, 1f - a));
-            }
+            preview.render(f.ctx, m, pvX, pvY, pvW, pvH, f.dt, a);
         }
 
         float cy = pvY + pvH + 16f;

@@ -141,15 +141,16 @@ public final class HudTheme {
             cText2 = color("Вторичный текст", DARK_TEXT2);
             // fallbacks only apply when the setting is missing; alpha goes in the top byte
             cBlur = multAlpha(color("Цвет блюра", pack(0, 0, 0, blurA)), opacity);
-            cRect = multAlpha(color("Фон HUD 1", pack(18, 19, 20, rectA)), opacity);
+            // the global «Panel opacity» slider used to be ignored in Custom mode
+            cRect = scaleAlpha(multAlpha(color("Фон HUD 1", pack(18, 19, 20, rectA)), opacity), global);
             // LoxeDLC: alpha of the picked colour is multiplied by outA, not
             // replaced — a translucent custom outline keeps its own weight
             cRectOutline = multAlpha(color("Обводка", DARK_OUTLINE_EL), outA / 255f);
             int g1 = cRect;
-            int g2 = multAlpha(color("Фон HUD 2", pack(0, 2, 5, rectA)), opacity);
+            int g2 = scaleAlpha(multAlpha(color("Фон HUD 2", pack(0, 2, 5, rectA)), opacity), global);
             setGradient(g1, g2, g2, g1);
             cRect1 = color("Панель 1", pack(0x1A, 0x1A, 0x1F, 0xE4));
-            cRectDarker1 = color("Панель 2", 0x18181EFF);
+            cRectDarker1 = color("Панель 2", 0xFF18181E);
             cOutlineEl = color("Обводка", DARK_OUTLINE_EL);
         } else if (light) {
             cText = LIGHT_TEXT;
@@ -274,6 +275,11 @@ public final class HudTheme {
     public static int multAlpha(int argb, float factor) {
         int a = (int) (((argb >>> 24) & 0xFF) * clamp(factor, 0f, 1f));
         return (argb & 0x00FFFFFF) | (a << 24);
+    }
+
+    /** Alpha × factor (may exceed 1), clamped to 0..255. */
+    private static int scaleAlpha(int argb, float factor) {
+        return withAlpha(argb, Math.round(((argb >>> 24) & 0xFF) * factor));
     }
 
     public static int pack(int r, int g, int b, int a) {

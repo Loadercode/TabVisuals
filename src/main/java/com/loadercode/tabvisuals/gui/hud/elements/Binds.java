@@ -165,14 +165,15 @@ public class Binds extends AbstractDraggable {
         matrices.translate(x, y, 100);
         matrices.scale((float) 0.5, (float) 0.5, 1);
 
-        RenderSystem.enableBlend();
-        RenderSystem.defaultBlendFunc();
-        DiffuseLighting.enableGuiDepthLighting();
-
-        context.drawItem(stack, 0, 0);
-
-        DiffuseLighting.disableGuiDepthLighting();
-        matrices.pop();
+        try {
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+            DiffuseLighting.enableGuiDepthLighting();
+            context.drawItem(stack, 0, 0);
+        } finally {
+            DiffuseLighting.disableGuiDepthLighting();
+            matrices.pop();
+        }
     }
 
     private float getCooldownProgress(Item item) {
